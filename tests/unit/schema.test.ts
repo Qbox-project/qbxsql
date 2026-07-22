@@ -149,4 +149,29 @@ describe('schema validation and SQL generation', () => {
       algorithm: 'MANUAL',
     });
   });
+
+  test('requires blocking approval for table rename and deletion', () => {
+    const migration = {
+      version: 3,
+      name: 'replace a legacy table',
+      allowBlocking: true,
+      operations: [
+        { type: 'renameTable' as const, from: 'properties', to: 'properties_archive' },
+        { type: 'dropTable' as const, table: 'properties_archive', allowDataLoss: true as const },
+      ],
+    };
+
+    expect(migrationActions([migration], false)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'migration:renameTable', automatic: false }),
+        expect.objectContaining({ kind: 'migration:dropTable', automatic: false }),
+      ]),
+    );
+    expect(migrationActions([migration], true)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'migration:renameTable', automatic: true }),
+        expect.objectContaining({ kind: 'migration:dropTable', automatic: true }),
+      ]),
+    );
+  });
 });

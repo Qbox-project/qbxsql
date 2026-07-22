@@ -111,7 +111,12 @@ function operationAlgorithm(operation: MigrationOperation): SchemaAction['algori
 }
 
 function requiresBlockingAuthorization(operation: MigrationOperation): boolean {
-  return operation.type === 'sql' || operation.type === 'setTableOptions';
+  return (
+    operation.type === 'renameTable' ||
+    operation.type === 'dropTable' ||
+    operation.type === 'sql' ||
+    operation.type === 'setTableOptions'
+  );
 }
 
 function enforcedAlgorithm(action: SchemaAction): string {

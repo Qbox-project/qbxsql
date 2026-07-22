@@ -384,13 +384,14 @@ describe('resource schema manager integration', () => {
   });
 
   test('renames and removes ownership only after successful table migrations', async () => {
-    await manager.ensure('ownership_lifecycle', {
+    const ownershipManager = new SchemaManager(database, { allowBlocking: true });
+    await ownershipManager.ensure('ownership_lifecycle', {
       version: 1,
       tables: {
         ownership_old: { columns: { id: { type: 'int', primary: true } } },
       },
     });
-    await manager.ensure('ownership_lifecycle', {
+    await ownershipManager.ensure('ownership_lifecycle', {
       version: 2,
       tables: {
         ownership_new: { columns: { id: { type: 'int', primary: true } } },
@@ -399,6 +400,7 @@ describe('resource schema manager integration', () => {
         {
           version: 2,
           name: 'rename owned table',
+          allowBlocking: true,
           operations: [{ type: 'renameTable', from: 'ownership_old', to: 'ownership_new' }],
         },
       ],
@@ -415,13 +417,14 @@ describe('resource schema manager integration', () => {
       ),
     ).toBe(0);
 
-    await manager.ensure('ownership_lifecycle', {
+    await ownershipManager.ensure('ownership_lifecycle', {
       version: 3,
       tables: {},
       migrations: [
         {
           version: 3,
           name: 'drop owned table',
+          allowBlocking: true,
           operations: [{ type: 'dropTable', table: 'ownership_new', allowDataLoss: true }],
         },
       ],
@@ -432,6 +435,106 @@ describe('resource schema manager integration', () => {
         `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'ownership_new'`,
       ),
     ).toBe(0);
+  });
+
+  test('retains ownership when a table rename or deletion fails', async () => {
+    const ownershipManager = new SchemaManager(database, { allowBlocking: true });
+    await ownershipManager.ensure('ownership_failure', {
+      version: 1,
+      tables: {
+        ownership_failure_old: { columns: { id: { type: 'int', primary: true } } },
+      },
+    });
+
+    const originalQuery = database.query.bind(database);
+    database.query = async (sql, parameters, options) => {
+      if (sql.startsWith('RENAME TABLE `ownership_failure_old`')) {
+        throw new Error('simulated rename failure');
+      }
+      return originalQuery(sql, parameters, options);
+    };
+    try {
+      await expect(
+        ownershipManager.ensure('ownership_failure', {
+          version: 2,
+          tables: {
+            ownership_failure_new: { columns: { id: { type: 'int', primary: true } } },
+          },
+          migrations: [
+            {
+              version: 2,
+              name: 'rename with a simulated failure',
+              allowBlocking: true,
+              operations: [
+                {
+                  type: 'renameTable',
+                  from: 'ownership_failure_old',
+                  to: 'ownership_failure_new',
+                },
+              ],
+            },
+          ],
+        }),
+      ).rejects.toThrow('simulated rename failure');
+    } finally {
+      database.query = originalQuery;
+    }
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables
+         WHERE table_name = 'ownership_failure_old' AND resource_name = 'ownership_failure'`,
+      ),
+    ).toBe(1);
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'ownership_failure_new'`,
+      ),
+    ).toBe(0);
+
+    await ownershipManager.ensure('ownership_drop_failure', {
+      version: 1,
+      tables: {
+        ownership_drop_failure_table: { columns: { id: { type: 'int', primary: true } } },
+      },
+    });
+    database.query = async (sql, parameters, options) => {
+      if (sql.startsWith('DROP TABLE IF EXISTS `ownership_drop_failure_table`')) {
+        throw new Error('simulated deletion failure');
+      }
+      return originalQuery(sql, parameters, options);
+    };
+    try {
+      await expect(
+        ownershipManager.ensure('ownership_drop_failure', {
+          version: 2,
+          tables: {},
+          migrations: [
+            {
+              version: 2,
+              name: 'delete with a simulated failure',
+              allowBlocking: true,
+              operations: [
+                {
+                  type: 'dropTable',
+                  table: 'ownership_drop_failure_table',
+                  allowDataLoss: true,
+                },
+              ],
+            },
+          ],
+        }),
+      ).rejects.toThrow('simulated deletion failure');
+    } finally {
+      database.query = originalQuery;
+    }
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables
+         WHERE table_name = 'ownership_drop_failure_table'
+           AND resource_name = 'ownership_drop_failure'`,
+      ),
+    ).toBe(1);
+    expect((await introspectDatabase(database)).has('ownership_drop_failure_table')).toBe(true);
   });
 
   test('requires explicit ownership release when a table leaves the declaration', async () => {
