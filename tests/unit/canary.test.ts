@@ -71,7 +71,13 @@ describe('canary evidence gate', () => {
         qbxsqlVersion: '1.0.0-rc.1',
         compatibilityTarget: '2.14.1',
       },
-      { type: 'sample', recordedAt: '2026-01-01T00:00:01Z', status: status() },
+      {
+        type: 'sample',
+        recordedAt: '2026-01-01T00:00:01Z',
+        status: status({
+          totals: { queries: 100, errors: 0, slowQueries: 0, reconnects: 0 },
+        }),
+      },
       {
         type: 'checkpoint',
         recordedAt: '2026-01-01T00:00:08Z',
@@ -162,6 +168,27 @@ describe('canary evidence gate', () => {
     expect(accepted.exitCode).toBe(0);
     const summary = JSON.parse(await readFile(output, 'utf8'));
     expect(summary.errorJustification).toContain('Expected outage write failure');
+  });
+
+  test('rejects evidence that does not cover the full canary interval', async () => {
+    const input = path.join(temporaryRoot, 'coverage-gap.jsonl');
+    const output = path.join(temporaryRoot, 'coverage-gap-summary.json');
+    const records = [
+      {
+        type: 'start',
+        recordedAt: '2026-01-01T00:00:00Z',
+        qbxsqlVersion: '1.0.0-rc.1',
+        compatibilityTarget: '2.14.1',
+      },
+      { type: 'sample', recordedAt: '2026-01-01T00:00:16Z', status: status() },
+      { type: 'sample', recordedAt: '2026-01-01T00:00:20Z', status: status() },
+      { type: 'finish', recordedAt: '2026-01-01T00:00:20Z', status: status() },
+    ];
+    await writeFile(input, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+
+    const result = runValidator(input, output);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('do not continuously cover');
   });
 
   test('rejects credential-shaped evidence', async () => {

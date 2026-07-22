@@ -110,6 +110,9 @@ for (let index = 1; index < sampleTimes.length; index += 1) {
 if (sampleTimes[0] < startTime || sampleTimes.at(-1) > finishTime) {
   throw new Error('Canary samples must fall between the first start and final finish records.');
 }
+if (sampleTimes[0] - startTime > maximumGap || finishTime - sampleTimes.at(-1) > maximumGap) {
+  throw new Error('Canary samples do not continuously cover the start-to-finish interval.');
+}
 
 validateStatus(finish.status, 'Canary finish record');
 if (
@@ -123,8 +126,17 @@ if (
 
 const firstStatus = samples[0].status;
 const lastStatus = samples.at(-1).status;
-const errorDelta = lastStatus.totals.errors - firstStatus.totals.errors;
-if (errorDelta < 0) throw new Error('Canary error totals moved backwards.');
+const counterDelta = (name) => {
+  let total = 0;
+  let previous = firstStatus.totals[name];
+  for (const sample of samples.slice(1)) {
+    const current = sample.status.totals[name];
+    total += current >= previous ? current - previous : current;
+    previous = current;
+  }
+  return total;
+};
+const errorDelta = counterDelta('errors');
 if (errorDelta > allowedErrorDelta) {
   throw new Error(`Canary error delta ${errorDelta} exceeds the allowed ${allowedErrorDelta}.`);
 }
@@ -153,10 +165,10 @@ const summary = {
     queuedCalls: Math.max(...samples.map((sample) => sample.status.queuedCalls)),
   },
   deltas: {
-    queries: lastStatus.totals.queries - firstStatus.totals.queries,
+    queries: counterDelta('queries'),
     errors: errorDelta,
-    slowQueries: lastStatus.totals.slowQueries - firstStatus.totals.slowQueries,
-    reconnects: lastStatus.totals.reconnects - firstStatus.totals.reconnects,
+    slowQueries: counterDelta('slowQueries'),
+    reconnects: counterDelta('reconnects'),
   },
   finalHalfMemoryGrowthPercent: Number(memoryGrowthPercent.toFixed(2)),
   errorJustification: errorDelta > 0 ? errorJustification.trim() : null,
