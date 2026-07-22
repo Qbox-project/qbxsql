@@ -37,6 +37,110 @@ async function cleanup() {
   }
 }
 
+async function closeServer(server) {
+  if (server.exitCode !== null) return;
+
+  const closed = once(server, 'close');
+  if (server.stdin.writable) server.stdin.write('quit\n');
+  const graceful = await Promise.race([
+    closed.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (!graceful) {
+    server.kill('SIGKILL');
+    await closed;
+  }
+}
+
+async function runConflictGate() {
+  const conflictRoot = path.join(temporaryRoot, 'conflict');
+  const conflictResources = path.join(conflictRoot, 'resources');
+  await mkdir(conflictResources, { recursive: true });
+  await cp(path.join(releaseRoot, 'qbxsql'), path.join(conflictResources, 'qbxsql'), {
+    recursive: true,
+  });
+  await cp(
+    path.join(repositoryRoot, 'tests', 'fxserver', 'oxmysql_conflict'),
+    path.join(conflictResources, 'oxmysql'),
+    { recursive: true },
+  );
+
+  const conflictConfig = [
+    `sv_licenseKey "${licenseKey.replaceAll('"', '')}"`,
+    'sv_hostname "qbxsql conflict gate"',
+    'sv_maxclients 1',
+    `endpoint_add_tcp "127.0.0.1:${port + 1}"`,
+    `endpoint_add_udp "127.0.0.1:${port + 1}"`,
+    `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
+    'ensure qbxsql',
+    'ensure oxmysql',
+  ].join('\n');
+  await writeFile(path.join(conflictRoot, 'server.cfg'), `${conflictConfig}\n`, { mode: 0o600 });
+
+  const conflictServer = spawn(path.resolve(binary), ['+exec', 'server.cfg'], {
+    cwd: conflictRoot,
+    env: {
+      ...process.env,
+      TXHOST_DATA_PATH: conflictRoot,
+      TXHOST_PROVIDER_NAME: 'qbxsql conflict gate',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let conflictOutput = '';
+  let compatibilityInstalled = false;
+  const conflictFinished = new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`FXServer conflict gate timed out after ${timeout}ms.`)),
+      timeout,
+    );
+    const consume = (chunk) => {
+      const text = chunk.toString();
+      conflictOutput += text;
+      process.stdout.write(text);
+      if (conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_FAIL')) {
+        clearTimeout(timer);
+        reject(new Error('The qbxsql compatibility conflict probe reported a failure.'));
+      }
+      if (conflictOutput.includes('QBXSQL_REAL_OXMYSQL_STUB_STARTED') && !compatibilityInstalled) {
+        compatibilityInstalled = true;
+        void cp(path.join(releaseRoot, 'qbxsql_compat'), path.join(conflictResources, 'qbxsql_compat'), {
+          recursive: true,
+        })
+          .then(() => conflictServer.stdin.write('refresh\nensure qbxsql_compat\n'))
+          .catch(reject);
+      }
+      if (
+        conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS') &&
+        conflictOutput.includes(
+          '[qbxsql_compat] Refusing to run while the real oxmysql resource is active',
+        )
+      ) {
+        clearTimeout(timer);
+        resolve();
+      }
+    };
+    conflictServer.stdout.on('data', consume);
+    conflictServer.stderr.on('data', consume);
+    conflictServer.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    conflictServer.on('exit', (code) => {
+      if (!conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS')) {
+        clearTimeout(timer);
+        reject(new Error(`FXServer conflict gate exited with code ${code} before the fixture passed.`));
+      }
+    });
+  });
+
+  try {
+    await conflictFinished;
+  } finally {
+    await closeServer(conflictServer);
+  }
+}
+
 try {
   await mkdir(resources, { recursive: true });
   for (const resource of ['qbxsql', 'qbxsql_compat']) {
@@ -160,21 +264,12 @@ try {
 
   try {
     await finished;
-    console.log(`[qbxsql] ${flavor} FXServer gate passed with ${release.zipName}.`);
   } finally {
-    if (server.exitCode === null) {
-      const closed = once(server, 'close');
-      if (server.stdin.writable) server.stdin.write('quit\n');
-      const graceful = await Promise.race([
-        closed.then(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
-      ]);
-      if (!graceful) {
-        server.kill('SIGKILL');
-        await closed;
-      }
-    }
+    await closeServer(server);
   }
+
+  await runConflictGate();
+  console.log(`[qbxsql] ${flavor} FXServer gate passed with ${release.zipName}.`);
 } finally {
   await cleanup();
 }

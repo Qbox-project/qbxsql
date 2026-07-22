@@ -58,9 +58,17 @@ describe('qbxsql compatibility resource', () => {
 
   test('rejects a concurrently active real oxmysql resource', async () => {
     const server = await fixture('qbxsql_compat/server.lua');
+    const probe = await fixture('tests/fxserver/oxmysql_conflict/server.lua');
+    const runner = await fixture('scripts/run-fxserver-gate.mjs');
 
     expect(server).toContain("resource == 'oxmysql'");
     expect(server).toContain('StopResource(currentResource)');
+    expect(server).toContain("AddEventHandler('onResourceStop'");
+    expect(server).toContain("isInstalled('oxmysql')");
+    expect(probe).toContain('QBXSQL_COMPAT_CONFLICT_PASS');
+    expect(runner).toContain('async function runConflictGate()');
+    expect(runner).toContain("conflictServer.stdin.write('refresh\\nensure qbxsql_compat\\n')");
+    expect(runner).toContain("conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS')");
   });
 
   test('owns all legacy export routing inside the compatibility resource', async () => {

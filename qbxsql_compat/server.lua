@@ -80,29 +80,42 @@ local function stopForConflict(resource)
 
     print(('^1[qbxsql_compat] Refusing to run while the real %s resource is active. Stop and remove the legacy connector before starting qbxsql_compat.^0'):format(resource))
 
-    CreateThread(function()
-        Wait(0)
-        StopResource(currentResource)
-    end)
+    -- Some runtimes cannot safely stop a resource from its own startup path.
+    -- In that case this function still rejects the shim by returning before
+    -- registerProviders. Runtime conflicts can be stopped normally.
+    if GetResourceState(currentResource) == 'started' then
+        CreateThread(function()
+            Wait(0)
+            StopResource(currentResource)
+        end)
+    end
 
     return true
 end
 
-local function detectInstalledOxmysql()
+local function isInstalled(resource)
     for index = 0, GetNumResources() - 1 do
-        local resource = GetResourceByFindIndex(index)
-
-        if resource == 'oxmysql' then
-            return stopForConflict(resource)
-        end
+        if GetResourceByFindIndex(index) == resource then return true end
     end
 
     return false
+end
+
+local function detectInstalledOxmysql()
+    return isInstalled('oxmysql') and stopForConflict('oxmysql')
 end
 
 if not detectInstalledOxmysql() then
     registerProviders()
     AddEventHandler('onResourceStart', function(resource)
         if resource == 'oxmysql' then stopForConflict(resource) end
+    end)
+    AddEventHandler('onResourceStop', function(resource)
+        -- FXServer stops a providing resource before it starts the concrete
+        -- resource with the same name, so onResourceStart is too late to emit
+        -- our own actionable diagnostic in that transition.
+        if resource == currentResource and isInstalled('oxmysql') then
+            print('^1[qbxsql_compat] Refusing to run while the real oxmysql resource is active. Stop and remove the legacy connector before starting qbxsql_compat.^0')
+        end
     end)
 end
