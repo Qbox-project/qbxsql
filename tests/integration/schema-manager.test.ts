@@ -340,6 +340,43 @@ describe('resource schema manager integration', () => {
     ).toBe(0);
   });
 
+  test('adds a primary key when the table does not already have one', async () => {
+    await manager.ensure('primary_key_migration', {
+      version: 1,
+      tables: {
+        primary_key_migration_table: {
+          columns: { id: { type: 'int' } },
+        },
+      },
+    });
+
+    const result = await manager.ensure('primary_key_migration', {
+      version: 2,
+      tables: {
+        primary_key_migration_table: {
+          columns: { id: { type: 'int' } },
+          primaryKey: ['id'],
+        },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'add the first primary key',
+          operations: [
+            { type: 'setPrimaryKey', table: 'primary_key_migration_table', columns: ['id'] },
+          ],
+        },
+      ],
+    });
+
+    expect(result.appliedMigrations).toEqual([2]);
+    expect(
+      (await introspectDatabase(database))
+        .get('primary_key_migration_table')
+        ?.indexes.get('PRIMARY')?.columns,
+    ).toEqual(['id']);
+  });
+
   test('adopts an unmanaged legacy schema from an explicit baseline', async () => {
     await database.query(
       `CREATE TABLE legacy_properties (

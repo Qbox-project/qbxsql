@@ -2,7 +2,11 @@ import type { DatabaseConnection } from '../core/types.js';
 import type { DatabaseService } from '../core/database.js';
 import { introspectDatabase } from './introspect.js';
 import { capabilitiesForVersion, compareColumn, planSchema } from './planner.js';
-import { migrationOperationSql, onlineMigrationOperationSql } from './sql.js';
+import {
+  migrationOperationSql,
+  onlineMigrationOperationSql,
+  quoteIdentifier,
+} from './sql.js';
 import type {
   ActualTable,
   MigrationDefinition,
@@ -746,9 +750,7 @@ export class SchemaManager {
           if (operation.type === 'releaseTable') {
             await this.releaseTable(resource, operation.table);
           } else {
-            const sql = blockingAllowed
-              ? migrationOperationSql(operation)
-              : onlineMigrationOperationSql(operation);
+            const sql = this.migrationSql(operation, blockingAllowed, actual);
             await this.database.query(sql, [], { invokingResource: resource });
           }
         }
@@ -775,6 +777,27 @@ export class SchemaManager {
       );
       throw error;
     }
+  }
+
+  private migrationSql(
+    operation: MigrationOperation,
+    blockingAllowed: boolean,
+    actual: Map<string, ActualTable>,
+  ): string {
+    if (operation.type !== 'setPrimaryKey') {
+      return blockingAllowed
+        ? migrationOperationSql(operation)
+        : onlineMigrationOperationSql(operation);
+    }
+
+    const table = actual.get(operation.table);
+    const hasPrimaryKey = table?.indexes.has('PRIMARY') === true;
+    const clauses = [
+      ...(hasPrimaryKey ? ['DROP PRIMARY KEY'] : []),
+      `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(', ')})`,
+    ];
+    const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(', ')}`;
+    return blockingAllowed ? sql : `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
   }
 
   private async operationNeeded(
