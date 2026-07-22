@@ -6,7 +6,7 @@ The compatibility contract is pinned to [oxmysql 2.14.1](https://github.com/over
 
 | Surface | Target | Gate |
 | --- | --- | --- |
-| oxmysql callbacks and promises | 2.14.1 result/error semantics | Contract and integration fixtures |
+| oxmysql callbacks and promises | 2.14.1 result/error semantics | Static fixtures plus live stock-FXServer differential probe |
 | `MySQL.*`, `.await`, `Async`, `Sync` | 2.14.1 Lua wrapper | Static fixture and stock FXServer |
 | mysql-async aliases/import | oxmysql 2.14.1 mappings | Dedicated FXServer import fixture |
 | ghmattimysql aliases | oxmysql 2.14.1 mappings | Contract and FXServer fixture |

@@ -18,6 +18,8 @@
     "install:dev": "node scripts/install-development.mjs",
     "benchmark:run": "node scripts/run-benchmark.mjs",
     "benchmark:compare": "node scripts/compare-benchmarks.mjs",
+    "contract:probe": "node scripts/run-contract-probe.mjs",
+    "contract:compare": "node scripts/compare-contract-probes.mjs",
     "soak:validate": "node scripts/validate-soak.mjs"
   },
   "dependencies": {

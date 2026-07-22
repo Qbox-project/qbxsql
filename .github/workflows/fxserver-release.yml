@@ -30,6 +30,34 @@ jobs:
           node scripts/run-fxserver-gate.mjs
           --binary "${{ vars.FXSERVER_WINDOWS_BINARY }}"
           --flavor stock
+      - name: Compare the live API with oxmysql 2.14.1
+        shell: pwsh
+        env:
+          CFX_LICENSE_KEY: ${{ secrets.CFX_LICENSE_KEY }}
+          QBXSQL_TEST_CONNECTION_STRING: ${{ secrets.QBXSQL_TEST_CONNECTION_STRING }}
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'oxmysql-2.14.1.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'oxmysql-2.14.1'
+          Invoke-WebRequest -UseBasicParsing `
+            'https://github.com/overextended/oxmysql/releases/download/v2.14.1/oxmysql.zip' `
+            -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $root -Force
+          $manifest = Get-ChildItem -LiteralPath $root -Recurse -File -Filter fxmanifest.lua |
+            Select-Object -First 1
+          if (-not $manifest) { throw 'oxmysql archive did not contain fxmanifest.lua' }
+          $oxmysql = $manifest.Directory.FullName
+          node scripts/run-contract-probe.mjs `
+            --binary '${{ vars.FXSERVER_WINDOWS_BINARY }}' `
+            --provider qbxsql `
+            --output qbxsql-contract.json
+          node scripts/run-contract-probe.mjs `
+            --binary '${{ vars.FXSERVER_WINDOWS_BINARY }}' `
+            --provider oxmysql `
+            --oxmysql-path $oxmysql `
+            --output oxmysql-contract.json
+          node scripts/compare-contract-probes.mjs `
+            --qbxsql qbxsql-contract.json `
+            --oxmysql oxmysql-contract.json
 
   stock-linux:
     name: Stock FXServer on Linux
@@ -52,6 +80,34 @@ jobs:
           node scripts/run-fxserver-gate.mjs
           --binary "${{ vars.FXSERVER_LINUX_BINARY }}"
           --flavor stock
+      - name: Compare the live API with oxmysql 2.14.1
+        shell: bash
+        env:
+          CFX_LICENSE_KEY: ${{ secrets.CFX_LICENSE_KEY }}
+          QBXSQL_TEST_CONNECTION_STRING: ${{ secrets.QBXSQL_TEST_CONNECTION_STRING }}
+        run: |
+          archive="$RUNNER_TEMP/oxmysql-2.14.1.zip"
+          root="$RUNNER_TEMP/oxmysql-2.14.1"
+          curl --fail --location --retry 3 \
+            https://github.com/overextended/oxmysql/releases/download/v2.14.1/oxmysql.zip \
+            --output "$archive"
+          mkdir -p "$root"
+          unzip -q "$archive" -d "$root"
+          manifest="$(find "$root" -name fxmanifest.lua -print -quit)"
+          test -n "$manifest"
+          oxmysql="$(dirname "$manifest")"
+          node scripts/run-contract-probe.mjs \
+            --binary '${{ vars.FXSERVER_LINUX_BINARY }}' \
+            --provider qbxsql \
+            --output qbxsql-contract.json
+          node scripts/run-contract-probe.mjs \
+            --binary '${{ vars.FXSERVER_LINUX_BINARY }}' \
+            --provider oxmysql \
+            --oxmysql-path "$oxmysql" \
+            --output oxmysql-contract.json
+          node scripts/compare-contract-probes.mjs \
+            --qbxsql qbxsql-contract.json \
+            --oxmysql oxmysql-contract.json
 
   enhanced-windows:
     name: Enhanced CFX server on Windows
