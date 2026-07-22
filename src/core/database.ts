@@ -249,7 +249,7 @@ export class DatabaseService {
       await connection.beginTransaction();
       for (const statement of statements) {
         const [query, parameters] = normalizeParameters(statement.query, statement.parameters);
-        await connection.query(query, parameters);
+        await this.measureQuery(query, invokingResource, () => connection.query(query, parameters));
       }
       await connection.commit();
       return true;
@@ -294,7 +294,11 @@ export class DatabaseService {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = normalizeParameters(sql, parameters);
         try {
-          return (await connection.query(statement, values)).rows;
+          return (
+            await this.measureQuery(statement, invokingResource, () =>
+              connection.query(statement, values),
+            )
+          ).rows;
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           throw new Error(`Query: ${statement}\n${JSON.stringify(values)}\n${reason}`);
@@ -334,19 +338,28 @@ export class DatabaseService {
   ): Promise<DriverResult> {
     await this.awaitConnection();
     const [query, values] = normalizeParameters(sql, parameters);
+    return this.measureQuery(query, options.invokingResource ?? 'unknown', () =>
+      options.prepared
+        ? this.driver.execute(query, values)
+        : this.driver.query(query, values),
+    );
+  }
+
+  private async measureQuery<T>(
+    query: string,
+    resource: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const started = performance.now();
     this.queryTotal += 1;
 
     try {
-      return options.prepared
-        ? await this.driver.execute(query, values)
-        : await this.driver.query(query, values);
+      return await operation();
     } catch (error) {
       this.errorTotal += 1;
       throw error;
     } finally {
       const duration = performance.now() - started;
-      const resource = options.invokingResource ?? 'unknown';
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
       if (slow) this.slowQueryTotal += 1;
       const debug =

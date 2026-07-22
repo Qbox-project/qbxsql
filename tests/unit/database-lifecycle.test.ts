@@ -211,4 +211,33 @@ describe('database connection lifecycle', () => {
 
     expect(connection.destroyed).toBe(true);
   });
+
+  test('counts queries and errors executed on pinned transaction connections', async () => {
+    const driver = new FakeDriver();
+    const connection = new FakeConnection();
+    let calls = 0;
+    connection.query = async () => {
+      calls += 1;
+      if (calls === 2) throw new Error('deadlock');
+      return result;
+    };
+    driver.connection = connection;
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+    const originalError = console.error;
+    console.error = () => {};
+
+    try {
+      await expect(
+        database.transaction(
+          [{ query: 'SELECT 1' }, { query: 'UPDATE deadlock_probe SET value = 1' }],
+          'metrics-resource',
+        ),
+      ).rejects.toThrow('deadlock');
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(database.getStatus().totals).toMatchObject({ queries: 2, errors: 1 });
+  });
 });
