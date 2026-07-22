@@ -4,7 +4,7 @@ const watch = process.argv.includes('--watch');
 const options = {
   bundle: true,
   entryPoints: ['src/index.ts'],
-  outfile: 'dist/index.cjs',
+  outfile: 'dist/index.js',
   platform: 'node',
   target: 'node22',
   format: 'cjs',
@@ -20,4 +20,3 @@ if (watch) {
 } else {
   await build(options);
 }
-

@@ -10,7 +10,7 @@ license 'MIT'
 server_only 'yes'
 node_version '22'
 
-server_script 'dist/index.cjs'
+server_script 'dist/index.js'
 
 files {
     'lib/*.lua'
@@ -28,4 +28,3 @@ convar_category 'qbxsql' {
         { 'Debug logging', 'qbxsql_debug', 'CV_BOOL', 'false' }
     }
 }
-

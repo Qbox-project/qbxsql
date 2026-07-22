@@ -21852,4 +21852,4 @@ long/umd/index.js:
    * SPDX-License-Identifier: Apache-2.0
    *)
 */
-//# sourceMappingURL=index.cjs.map
+//# sourceMappingURL=index.js.map

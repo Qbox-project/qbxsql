@@ -19,7 +19,7 @@ bun test
 bun run build
 ```
 
-Built output is written to `dist/index.cjs`, which FXServer loads through
+Built output is written to `dist/index.js`, which FXServer loads through
 `fxmanifest.lua`.
 
 ## Installation
@@ -121,4 +121,3 @@ current implementation supplies the MySQL/MariaDB driver; PostgreSQL can be
 added as another driver without changing resource-facing APIs. SQL syntax and
 schema compilation are currently MySQL-specific and will receive a PostgreSQL
 dialect alongside that future driver.
-
