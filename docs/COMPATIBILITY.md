@@ -25,7 +25,8 @@ Local development on 2026-07-22 passed the complete 35-test integration suite ag
 - Release certification artifact: the explicitly recorded current Windows/Linux artifact in the release evidence.
 - Local stock Windows evidence: build `32561` passed the packaged compatibility/runtime gate on 2026-07-22.
 - The same build passed core/shim stop-and-restart recovery while a query was active.
-- Linux evidence is required from the self-hosted release workflow.
+- Local stock Linux evidence: recommended build `25770` passed the containerized packaged gate on 2026-07-22, including active-query restart and concrete-oxmysql conflict handling.
+- The Linux self-hosted release workflow must still archive the release-candidate run.
 - Enhanced CFX on Windows is covered separately because it is not a stock artifact.
 
 The tested enhanced scanner rejects not-yet-started virtual providers during its initial parallel resource scan. The enhanced gate therefore starts `qbxsql_compat`, refreshes, and then starts compatibility consumers. Stock FXServer does not require this staging. Treat a future enhanced build as uncertified until its gate passes.

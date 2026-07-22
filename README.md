@@ -98,6 +98,14 @@ bun run release
 bun run release:validate
 ```
 
+With Docker available, the pinned Linux artifact can be exercised from any host before release:
+
+```sh
+CFX_LICENSE_KEY=... QBXSQL_TEST_CONNECTION_STRING=... bun run gate:linux
+```
+
+The command rebuilds the release, runs the complete stock FXServer gate in a pinned container, and rewrites loopback database hosts to Docker's host gateway without placing credentials in process arguments.
+
 The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through guarded junctions:
 
 ```sh

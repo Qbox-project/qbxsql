@@ -17,10 +17,10 @@ This file is the release traceability index for the production-readiness program
 
 | Gate | Result |
 | --- | --- |
-| Unit, contract, and local integration suite | Pass; 111 tests and 395 assertions across 14 files |
+| Unit, contract, and local integration suite | Pass; 112 tests and 402 assertions across 15 files |
 | Required database matrix | Pass; 35 integration tests each on MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 |
 | Rolling MariaDB smoke | Pass on MariaDB 12.0.2; informative only |
-| Packaged Windows FXServer | Pass on stock build 32561 and enhanced CFX, including compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, core/shim restart during an active query, and loud/inert refusal when concrete oxmysql is active |
+| Packaged FXServer | Pass on stock Windows build 32561, stock Linux build 25770 in the pinned container gate, and enhanced CFX; coverage includes compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, core/shim restart during an active query, and loud/inert refusal when concrete oxmysql is active |
 | Exact oxmysql live differential | Pass against local oxmysql 2.14.1 through packaged `qbxsql_compat` |
 | Workflow syntax | Pass with actionlint 1.7.12 |
 | Dependency audit | Pass at high severity threshold |
@@ -32,7 +32,7 @@ Local benchmark hardware was Windows 11 Pro 10.0.26100, AMD Ryzen 9 7900X (12 co
 ## External gates still required
 
 - Archive green GitHub Actions quality, security, deterministic artifact, and all five database jobs.
-- Run and archive stock Linux FXServer plus the self-hosted Windows/enhanced release jobs with the release candidate artifact.
+- Archive the self-hosted stock Windows/Linux and enhanced release jobs with the release-candidate artifact; all three variants pass locally.
 - Complete every item in [QBOX-CERTIFICATION.md](QBOX-CERTIFICATION.md) with a real client. The existing normal-Qbox smoke is useful evidence but is not the full checklist.
 - Run the seven-day Qbox canary with the documented monitoring and rollback procedure.
 - Link all artifacts, versions, checksums, operators, dates, and canary results from the release candidate before promoting `1.0.0`.
