@@ -20,6 +20,7 @@
     "benchmark:compare": "node scripts/compare-benchmarks.mjs",
     "contract:probe": "node scripts/run-contract-probe.mjs",
     "contract:compare": "node scripts/compare-contract-probes.mjs",
+    "gate:linux": "bun run release && node scripts/run-containerized-linux-gate.mjs",
     "soak:validate": "node scripts/validate-soak.mjs"
   },
   "dependencies": {
