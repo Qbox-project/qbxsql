@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createConnection } from 'mysql2/promise';
+import {
+  registerCompatibilityExports,
+  type ExportFunction,
+  type RuntimeBindings,
+} from '../../src/api/compatibility.js';
 import type { QbxSqlConfig } from '../../src/config.js';
 import { DatabaseService } from '../../src/core/database.js';
 import { MySqlDriver } from '../../src/drivers/mysql.js';
@@ -18,6 +23,8 @@ const config: QbxSqlConfig = {
 };
 
 let database: DatabaseService;
+let directExports: Map<string, ExportFunction>;
+let providerExports: Map<string, ExportFunction>;
 
 describe('MySQL driver integration', () => {
   beforeAll(async () => {
@@ -30,6 +37,15 @@ describe('MySQL driver integration', () => {
 
     database = new DatabaseService(new MySqlDriver(config), config);
     await database.connect();
+    directExports = new Map();
+    providerExports = new Map();
+    const bindings: RuntimeBindings = {
+      addExport: (name, callback) => directExports.set(name, callback),
+      addProviderExport: (resource, name, callback) =>
+        providerExports.set(`${resource}:${name}`, callback),
+      invokingResource: () => 'integration-resource',
+    };
+    registerCompatibilityExports(database, bindings);
     await database.query(`
       CREATE TABLE values_test (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -128,5 +144,30 @@ describe('MySQL driver integration', () => {
     expect(
       await database.scalar('SELECT COUNT(*) FROM values_test WHERE name = ?', ['Rolled back']),
     ).toBe(0);
+  });
+
+  test('registers oxmysql, mysql-async, and ghmattimysql compatibility exports', () => {
+    expect(providerExports.has('oxmysql:query')).toBe(true);
+    expect(providerExports.has('mysql-async:mysql_fetch_all')).toBe(true);
+    expect(providerExports.has('mysql-async:mysql_fetch_scalar')).toBe(true);
+    expect(providerExports.has('ghmattimysql:execute')).toBe(true);
+    expect(providerExports.has('ghmattimysql:executeSync')).toBe(true);
+  });
+
+  test('executes callback and promise compatibility APIs', async () => {
+    const query = providerExports.get('mysql-async:mysql_fetch_all')!;
+    const callbackRows = await new Promise<unknown>((resolve, reject) => {
+      query('SELECT ? AS value', [42], (result: unknown, error?: string) => {
+        if (error) reject(new Error(error));
+        else resolve(result);
+      });
+    });
+    expect(callbackRows).toEqual([{ value: 42 }]);
+
+    const scalarSync = providerExports.get('ghmattimysql:scalarSync')!;
+    expect(await scalarSync('SELECT ? AS value', [73])).toBe(73);
+
+    const queryAsync = directExports.get('query_async')!;
+    expect(await queryAsync('SELECT ? AS value', [99])).toEqual([{ value: 99 }]);
   });
 });

@@ -72,6 +72,27 @@ export class DatabaseService {
     return (await this.run(sql, parameters, options)).affectedRows;
   }
 
+  public async prepare(
+    sql: string,
+    parameters?: SqlParameters,
+    options: QueryOptions = {},
+  ): Promise<unknown> {
+    const parameterSets =
+      Array.isArray(parameters) &&
+      parameters.length > 0 &&
+      parameters.every((entry) => Array.isArray(entry) || (entry !== null && typeof entry === 'object'))
+        ? parameters
+        : [parameters];
+    const results: unknown[] = [];
+
+    for (const values of parameterSets) {
+      const result = await this.run(sql, values as SqlParameters, { ...options, prepared: true });
+      results.push(this.parsePreparedResult(sql, result));
+    }
+
+    return results.length === 1 ? results[0] : results;
+  }
+
   public async transaction(
     statements: readonly TransactionStatement[],
     invokingResource = 'unknown',
@@ -121,5 +142,16 @@ export class DatabaseService {
       }
     }
   }
-}
 
+  private parsePreparedResult(sql: string, result: DriverResult): unknown {
+    const operation = sql.trimStart().split(/\s+/, 1)[0]?.toUpperCase();
+    if (operation === 'INSERT' || operation === 'REPLACE') return result.insertId || null;
+    if (operation === 'UPDATE' || operation === 'DELETE') return result.affectedRows;
+
+    if (!Array.isArray(result.rows)) return result.rows;
+    const first = result.rows[0];
+    if (!first || typeof first !== 'object') return first ?? null;
+    const values = Object.values(first);
+    return values.length === 1 ? (values[0] ?? null) : first;
+  }
+}

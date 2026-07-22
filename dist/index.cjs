@@ -20194,6 +20194,15 @@ var DatabaseService = class {
   async update(sql, parameters, options = {}) {
     return (await this.run(sql, parameters, options)).affectedRows;
   }
+  async prepare(sql, parameters, options = {}) {
+    const parameterSets = Array.isArray(parameters) && parameters.length > 0 && parameters.every((entry) => Array.isArray(entry) || entry !== null && typeof entry === "object") ? parameters : [parameters];
+    const results = [];
+    for (const values of parameterSets) {
+      const result = await this.run(sql, values, { ...options, prepared: true });
+      results.push(this.parsePreparedResult(sql, result));
+    }
+    return results.length === 1 ? results[0] : results;
+  }
   async transaction(statements, invokingResource = "unknown") {
     await this.connect();
     const connection = await this.driver.acquire();
@@ -20230,6 +20239,16 @@ var DatabaseService = class {
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
+  }
+  parsePreparedResult(sql, result) {
+    const operation = sql.trimStart().split(/\s+/, 1)[0]?.toUpperCase();
+    if (operation === "INSERT" || operation === "REPLACE") return result.insertId || null;
+    if (operation === "UPDATE" || operation === "DELETE") return result.affectedRows;
+    if (!Array.isArray(result.rows)) return result.rows;
+    const first = result.rows[0];
+    if (!first || typeof first !== "object") return first ?? null;
+    const values = Object.values(first);
+    return values.length === 1 ? values[0] ?? null : first;
   }
 };
 
@@ -20414,10 +20433,194 @@ var MySqlDriver = class {
   }
 };
 
+// src/api/compatibility.ts
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+__name(errorMessage, "errorMessage");
+function extractCallback(parameters, callback) {
+  if (typeof parameters === "function") return [void 0, parameters];
+  return [parameters, callback];
+}
+__name(extractCallback, "extractCallback");
+function queryResource(explicit, bindings) {
+  return typeof explicit === "string" && explicit.length > 0 ? explicit : bindings.invokingResource();
+}
+__name(queryResource, "queryResource");
+function normalizeTransactionStatements(input, sharedParameters) {
+  if (!Array.isArray(input)) throw new TypeError("Transaction queries must be an array.");
+  return input.map((entry, index) => {
+    if (typeof entry === "string") {
+      const statement2 = { query: entry };
+      if (sharedParameters !== void 0) statement2.parameters = sharedParameters;
+      return statement2;
+    }
+    if (!entry || typeof entry !== "object") {
+      throw new TypeError(`Transaction query at index ${index} is invalid.`);
+    }
+    const legacy = entry;
+    if (typeof legacy.query !== "string") {
+      throw new TypeError(`Transaction query at index ${index} is missing a query string.`);
+    }
+    const statement = { query: legacy.query };
+    const parameters = legacy.parameters ?? legacy.values ?? sharedParameters;
+    if (parameters !== void 0) statement.parameters = parameters;
+    return statement;
+  });
+}
+__name(normalizeTransactionStatements, "normalizeTransactionStatements");
+function createRuntimeBindings() {
+  const runtimeExports = globalThis.exports;
+  if (typeof runtimeExports !== "function" || typeof on !== "function") return null;
+  return {
+    addExport(name, callback) {
+      runtimeExports(name, callback);
+    },
+    addProviderExport(resource, name, callback) {
+      on(`__cfx_export_${resource}_${name}`, (setCallback) => {
+        setCallback(callback);
+      });
+    },
+    invokingResource() {
+      if (typeof GetInvokingResource !== "function") return "unknown";
+      return GetInvokingResource() ?? "unknown";
+    }
+  };
+}
+__name(createRuntimeBindings, "createRuntimeBindings");
+function registerCompatibilityExports(database2, bindings = createRuntimeBindings()) {
+  const fallbackBindings = {
+    addExport() {
+    },
+    addProviderExport() {
+    },
+    invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
+  };
+  const runtime = bindings ?? fallbackBindings;
+  function callbackOperation(operation, callback, resource) {
+    void operation.then((result) => callback?.(result)).catch((error) => {
+      const message = errorMessage(error);
+      console.error(`[qbxsql] query failed [${resource}]: ${message}`);
+      callback?.(null, message);
+    });
+  }
+  __name(callbackOperation, "callbackOperation");
+  function queryMethod(method) {
+    return (query, parameters = [], callback, explicitResource) => {
+      const [values, resolvedCallback] = extractCallback(parameters, callback);
+      const resource = queryResource(explicitResource, runtime);
+      callbackOperation(
+        database2[method](query, values, { invokingResource: resource }),
+        resolvedCallback,
+        resource
+      );
+    };
+  }
+  __name(queryMethod, "queryMethod");
+  const api = {
+    isReady: /* @__PURE__ */ __name(() => database2.driver.ready, "isReady"),
+    awaitConnection: /* @__PURE__ */ __name(async () => {
+      await database2.connect();
+      return true;
+    }, "awaitConnection"),
+    query: queryMethod("query"),
+    single: queryMethod("single"),
+    scalar: queryMethod("scalar"),
+    insert: queryMethod("insert"),
+    update: queryMethod("update"),
+    prepare(query, parameters = [], callback, explicitResource) {
+      const [values, resolvedCallback] = extractCallback(parameters, callback);
+      const resource = queryResource(explicitResource, runtime);
+      callbackOperation(
+        database2.prepare(query, values, { invokingResource: resource }),
+        resolvedCallback,
+        resource
+      );
+    },
+    rawExecute(query, parameters = [], callback, explicitResource) {
+      const [values, resolvedCallback] = extractCallback(parameters, callback);
+      const resource = queryResource(explicitResource, runtime);
+      callbackOperation(
+        database2.run(query, values, { invokingResource: resource, prepared: true }).then(
+          (result) => Array.isArray(result.rows) ? result.rows : {
+            affectedRows: result.affectedRows,
+            changedRows: result.changedRows,
+            insertId: result.insertId,
+            warningStatus: result.warningStatus
+          }
+        ),
+        resolvedCallback,
+        resource
+      );
+    },
+    transaction(queries, parameters = [], callback, explicitResource) {
+      const [sharedParameters, resolvedCallback] = extractCallback(parameters, callback);
+      const resource = queryResource(explicitResource, runtime);
+      let statements;
+      try {
+        statements = normalizeTransactionStatements(queries, sharedParameters);
+      } catch (error) {
+        resolvedCallback?.(false, errorMessage(error));
+        return;
+      }
+      callbackOperation(database2.transaction(statements, resource), resolvedCallback, resource);
+    },
+    store(query, callback) {
+      callback?.(query);
+      return query;
+    }
+  };
+  api.execute = api.query;
+  api.fetch = api.query;
+  const asyncExport = /* @__PURE__ */ __name((method) => {
+    return (...args) => new Promise((resolve, reject) => {
+      method(...args, (result, error) => {
+        if (error) reject(new Error(error));
+        else resolve(result);
+      });
+    });
+  }, "asyncExport");
+  for (const [name, method] of Object.entries(api)) {
+    runtime.addExport(name, method);
+    runtime.addProviderExport("oxmysql", name, method);
+    if (!["isReady", "awaitConnection", "store"].includes(name)) {
+      const promiseMethod = asyncExport(method);
+      runtime.addExport(`${name}_async`, promiseMethod);
+      runtime.addExport(`${name}Sync`, promiseMethod);
+      runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
+      runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
+    }
+  }
+  const mysqlAsyncAliases = {
+    mysql_fetch_all: api.query,
+    mysql_fetch_scalar: api.scalar,
+    mysql_execute: api.update,
+    mysql_insert: api.insert,
+    mysql_transaction: api.transaction,
+    mysql_store: api.store
+  };
+  for (const [name, method] of Object.entries(mysqlAsyncAliases)) {
+    runtime.addProviderExport("mysql-async", name, method);
+  }
+  const ghmattiAliases = {
+    execute: api.query,
+    scalar: api.scalar,
+    transaction: api.transaction,
+    store: api.store
+  };
+  for (const [name, method] of Object.entries(ghmattiAliases)) {
+    runtime.addProviderExport("ghmattimysql", name, method);
+    if (name !== "store") runtime.addProviderExport("ghmattimysql", `${name}Sync`, asyncExport(method));
+  }
+  return api;
+}
+__name(registerCompatibilityExports, "registerCompatibilityExports");
+
 // src/index.ts
 var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
 var config = loadConfig();
 var database = new DatabaseService(new MySqlDriver(config), config);
+registerCompatibilityExports(database);
 void database.connect().then(() => {
   const driver = database.driver;
   console.log(
