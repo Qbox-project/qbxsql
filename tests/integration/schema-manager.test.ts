@@ -694,4 +694,39 @@ describe('resource schema manager integration', () => {
     expect(scoped.has('legacy_properties')).toBe(false);
   });
 
+  test('detects and safely repairs manual database drift', async () => {
+    const schema: ResourceSchema = {
+      version: 1,
+      tables: {
+        manual_drift_table: {
+          columns: {
+            id: { type: 'int', primary: true },
+            note: { type: 'varchar', length: 50, nullable: true },
+          },
+          indexes: [{ name: 'manual_drift_note_idx', columns: ['note'] }],
+        },
+      },
+    };
+    await manager.ensure('manual_drift_resource', schema);
+    await database.query(
+      'ALTER TABLE `manual_drift_table` DROP INDEX `manual_drift_note_idx`, DROP COLUMN `note`',
+    );
+
+    const plan = await manager.plan('manual_drift_resource', schema);
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'addColumn', automatic: true }),
+        expect.objectContaining({ kind: 'addIndex', automatic: true }),
+      ]),
+    );
+
+    const repaired = await manager.ensure('manual_drift_resource', schema);
+    expect(repaired.appliedActions).toHaveLength(2);
+    const actual = (await introspectDatabase(database, ['manual_drift_table'])).get(
+      'manual_drift_table',
+    );
+    expect(actual?.columns.has('note')).toBe(true);
+    expect(actual?.indexes.has('manual_drift_note_idx')).toBe(true);
+  });
+
 });
