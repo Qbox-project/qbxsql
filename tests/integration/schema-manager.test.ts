@@ -5,6 +5,7 @@ import { DatabaseService } from '../../src/core/database.js';
 import { MySqlDriver } from '../../src/drivers/mysql.js';
 import { introspectDatabase } from '../../src/schema/introspect.js';
 import {
+  SchemaAdoptionRequiredError,
   SchemaDisabledError,
   SchemaManager,
   SchemaMigrationRequiredError,
@@ -45,6 +46,33 @@ function propertiesSchema(length: number, version = 1): ResourceSchema {
         },
       },
     },
+  };
+}
+
+function resumableAdoptionSchema(): ResourceSchema {
+  return {
+    version: 2,
+    tables: {
+      adoption_child: {
+        columns: {
+          id: { type: 'int', primary: true },
+        },
+      },
+    },
+    migrations: [
+      {
+        version: 2,
+        name: 'migrate an adoption source table',
+        operations: [
+          {
+            type: 'addColumn',
+            table: 'adoption_migration_source',
+            column: 'note',
+            definition: { type: 'text', nullable: true },
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -308,6 +336,116 @@ describe('resource schema manager integration', () => {
         `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'released_table'`,
       ),
     ).toBe(0);
+  });
+
+  test('adopts an unmanaged legacy schema from an explicit baseline', async () => {
+    await database.query(
+      `CREATE TABLE legacy_properties (
+        id INT NOT NULL PRIMARY KEY
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const schema: ResourceSchema = {
+      version: 2,
+      tables: {
+        legacy_properties: {
+          columns: {
+            id: { type: 'int', primary: true },
+            label: { type: 'varchar', length: 50, nullable: true },
+          },
+        },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'add legacy property label',
+          operations: [
+            {
+              type: 'addColumn',
+              table: 'legacy_properties',
+              column: 'label',
+              definition: { type: 'varchar', length: 50, nullable: true },
+            },
+          ],
+        },
+      ],
+    };
+
+    await expect(manager.ensure('legacy_housing', schema)).rejects.toBeInstanceOf(
+      SchemaAdoptionRequiredError,
+    );
+    const plan = await manager.planAdoption('legacy_housing', schema, 1);
+    expect(plan).toMatchObject({ adoption: true, baselineVersion: 1, dryRun: true });
+    expect(plan.actions[0]).toMatchObject({ kind: 'migration:addColumn', automatic: true });
+
+    const adopted = await manager.adopt('legacy_housing', schema, 1);
+    expect(adopted.appliedMigrations).toEqual([2]);
+    expect(
+      await database.scalar(
+        `SELECT version FROM qbxsql_schema_registry WHERE resource_name = 'legacy_housing'`,
+      ),
+    ).toBe(2);
+    expect(
+      await database.scalar(
+        `SELECT baseline_version FROM qbxsql_schema_adoptions
+         WHERE resource_name = 'legacy_housing' AND status = 'success'`,
+      ),
+    ).toBe(1);
+    await expect(manager.planAdoption('invalid_baseline', schema, 2)).rejects.toThrow(
+      'integer from 0 through 1',
+    );
+  });
+
+  test('refuses adoption for an already managed resource', async () => {
+    await expect(
+      manager.planAdoption('legacy_housing', { version: 1, tables: {} }, 0),
+    ).rejects.toThrow('already has a managed schema');
+  });
+
+  test('persists the baseline when an adoption migration fails', async () => {
+    await database.query(
+      `CREATE TABLE adoption_child (
+        id INT NOT NULL PRIMARY KEY
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const adoptionManager = new SchemaManager(database);
+    await expect(
+      adoptionManager.adopt('resumable_adoption', resumableAdoptionSchema(), 1),
+    ).rejects.toThrow();
+  });
+
+  test('records the adoption baseline before running later migrations', async () => {
+    expect(
+      await database.scalar(
+        `SELECT baseline_version FROM qbxsql_schema_adoptions
+         WHERE resource_name = 'resumable_adoption' AND status = 'failed'`,
+      ),
+    ).toBe(1);
+  });
+
+  test('resumes adoption from the persisted baseline after a failed migration', async () => {
+    await database.query(
+      `CREATE TABLE adoption_migration_source (
+        id INT NOT NULL PRIMARY KEY
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const adoptionManager = new SchemaManager(database);
+    expect(
+      (
+        await adoptionManager.adopt(
+          'resumable_adoption',
+          resumableAdoptionSchema(),
+          1,
+        )
+      ).appliedMigrations,
+    ).toEqual([2]);
+    expect(
+      (await introspectDatabase(database))
+        .get('adoption_migration_source')
+        ?.columns.has('note'),
+    ).toBe(true);
   });
 
 });

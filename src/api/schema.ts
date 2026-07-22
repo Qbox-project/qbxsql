@@ -41,6 +41,26 @@ export function registerSchemaExports(
       });
   }
 
+  function adoptionOperation(
+    schema: ResourceSchema,
+    baselineVersion: number,
+    dryRun: boolean,
+    callback?: CfxCallback,
+    explicitResource?: string,
+  ): void {
+    const resource = resourceName(explicitResource);
+    void (dryRun
+      ? manager.planAdoption(resource, schema, baselineVersion)
+      : manager.adopt(resource, schema, baselineVersion)
+    )
+      .then((result) => callback?.(result))
+      .catch((error: unknown) => {
+        const errorMessage = message(error);
+        console.error(`[qbxsql] schema adoption failed [${resource}]: ${errorMessage}`);
+        callback?.(null, errorMessage);
+      });
+  }
+
   const api: Record<string, ExportFunction> = {
     ensureSchema(
       schema: ResourceSchema,
@@ -56,22 +76,56 @@ export function registerSchemaExports(
     ): void {
       operation(schema, true, callback, explicitResource);
     },
+    adoptSchema(
+      schema: ResourceSchema,
+      baselineVersion: number,
+      callback?: CfxCallback,
+      explicitResource?: string,
+    ): void {
+      adoptionOperation(schema, baselineVersion, false, callback, explicitResource);
+    },
+    planSchemaAdoption(
+      schema: ResourceSchema,
+      baselineVersion: number,
+      callback?: CfxCallback,
+      explicitResource?: string,
+    ): void {
+      adoptionOperation(schema, baselineVersion, true, callback, explicitResource);
+    },
   };
 
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
-    runtime.addExport(`${name}_async`, (schema: ResourceSchema, explicitResource?: string) =>
-      new Promise((resolve, reject) => {
-        callback(
-          schema,
-          (result: unknown, error?: string) => {
-            if (error) reject(new Error(error));
-            else resolve(result);
-          },
-          explicitResource,
-        );
-      }),
-    );
+    if (name === 'adoptSchema' || name === 'planSchemaAdoption') {
+      runtime.addExport(
+        `${name}_async`,
+        (schema: ResourceSchema, baselineVersion: number, explicitResource?: string) =>
+          new Promise((resolve, reject) => {
+            callback(
+              schema,
+              baselineVersion,
+              (result: unknown, error?: string) => {
+                if (error) reject(new Error(error));
+                else resolve(result);
+              },
+              explicitResource,
+            );
+          }),
+      );
+    } else {
+      runtime.addExport(`${name}_async`, (schema: ResourceSchema, explicitResource?: string) =>
+        new Promise((resolve, reject) => {
+          callback(
+            schema,
+            (result: unknown, error?: string) => {
+              if (error) reject(new Error(error));
+              else resolve(result);
+            },
+            explicitResource,
+          );
+        }),
+      );
+    }
   }
 
   return api;

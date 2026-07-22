@@ -21354,29 +21354,61 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
     });
   }
   __name(operation, "operation");
+  function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
+    const resource = resourceName2(explicitResource);
+    void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
+      const errorMessage2 = message(error);
+      console.error(`[qbxsql] schema adoption failed [${resource}]: ${errorMessage2}`);
+      callback?.(null, errorMessage2);
+    });
+  }
+  __name(adoptionOperation, "adoptionOperation");
   const api = {
     ensureSchema(schema, callback, explicitResource) {
       operation(schema, false, callback, explicitResource);
     },
     planSchema(schema, callback, explicitResource) {
       operation(schema, true, callback, explicitResource);
+    },
+    adoptSchema(schema, baselineVersion, callback, explicitResource) {
+      adoptionOperation(schema, baselineVersion, false, callback, explicitResource);
+    },
+    planSchemaAdoption(schema, baselineVersion, callback, explicitResource) {
+      adoptionOperation(schema, baselineVersion, true, callback, explicitResource);
     }
   };
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
-    runtime.addExport(
-      `${name}_async`,
-      (schema, explicitResource) => new Promise((resolve, reject) => {
-        callback(
-          schema,
-          (result, error) => {
-            if (error) reject(new Error(error));
-            else resolve(result);
-          },
-          explicitResource
-        );
-      })
-    );
+    if (name === "adoptSchema" || name === "planSchemaAdoption") {
+      runtime.addExport(
+        `${name}_async`,
+        (schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
+          callback(
+            schema,
+            baselineVersion,
+            (result, error) => {
+              if (error) reject(new Error(error));
+              else resolve(result);
+            },
+            explicitResource
+          );
+        })
+      );
+    } else {
+      runtime.addExport(
+        `${name}_async`,
+        (schema, explicitResource) => new Promise((resolve, reject) => {
+          callback(
+            schema,
+            (result, error) => {
+              if (error) reject(new Error(error));
+              else resolve(result);
+            },
+            explicitResource
+          );
+        })
+      );
+    }
   }
   return api;
 }
@@ -22365,6 +22397,26 @@ var SchemaDisabledError = class extends Error {
     this.name = "SchemaDisabledError";
   }
 };
+var SchemaAdoptionRequiredError = class extends Error {
+  static {
+    __name(this, "SchemaAdoptionRequiredError");
+  }
+  constructor(resource, tables) {
+    super(
+      `Schema '${resource}' includes unmanaged existing tables (${tables.join(", ")}). Use QBXSQL.Schema.planAdoption/adopt with an explicit baseline.`
+    );
+    this.name = "SchemaAdoptionRequiredError";
+  }
+};
+var SchemaAdoptionConflictError = class extends Error {
+  static {
+    __name(this, "SchemaAdoptionConflictError");
+  }
+  constructor(message2) {
+    super(message2);
+    this.name = "SchemaAdoptionConflictError";
+  }
+};
 function validateResourceName(resource) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(resource)) {
     throw new Error(`Invalid resource name '${resource}'.`);
@@ -22445,6 +22497,13 @@ var SchemaManager = class {
     if (this.mode === "plan") throw new SchemaPendingChangesError(await this.plan(resource, schema));
     await this.initialize();
     const preflightRegistry = await this.readRegistry(resource);
+    if (!preflightRegistry) {
+      await this.refuseImplicitAdoption(
+        resource,
+        schema,
+        await introspectDatabase(this.database)
+      );
+    }
     const preflightMigrations = preflightRegistry ? (schema.migrations ?? []).filter(
       (migration) => migration.version > preflightRegistry.version && migration.version <= schema.version
     ).sort((left, right) => left.version - right.version) : [];
@@ -22559,6 +22618,141 @@ var SchemaManager = class {
       appliedMigrations: []
     };
   }
+  async planAdoption(resource, input, baselineVersion) {
+    validateResourceName(resource);
+    const schema = validateSchema(input);
+    this.validateAdoptionBaseline(schema, baselineVersion);
+    const checksum = schemaChecksum(schema);
+    const migrations = (schema.migrations ?? []).filter(
+      (migration) => migration.version > baselineVersion && migration.version <= schema.version
+    ).sort((left, right) => left.version - right.version);
+    if (await this.metadataTablesExist()) {
+      const registry = await this.readRegistry(resource);
+      if (registry) {
+        throw new SchemaAdoptionConflictError(
+          `Resource '${resource}' already has a managed schema at version ${registry.version}.`
+        );
+      }
+      await this.assertAdoptionOwnership(resource, this.relevantOwnershipTables(schema, migrations));
+    }
+    const actual = await introspectDatabase(this.database);
+    this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
+    const plan = planSchema(
+      resource,
+      schema,
+      actual,
+      capabilitiesForVersion(this.database.driver.serverVersion)
+    );
+    return {
+      ...plan,
+      actions: [...migrationActions(migrations, this.allowBlocking), ...plan.actions],
+      checksum,
+      dryRun: true,
+      appliedActions: [],
+      appliedMigrations: [],
+      adoption: true,
+      baselineVersion
+    };
+  }
+  async adopt(resource, input, baselineVersion) {
+    validateResourceName(resource);
+    const schema = validateSchema(input);
+    this.validateAdoptionBaseline(schema, baselineVersion);
+    if (this.mode === "off") throw new SchemaDisabledError(resource);
+    if (this.mode === "plan") {
+      throw new SchemaPendingChangesError(
+        await this.planAdoption(resource, schema, baselineVersion)
+      );
+    }
+    const checksum = schemaChecksum(schema);
+    await this.initialize();
+    const lock = await this.database.driver.acquire();
+    let adoptionRecorded = false;
+    try {
+      await this.acquireLock(lock);
+      const registry = await this.readRegistry(resource);
+      const adoption = await this.readAdoption(resource);
+      if (registry) {
+        throw new SchemaAdoptionConflictError(
+          `Resource '${resource}' is already managed at version ${registry.version}.`
+        );
+      }
+      if (adoption) {
+        if (adoption.baselineVersion !== baselineVersion || adoption.targetVersion !== schema.version || adoption.checksum !== checksum) {
+          throw new SchemaAdoptionConflictError(
+            `A different adoption for '${resource}' is already ${adoption.status}.`
+          );
+        }
+        adoptionRecorded = true;
+      }
+      const migrations = (schema.migrations ?? []).filter(
+        (migration) => migration.version > baselineVersion && migration.version <= schema.version
+      ).sort((left, right) => left.version - right.version);
+      this.assertBlockingPolicy(migrations);
+      const relevantTables = this.relevantOwnershipTables(schema, migrations);
+      let actual = await introspectDatabase(this.database);
+      if (!adoptionRecorded) {
+        await this.assertAdoptionOwnership(resource, relevantTables);
+        this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
+        await this.writeAdoptionBaseline(resource, schema, baselineVersion, checksum);
+        adoptionRecorded = true;
+      }
+      const migrationRows = await this.readMigrationRows(resource);
+      this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
+      const appliedMigrations = [];
+      for (const migration of migrations) {
+        const existing = migrationRows.get(migration.version);
+        if (existing?.status === "success") continue;
+        await this.applyMigration(resource, migration, existing, actual);
+        appliedMigrations.push(migration.version);
+        actual = await introspectDatabase(this.database);
+      }
+      const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+      const plan = planSchema(resource, schema, actual, capabilities);
+      if (plan.actions.some((entry) => !entry.automatic)) {
+        throw new SchemaMigrationRequiredError(plan);
+      }
+      const appliedActions = [];
+      for (const schemaAction of plan.actions) {
+        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        appliedActions.push(schemaAction.sql);
+      }
+      const remaining = planSchema(
+        resource,
+        schema,
+        await introspectDatabase(this.database),
+        capabilities
+      );
+      if (remaining.actions.length > 0) {
+        throw new Error(
+          `Schema adoption for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join("; ")}`
+        );
+      }
+      await this.claimTables(resource, Object.keys(schema.tables));
+      await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
+      await this.finishAdoption(resource);
+      return {
+        ...plan,
+        warnings: [...plan.warnings, ...remaining.warnings],
+        checksum,
+        dryRun: false,
+        appliedActions,
+        appliedMigrations,
+        adoption: true,
+        baselineVersion
+      };
+    } catch (error) {
+      if (adoptionRecorded) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await this.failAdoption(resource, error).catch(() => {
+        });
+      }
+      throw error;
+    } finally {
+      lock.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
   async createMetadataTables() {
     await this.database.connect();
     await this.database.query(
@@ -22568,6 +22762,21 @@ var SchemaManager = class {
         checksum CHAR(64) NOT NULL,
         tables_json LONGTEXT NOT NULL,
         updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+    await this.database.query(
+      `CREATE TABLE IF NOT EXISTS qbxsql_schema_adoptions (
+        resource_name VARCHAR(100) NOT NULL PRIMARY KEY,
+        baseline_version INT UNSIGNED NOT NULL,
+        target_version INT UNSIGNED NOT NULL,
+        checksum CHAR(64) NOT NULL,
+        tables_json LONGTEXT NOT NULL,
+        status VARCHAR(16) NOT NULL,
+        error TEXT NULL,
+        started_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        completed_at TIMESTAMP(6) NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       [],
       { invokingResource: "qbxsql:schema" }
@@ -22648,6 +22857,22 @@ var SchemaManager = class {
       ])
     );
   }
+  async readAdoption(resource) {
+    const row = await this.database.single(
+      `SELECT baseline_version AS baselineVersion, target_version AS targetVersion,
+              checksum, status
+       FROM qbxsql_schema_adoptions WHERE resource_name = ?`,
+      [resource],
+      { invokingResource: "qbxsql:schema" }
+    );
+    if (!row) return null;
+    return {
+      baselineVersion: Number(row.baselineVersion),
+      targetVersion: Number(row.targetVersion),
+      checksum: String(row.checksum),
+      status: String(row.status)
+    };
+  }
   assertMigrationChecksums(migrations, existing) {
     for (const migration of migrations) {
       const row = existing.get(migration.version);
@@ -22723,6 +22948,7 @@ var SchemaManager = class {
       );
     } catch (error) {
       const message2 = error instanceof Error ? error.message : String(error);
+      await new Promise((resolve) => setTimeout(resolve, 0));
       await this.database.update(
         `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
          WHERE resource_name = ? AND version = ?`,
@@ -22833,6 +23059,76 @@ var SchemaManager = class {
     if (affected !== 1) {
       throw new Error(`Cannot release table '${tableName}' because it is not owned by '${resource}'.`);
     }
+  }
+  validateAdoptionBaseline(schema, baselineVersion) {
+    if (!Number.isInteger(baselineVersion) || baselineVersion < 0 || baselineVersion >= schema.version) {
+      throw new Error(
+        `Adoption baseline must be an integer from 0 through ${schema.version - 1}.`
+      );
+    }
+  }
+  async refuseImplicitAdoption(resource, schema, actual) {
+    const existing = Object.keys(schema.tables).filter((table) => actual.has(table));
+    if (existing.length === 0) return;
+    const ownership = await this.readOwnership(existing);
+    const unmanaged = existing.filter((table) => !ownership.has(table));
+    if (unmanaged.length > 0) throw new SchemaAdoptionRequiredError(resource, unmanaged);
+  }
+  async assertAdoptionOwnership(resource, tableNames) {
+    const ownership = await this.readOwnership(tableNames);
+    if (ownership.size === 0) return;
+    const conflicts = [...ownership].map(([table, owner]) => `${table} (${owner})`).join(", ");
+    throw new SchemaAdoptionConflictError(
+      `Cannot adopt '${resource}' because tables are already owned: ${conflicts}.`
+    );
+  }
+  assertAdoptionHasLegacyTables(resource, schema, migrations, actual) {
+    const relevant = this.relevantOwnershipTables(schema, migrations);
+    if (!relevant.some((table) => actual.has(table))) {
+      throw new SchemaAdoptionConflictError(
+        `Cannot adopt '${resource}' because none of its declared or migration-source tables exist. Use ensure for a fresh schema.`
+      );
+    }
+  }
+  async readOwnership(tableNames) {
+    if (tableNames.length === 0) return /* @__PURE__ */ new Map();
+    const rows = await this.database.query(
+      `SELECT table_name AS tableName, resource_name AS resourceName
+       FROM qbxsql_schema_tables`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+    const relevant = new Set(tableNames);
+    return new Map(
+      rows.filter((row) => relevant.has(String(row.tableName))).map((row) => [String(row.tableName), String(row.resourceName)])
+    );
+  }
+  async writeAdoptionBaseline(resource, schema, baselineVersion, checksum) {
+    await this.database.update(
+      `INSERT INTO qbxsql_schema_adoptions
+        (resource_name, baseline_version, target_version, checksum, tables_json, status, error)
+       VALUES (?, ?, ?, ?, ?, 'running', NULL)`,
+      [resource, baselineVersion, schema.version, checksum, JSON.stringify(Object.keys(schema.tables))],
+      { invokingResource: "qbxsql:schema" }
+    );
+  }
+  async finishAdoption(resource) {
+    await this.database.update(
+      `UPDATE qbxsql_schema_adoptions
+       SET status = 'success', error = NULL, completed_at = CURRENT_TIMESTAMP(6)
+       WHERE resource_name = ?`,
+      [resource],
+      { invokingResource: "qbxsql:schema" }
+    );
+  }
+  async failAdoption(resource, error) {
+    const message2 = error instanceof Error ? error.message : String(error);
+    await this.database.update(
+      `UPDATE qbxsql_schema_adoptions SET status = 'failed', error = ?
+       WHERE resource_name = ?`,
+      [message2.slice(0, 65535), resource],
+      { invokingResource: "qbxsql:schema" }
+    );
   }
   relevantOwnershipTables(schema, migrations) {
     const tables = new Set(Object.keys(schema.tables));

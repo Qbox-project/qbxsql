@@ -36,5 +36,38 @@ for name, exportName in pairs({ ensure = 'ensureSchema', plan = 'planSchema' }) 
     })
 end
 
-_ENV.QBXSQL = QBXSQL
+local function adoptionCall(method, schema, baselineVersion, callback)
+    assert(type(schema) == 'table', 'Schema must be a table')
+    assert(type(baselineVersion) == 'number', 'Adoption baseline must be a number')
+    return adapter[method](nil, schema, baselineVersion, callback, currentResource)
+end
 
+local function adoptionAwait(method, schema, baselineVersion)
+    local response = promise.new()
+
+    adoptionCall(method, schema, baselineVersion, function(result, err)
+        if err then
+            response:reject(err)
+        else
+            response:resolve(result)
+        end
+    end)
+
+    return Citizen.Await(response)
+end
+
+
+for name, exportName in pairs({ adopt = 'adoptSchema', planAdoption = 'planSchemaAdoption' }) do
+    local method = exportName
+    QBXSQL.Schema[name] = setmetatable({
+        await = function(schema, baselineVersion)
+            return adoptionAwait(method, schema, baselineVersion)
+        end
+    }, {
+        __call = function(_, schema, baselineVersion, callback)
+            return adoptionCall(method, schema, baselineVersion, callback)
+        end
+    })
+end
+
+_ENV.QBXSQL = QBXSQL

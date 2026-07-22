@@ -189,3 +189,8 @@ export interface SchemaEnsureResult extends SchemaPlan {
   appliedActions: string[];
   appliedMigrations: number[];
 }
+
+export interface SchemaAdoptionResult extends SchemaEnsureResult {
+  adoption: true;
+  baselineVersion: number;
+}

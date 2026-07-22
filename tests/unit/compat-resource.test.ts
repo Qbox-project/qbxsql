@@ -48,6 +48,14 @@ describe('qbxsql compatibility resource', () => {
     expect(wrapper).toContain('qbxsql.awaitConnection()');
   });
 
+  test('exposes callback and await schema adoption helpers', async () => {
+    const wrapper = await fixture('lib/Schema.lua');
+
+    expect(wrapper).toContain("adopt = 'adoptSchema'");
+    expect(wrapper).toContain("planAdoption = 'planSchemaAdoption'");
+    expect(wrapper).toContain('adoptionAwait(method, schema, baselineVersion)');
+  });
+
   test('rejects a concurrently active real oxmysql resource', async () => {
     const server = await fixture('qbxsql_compat/server.lua');
 
