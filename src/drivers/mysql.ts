@@ -12,7 +12,6 @@ import type {
   DatabaseConnection,
   DatabaseDriver,
   DriverResult,
-  FieldMetadata,
   PoolStatus,
 } from '../core/types.js';
 import { serializeForRuntime } from '../core/serialize.js';
@@ -214,26 +213,13 @@ function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
   }
 }
 
-function fieldMetadata(fields?: readonly FieldPacket[]): FieldMetadata[] {
-  if (!fields) return [];
-  return fields.map((field) => {
-    const metadata: FieldMetadata = { name: field.name };
-    if (field.table) metadata.table = field.table;
-    if (field.schema) metadata.schema = field.schema;
-    if (field.columnType !== undefined) metadata.columnType = field.columnType;
-    if (field.characterSet !== undefined) metadata.characterSet = field.characterSet;
-    return metadata;
-  });
-}
-
 function normalizeDriverResult(
   rows: RowDataPacket[] | RowDataPacket[][] | ResultSetHeader | ResultSetHeader[],
-  fields?: readonly FieldPacket[],
 ): DriverResult {
   const header = !Array.isArray(rows) ? rows : null;
   return {
     rows: serializeForRuntime(rows),
-    fields: fieldMetadata(fields),
+    fields: [],
     affectedRows: header?.affectedRows ?? 0,
     changedRows: header?.changedRows ?? 0,
     insertId: header?.insertId ?? 0,
@@ -251,13 +237,12 @@ async function runQuery(
     query(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
     execute(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
   };
-  const [rows, fields] = prepared
+  const [rows] = prepared
     ? await executor.execute(sql, parameters)
     : await executor.query(sql, parameters);
 
   return normalizeDriverResult(
     rows as RowDataPacket[] | RowDataPacket[][] | ResultSetHeader | ResultSetHeader[],
-    fields as FieldPacket[] | undefined,
   );
 }
 

@@ -15704,7 +15704,7 @@ var require_binary_parser = __commonJS({
     function compile(fields, options, config2) {
       const parserFn = genFunc();
       const nullBitmapLength = Math.floor((fields.length + 7 + 2) / 8);
-      function fieldMetadata2(field) {
+      function fieldMetadata(field) {
         return {
           type: typeNames[field.columnType],
           extendedTypeName: field.extendedTypeName,
@@ -15715,10 +15715,10 @@ var require_binary_parser = __commonJS({
           name: field.name
         };
       }
-      __name(fieldMetadata2, "fieldMetadata");
+      __name(fieldMetadata, "fieldMetadata");
       function wrap(field, packet) {
         return {
-          ...fieldMetadata2(field),
+          ...fieldMetadata(field),
           string: /* @__PURE__ */ __name(function(encoding = field.encoding) {
             if (field.columnType === Types.JSON && encoding === field.encoding) {
               console.warn(
@@ -15754,7 +15754,7 @@ var require_binary_parser = __commonJS({
       __name(wrap, "wrap");
       function wrapNull(field) {
         return {
-          ...fieldMetadata2(field),
+          ...fieldMetadata(field),
           string: /* @__PURE__ */ __name(function() {
             return null;
           }, "string"),
@@ -21005,23 +21005,11 @@ function typeCast(field, next) {
   }
 }
 __name(typeCast, "typeCast");
-function fieldMetadata(fields) {
-  if (!fields) return [];
-  return fields.map((field) => {
-    const metadata = { name: field.name };
-    if (field.table) metadata.table = field.table;
-    if (field.schema) metadata.schema = field.schema;
-    if (field.columnType !== void 0) metadata.columnType = field.columnType;
-    if (field.characterSet !== void 0) metadata.characterSet = field.characterSet;
-    return metadata;
-  });
-}
-__name(fieldMetadata, "fieldMetadata");
-function normalizeDriverResult(rows, fields) {
+function normalizeDriverResult(rows) {
   const header = !Array.isArray(rows) ? rows : null;
   return {
     rows: serializeForRuntime(rows),
-    fields: fieldMetadata(fields),
+    fields: [],
     affectedRows: header?.affectedRows ?? 0,
     changedRows: header?.changedRows ?? 0,
     insertId: header?.insertId ?? 0,
@@ -21031,10 +21019,9 @@ function normalizeDriverResult(rows, fields) {
 __name(normalizeDriverResult, "normalizeDriverResult");
 async function runQuery(connection, sql, parameters, prepared) {
   const executor = connection;
-  const [rows, fields] = prepared ? await executor.execute(sql, parameters) : await executor.query(sql, parameters);
+  const [rows] = prepared ? await executor.execute(sql, parameters) : await executor.query(sql, parameters);
   return normalizeDriverResult(
-    rows,
-    fields
+    rows
   );
 }
 __name(runQuery, "runQuery");
