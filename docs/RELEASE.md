@@ -39,7 +39,7 @@ Self-hosted FXServer jobs use license/connection secrets and are triggered only 
 
 Before deploying, verify a backup, set schema mode to `plan`, and review every action. Install both release resources, remove real oxmysql, and run the Qbox checklist.
 
-Run one Qbox canary for seven days. Monitor state, error/query/slow-query totals, reconnects, queue depth, pool acquisition, process memory, and every schema result. Stop the canary for unexplained data loss, partial transactions, persistent dependency failure, a connection leak, credential exposure, or an unreviewed blocking/destructive plan.
+Run one Qbox canary for seven days using the monitor and validator in [CANARY.md](CANARY.md). Monitor state, error/query/slow-query totals, reconnects, queue depth, pool acquisition, process memory, and every schema result. Stop the canary for unexplained data loss, partial transactions, persistent dependency failure, a connection leak, credential exposure, or an unreviewed blocking/destructive plan.
 
 ## Rollback
 

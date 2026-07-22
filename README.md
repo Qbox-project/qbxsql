@@ -112,4 +112,4 @@ The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, 
 bun run install:dev -- --resources C:\path\to\server\resources
 ```
 
-CI definitions cover quality, the LTS database matrix, security scanning, stock/enhanced FXServer gates, and the manually dispatched release-candidate soak. See [release policy](docs/RELEASE.md) and [benchmark gates](docs/BENCHMARKS.md).
+CI definitions cover quality, the LTS database matrix, security scanning, stock/enhanced FXServer gates, and the manually dispatched release-candidate soak. See [release policy](docs/RELEASE.md), [benchmark gates](docs/BENCHMARKS.md), and [seven-day canary evidence](docs/CANARY.md).
