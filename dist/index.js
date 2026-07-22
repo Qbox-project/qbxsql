@@ -22042,7 +22042,13 @@ var currentCapabilities = {
   inplaceAddIndex: true
 };
 function capabilitiesForVersion(serverVersion) {
-  if (!serverVersion) return { ...currentCapabilities };
+  if (!serverVersion) {
+    return {
+      instantAddColumn: false,
+      inplaceAlterColumn: false,
+      inplaceAddIndex: false
+    };
+  }
   const match = serverVersion.match(/^(\d+)\.(\d+)/);
   const major = Number(match?.[1] ?? 0);
   const minor = Number(match?.[2] ?? 0);

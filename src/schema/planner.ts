@@ -32,7 +32,13 @@ const currentCapabilities: SchemaCapabilities = {
 };
 
 export function capabilitiesForVersion(serverVersion: string | null): SchemaCapabilities {
-  if (!serverVersion) return { ...currentCapabilities };
+  if (!serverVersion) {
+    return {
+      instantAddColumn: false,
+      inplaceAlterColumn: false,
+      inplaceAddIndex: false,
+    };
+  }
   const match = serverVersion.match(/^(\d+)\.(\d+)/);
   const major = Number(match?.[1] ?? 0);
   const minor = Number(match?.[2] ?? 0);

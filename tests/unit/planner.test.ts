@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { planSchema } from '../../src/schema/planner.js';
+import { capabilitiesForVersion, planSchema } from '../../src/schema/planner.js';
 import type { ActualTable, ResourceSchema } from '../../src/schema/types.js';
 
 function schema(length: number, nullable = false): ResourceSchema {
@@ -65,6 +65,14 @@ function actual(length: number): ActualTable {
 }
 
 describe('declarative schema planner', () => {
+  test('does not assume online DDL support for an unknown server version', () => {
+    expect(capabilitiesForVersion(null)).toEqual({
+      instantAddColumn: false,
+      inplaceAlterColumn: false,
+      inplaceAddIndex: false,
+    });
+  });
+
   test('creates missing tables', () => {
     const plan = planSchema('housing', schema(100), new Map());
     expect(plan.actions).toHaveLength(1);
