@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { registerSchemaExports } from '../../src/api/schema.js';
 import type { ExportFunction, RuntimeBindings } from '../../src/api/compatibility.js';
+import { SchemaPendingChangesError } from '../../src/schema/manager.js';
 import type { SchemaEnsureResult } from '../../src/schema/types.js';
 
 describe('schema exports', () => {
@@ -56,6 +57,58 @@ describe('schema exports', () => {
       adoption: true,
       baselineVersion: 1,
       resource: 'housing',
+    });
+  });
+
+  test('preserves the structured pending plan across callback and promise exports', async () => {
+    const pending: SchemaEnsureResult = {
+      resource: 'housing',
+      version: 2,
+      actions: [
+        {
+          kind: 'alterColumn',
+          sql: 'ALTER TABLE `properties` MODIFY `label` VARCHAR(100)',
+          safe: true,
+          dataSafe: true,
+          onlineSafe: true,
+          automatic: true,
+          risk: 'low',
+          algorithm: 'INPLACE',
+          reason: 'widen label',
+          table: 'properties',
+        },
+      ],
+      warnings: [],
+      checksum: 'pending',
+      dryRun: true,
+      appliedActions: [],
+      appliedMigrations: [],
+    };
+    const manager = {
+      ensure: async () => {
+        throw new SchemaPendingChangesError(pending);
+      },
+    };
+    const exports = new Map<string, ExportFunction>();
+    registerSchemaExports(manager as never, {
+      addExport: (name, callback) => exports.set(name, callback),
+      addProviderExport() {},
+      invokingResource: () => 'housing',
+    });
+
+    const callbackError = await new Promise<unknown>((resolve) => {
+      exports.get('ensureSchema')!({ version: 2, tables: {} }, (_result: unknown, error: unknown) =>
+        resolve(error),
+      );
+    });
+    expect(callbackError).toMatchObject({
+      code: 'QBXSQL_SCHEMA_PENDING_CHANGES',
+      result: pending,
+    });
+
+    await expect(exports.get('ensureSchema_async')!({ version: 2, tables: {} })).rejects.toMatchObject({
+      code: 'QBXSQL_SCHEMA_PENDING_CHANGES',
+      result: pending,
     });
   });
 });

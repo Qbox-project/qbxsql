@@ -1,14 +1,37 @@
-import type { SchemaManager } from '../schema/manager.js';
+import {
+  SchemaDisabledError,
+  SchemaMigrationRequiredError,
+  SchemaPendingChangesError,
+  type SchemaManager,
+} from '../schema/manager.js';
 import type { ResourceSchema } from '../schema/types.js';
 import {
   createRuntimeBindings,
-  type CfxCallback,
   type ExportFunction,
   type RuntimeBindings,
 } from './compatibility.js';
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+interface SchemaApiError {
+  code: string;
+  message: string;
+  result?: unknown;
+  plan?: unknown;
+}
+
+type SchemaCallback = (result: unknown, error?: SchemaApiError) => void;
+
+function errorPayload(error: unknown): SchemaApiError {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof SchemaPendingChangesError) {
+    return { code: 'QBXSQL_SCHEMA_PENDING_CHANGES', message, result: error.result };
+  }
+  if (error instanceof SchemaMigrationRequiredError) {
+    return { code: 'QBXSQL_SCHEMA_MIGRATION_REQUIRED', message, plan: error.plan };
+  }
+  if (error instanceof SchemaDisabledError) {
+    return { code: 'QBXSQL_SCHEMA_DISABLED', message };
+  }
+  return { code: 'QBXSQL_SCHEMA_ERROR', message };
 }
 
 export function registerSchemaExports(
@@ -28,16 +51,16 @@ export function registerSchemaExports(
   function operation(
     schema: ResourceSchema,
     dryRun: boolean,
-    callback?: CfxCallback,
+    callback?: SchemaCallback,
     explicitResource?: string,
   ): void {
     const resource = resourceName(explicitResource);
     void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema))
       .then((result) => callback?.(result))
       .catch((error: unknown) => {
-        const errorMessage = message(error);
-        console.error(`[qbxsql] schema operation failed [${resource}]: ${errorMessage}`);
-        callback?.(null, errorMessage);
+        const failure = errorPayload(error);
+        console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
+        callback?.(null, failure);
       });
   }
 
@@ -45,7 +68,7 @@ export function registerSchemaExports(
     schema: ResourceSchema,
     baselineVersion: number,
     dryRun: boolean,
-    callback?: CfxCallback,
+    callback?: SchemaCallback,
     explicitResource?: string,
   ): void {
     const resource = resourceName(explicitResource);
@@ -55,23 +78,23 @@ export function registerSchemaExports(
     )
       .then((result) => callback?.(result))
       .catch((error: unknown) => {
-        const errorMessage = message(error);
-        console.error(`[qbxsql] schema adoption failed [${resource}]: ${errorMessage}`);
-        callback?.(null, errorMessage);
+        const failure = errorPayload(error);
+        console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);
+        callback?.(null, failure);
       });
   }
 
   const api: Record<string, ExportFunction> = {
     ensureSchema(
       schema: ResourceSchema,
-      callback?: CfxCallback,
+      callback?: SchemaCallback,
       explicitResource?: string,
     ): void {
       operation(schema, false, callback, explicitResource);
     },
     planSchema(
       schema: ResourceSchema,
-      callback?: CfxCallback,
+      callback?: SchemaCallback,
       explicitResource?: string,
     ): void {
       operation(schema, true, callback, explicitResource);
@@ -79,7 +102,7 @@ export function registerSchemaExports(
     adoptSchema(
       schema: ResourceSchema,
       baselineVersion: number,
-      callback?: CfxCallback,
+      callback?: SchemaCallback,
       explicitResource?: string,
     ): void {
       adoptionOperation(schema, baselineVersion, false, callback, explicitResource);
@@ -87,7 +110,7 @@ export function registerSchemaExports(
     planSchemaAdoption(
       schema: ResourceSchema,
       baselineVersion: number,
-      callback?: CfxCallback,
+      callback?: SchemaCallback,
       explicitResource?: string,
     ): void {
       adoptionOperation(schema, baselineVersion, true, callback, explicitResource);
@@ -104,8 +127,8 @@ export function registerSchemaExports(
             callback(
               schema,
               baselineVersion,
-              (result: unknown, error?: string) => {
-                if (error) reject(new Error(error));
+              (result: unknown, error?: SchemaApiError) => {
+                if (error) reject(error);
                 else resolve(result);
               },
               explicitResource,
@@ -117,8 +140,8 @@ export function registerSchemaExports(
         new Promise((resolve, reject) => {
           callback(
             schema,
-            (result: unknown, error?: string) => {
-              if (error) reject(new Error(error));
+            (result: unknown, error?: SchemaApiError) => {
+              if (error) reject(error);
               else resolve(result);
             },
             explicitResource,

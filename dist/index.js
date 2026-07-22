@@ -10772,12 +10772,12 @@ var require_packet = __commonJS({
           this.skip(1);
           sqlState = this.readBuffer(5).toString();
         }
-        const message2 = this.readString(void 0, encoding);
-        const err = new Error(message2);
+        const message = this.readString(void 0, encoding);
+        const err = new Error(message);
         err.code = ErrorCodeToName[errorCode];
         err.errno = errorCode;
         err.sqlState = sqlState;
-        err.sqlMessage = message2;
+        err.sqlMessage = message;
         return err;
       }
       writeInt32(n) {
@@ -13336,7 +13336,7 @@ var require_packets = __commonJS({
         const insertId = args.insertId || 0;
         const serverStatus = args.serverStatus || 0;
         const warningCount = args.warningCount || 0;
-        const message2 = args.message || "";
+        const message = args.message || "";
         let length = 9 + Packet.lengthCodedNumberLength(affectedRows);
         length += Packet.lengthCodedNumberLength(insertId);
         const buffer = Buffer.allocUnsafe(length);
@@ -13347,7 +13347,7 @@ var require_packets = __commonJS({
         packet.writeLengthCodedNumber(insertId);
         packet.writeInt16(serverStatus);
         packet.writeInt16(warningCount);
-        packet.writeString(message2, encoding);
+        packet.writeString(message, encoding);
         packet._name = "OK";
         return packet;
       }
@@ -13394,9 +13394,9 @@ var require_packets = __commonJS({
         const code = packet.readInt16();
         packet.readString(1, "ascii");
         packet.readString(5, "ascii");
-        const message2 = packet.readNullTerminatedString("utf8");
+        const message = packet.readNullTerminatedString("utf8");
         const error = new _Error();
-        error.message = message2;
+        error.message = message;
         error.code = code;
         return error;
       }
@@ -17882,11 +17882,11 @@ var require_connection = __commonJS({
         });
         this.stream = secureSocket;
       }
-      protocolError(message2, code) {
+      protocolError(message, code) {
         if (this._closing) {
           return;
         }
-        const err = new Error(message2);
+        const err = new Error(message);
         err.fatal = true;
         err.code = code || "PROTOCOL_ERROR";
         this.emit("error", err);
@@ -20364,8 +20364,8 @@ __name(normalizeParameters, "normalizeParameters");
 
 // src/core/database.ts
 var ConnectionUnavailableError = class extends Error {
-  constructor(message2, code) {
-    super(message2);
+  constructor(message, code) {
+    super(message);
     this.code = code;
     this.name = "ConnectionUnavailableError";
   }
@@ -21271,14 +21271,14 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   };
   const runtime = bindings ?? fallbackBindings;
   function operationError(error, callback, returnCallbackErrors, resource, query, parameters) {
-    const message2 = errorMessage(error);
+    const message = errorMessage(error);
     const output = `${resource} was unable to execute a query!${query ? `
 Query: ${query}` : ""}
-${message2}`;
+${message}`;
     runtime.emitEvent?.("oxmysql:error", {
       query,
       parameters,
-      message: message2,
+      message,
       err: error,
       resource
     });
@@ -21364,19 +21364,19 @@ ${message2}`;
         return;
       }
       void database2.transaction(statements, resource).then((result) => resolvedCallback?.(result)).catch((error) => {
-        const message2 = errorMessage(error);
+        const message = errorMessage(error);
         const failedQuery = typeof error === "object" && error && "sql" in error ? String(error.sql ?? "") : statements.map((statement) => statement.query).join("; ");
         runtime.emitEvent?.("oxmysql:transaction-error", {
           query: failedQuery,
           parameters: sharedParameters,
-          message: message2,
+          message,
           err: error,
           resource
         });
         console.error(
           `${resource} was unable to complete a transaction!
 ${failedQuery}
-${message2}`
+${message}`
         );
         resolvedCallback?.(false);
       });
@@ -21444,92 +21444,6 @@ ${message2}`
   return api;
 }
 __name(registerCompatibilityExports, "registerCompatibilityExports");
-
-// src/api/schema.ts
-function message(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-__name(message, "message");
-function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
-  const runtime = bindings ?? {
-    addExport() {
-    },
-    addProviderExport() {
-    },
-    invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
-  };
-  function resourceName3(explicit) {
-    return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
-  }
-  __name(resourceName3, "resourceName");
-  function operation(schema, dryRun, callback, explicitResource) {
-    const resource = resourceName3(explicitResource);
-    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
-      const errorMessage2 = message(error);
-      console.error(`[qbxsql] schema operation failed [${resource}]: ${errorMessage2}`);
-      callback?.(null, errorMessage2);
-    });
-  }
-  __name(operation, "operation");
-  function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
-    const resource = resourceName3(explicitResource);
-    void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
-      const errorMessage2 = message(error);
-      console.error(`[qbxsql] schema adoption failed [${resource}]: ${errorMessage2}`);
-      callback?.(null, errorMessage2);
-    });
-  }
-  __name(adoptionOperation, "adoptionOperation");
-  const api = {
-    ensureSchema(schema, callback, explicitResource) {
-      operation(schema, false, callback, explicitResource);
-    },
-    planSchema(schema, callback, explicitResource) {
-      operation(schema, true, callback, explicitResource);
-    },
-    adoptSchema(schema, baselineVersion, callback, explicitResource) {
-      adoptionOperation(schema, baselineVersion, false, callback, explicitResource);
-    },
-    planSchemaAdoption(schema, baselineVersion, callback, explicitResource) {
-      adoptionOperation(schema, baselineVersion, true, callback, explicitResource);
-    }
-  };
-  for (const [name, callback] of Object.entries(api)) {
-    runtime.addExport(name, callback);
-    if (name === "adoptSchema" || name === "planSchemaAdoption") {
-      runtime.addExport(
-        `${name}_async`,
-        (schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
-          callback(
-            schema,
-            baselineVersion,
-            (result, error) => {
-              if (error) reject(new Error(error));
-              else resolve(result);
-            },
-            explicitResource
-          );
-        })
-      );
-    } else {
-      runtime.addExport(
-        `${name}_async`,
-        (schema, explicitResource) => new Promise((resolve, reject) => {
-          callback(
-            schema,
-            (result, error) => {
-              if (error) reject(new Error(error));
-              else resolve(result);
-            },
-            explicitResource
-          );
-        })
-      );
-    }
-  }
-  return api;
-}
-__name(registerSchemaExports, "registerSchemaExports");
 
 // src/schema/introspect.ts
 function text(value) {
@@ -22537,8 +22451,8 @@ var SchemaAdoptionConflictError = class extends Error {
   static {
     __name(this, "SchemaAdoptionConflictError");
   }
-  constructor(message2) {
-    super(message2);
+  constructor(message) {
+    super(message);
     this.name = "SchemaAdoptionConflictError";
   }
 };
@@ -23135,12 +23049,12 @@ var SchemaManager = class {
         { invokingResource: resource }
       );
     } catch (error) {
-      const message2 = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       await new Promise((resolve) => setTimeout(resolve, 0));
       await this.database.update(
         `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
          WHERE resource_name = ? AND version = ?`,
-        [message2.slice(0, 65535), resource, migration.version],
+        [message.slice(0, 65535), resource, migration.version],
         { invokingResource: resource }
       );
       throw error;
@@ -23347,11 +23261,11 @@ var SchemaManager = class {
     );
   }
   async failAdoption(resource, error) {
-    const message2 = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     await this.database.update(
       `UPDATE qbxsql_schema_adoptions SET status = 'failed', error = ?
        WHERE resource_name = ?`,
-      [message2.slice(0, 65535), resource],
+      [message.slice(0, 65535), resource],
       { invokingResource: "qbxsql:schema" }
     );
   }
@@ -23454,6 +23368,102 @@ var SchemaManager = class {
     );
   }
 };
+
+// src/api/schema.ts
+function errorPayload(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof SchemaPendingChangesError) {
+    return { code: "QBXSQL_SCHEMA_PENDING_CHANGES", message, result: error.result };
+  }
+  if (error instanceof SchemaMigrationRequiredError) {
+    return { code: "QBXSQL_SCHEMA_MIGRATION_REQUIRED", message, plan: error.plan };
+  }
+  if (error instanceof SchemaDisabledError) {
+    return { code: "QBXSQL_SCHEMA_DISABLED", message };
+  }
+  return { code: "QBXSQL_SCHEMA_ERROR", message };
+}
+__name(errorPayload, "errorPayload");
+function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
+  const runtime = bindings ?? {
+    addExport() {
+    },
+    addProviderExport() {
+    },
+    invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
+  };
+  function resourceName3(explicit) {
+    return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
+  }
+  __name(resourceName3, "resourceName");
+  function operation(schema, dryRun, callback, explicitResource) {
+    const resource = resourceName3(explicitResource);
+    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
+      const failure = errorPayload(error);
+      console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
+      callback?.(null, failure);
+    });
+  }
+  __name(operation, "operation");
+  function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
+    const resource = resourceName3(explicitResource);
+    void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
+      const failure = errorPayload(error);
+      console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);
+      callback?.(null, failure);
+    });
+  }
+  __name(adoptionOperation, "adoptionOperation");
+  const api = {
+    ensureSchema(schema, callback, explicitResource) {
+      operation(schema, false, callback, explicitResource);
+    },
+    planSchema(schema, callback, explicitResource) {
+      operation(schema, true, callback, explicitResource);
+    },
+    adoptSchema(schema, baselineVersion, callback, explicitResource) {
+      adoptionOperation(schema, baselineVersion, false, callback, explicitResource);
+    },
+    planSchemaAdoption(schema, baselineVersion, callback, explicitResource) {
+      adoptionOperation(schema, baselineVersion, true, callback, explicitResource);
+    }
+  };
+  for (const [name, callback] of Object.entries(api)) {
+    runtime.addExport(name, callback);
+    if (name === "adoptSchema" || name === "planSchemaAdoption") {
+      runtime.addExport(
+        `${name}_async`,
+        (schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
+          callback(
+            schema,
+            baselineVersion,
+            (result, error) => {
+              if (error) reject(error);
+              else resolve(result);
+            },
+            explicitResource
+          );
+        })
+      );
+    } else {
+      runtime.addExport(
+        `${name}_async`,
+        (schema, explicitResource) => new Promise((resolve, reject) => {
+          callback(
+            schema,
+            (result, error) => {
+              if (error) reject(error);
+              else resolve(result);
+            },
+            explicitResource
+          );
+        })
+      );
+    }
+  }
+  return api;
+}
+__name(registerSchemaExports, "registerSchemaExports");
 
 // src/index.ts
 var resourceName2 = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
