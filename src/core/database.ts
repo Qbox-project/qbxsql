@@ -273,10 +273,20 @@ export class DatabaseService {
     await this.awaitConnection();
     const connection = await this.driver.acquire();
     let closed = false;
+    let timedOut = false;
+    let rejectTimeout: ((error: Error) => void) | null = null;
+    const timeoutError = new Error(
+      `Transaction timed out after ${this.config.transactionTimeout}ms.`,
+    );
     const timeout = setTimeout(() => {
       closed = true;
+      timedOut = true;
+      connection.destroy();
+      rejectTimeout?.(timeoutError);
     }, this.config.transactionTimeout);
-    timeout.unref();
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
+    });
 
     try {
       await connection.beginTransaction();
@@ -290,8 +300,8 @@ export class DatabaseService {
           throw new Error(`Query: ${statement}\n${JSON.stringify(values)}\n${reason}`);
         }
       };
-      const result = await work(query);
-      if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
+      const result = await Promise.race([work(query), timeoutPromise]);
+      if (closed) throw timeoutError;
       if (result === false) {
         await connection.rollback();
         return false;
@@ -299,16 +309,19 @@ export class DatabaseService {
       await connection.commit();
       return true;
     } catch (error) {
-      try {
-        await connection.rollback();
-      } catch {
-        // The original transaction error is more useful than a secondary rollback failure.
+      if (!timedOut) {
+        try {
+          await connection.rollback();
+        } catch {
+          // The original transaction error is more useful than a secondary rollback failure.
+        }
       }
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
       return false;
     } finally {
       clearTimeout(timeout);
+      rejectTimeout = null;
       closed = true;
       connection.release();
     }

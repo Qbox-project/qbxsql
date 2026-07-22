@@ -36,13 +36,16 @@ const config: QbxSqlConfig = {
 };
 
 class FakeConnection implements DatabaseConnection {
+  destroyed = false;
   query = async () => result;
   execute = async () => result;
   beginTransaction = async () => {};
   commit = async () => {};
   rollback = async () => {};
   release = () => {};
-  destroy = () => {};
+  destroy = () => {
+    this.destroyed = true;
+  };
 }
 
 class FakeDriver implements DatabaseDriver {
@@ -53,6 +56,7 @@ class FakeDriver implements DatabaseDriver {
   connectAttempts = 0;
   failures = 0;
   private fatalListener: ((error: unknown) => void) | null = null;
+  connection: DatabaseConnection = new FakeConnection();
 
   async connect(): Promise<void> {
     this.connectAttempts += 1;
@@ -76,7 +80,7 @@ class FakeDriver implements DatabaseDriver {
   }
 
   async acquire(): Promise<DatabaseConnection> {
-    return new FakeConnection();
+    return this.connection;
   }
 
   async healthCheck(): Promise<void> {}
@@ -181,5 +185,28 @@ describe('database connection lifecycle', () => {
       totals: { queries: 1, errors: 0, slowQueries: 0, reconnects: 0 },
     });
     expect(JSON.stringify(database.getStatus())).not.toContain('mysql://test');
+  });
+
+  test('destroys a pinned connection when a callback transaction times out', async () => {
+    const driver = new FakeDriver();
+    const connection = new FakeConnection();
+    connection.query = () => new Promise<DriverResult>(() => {});
+    driver.connection = connection;
+    const database = new DatabaseService(driver, { ...config, transactionTimeout: 20 });
+    databases.push(database);
+    const originalError = console.error;
+    console.error = () => {};
+
+    try {
+      await expect(
+        database.startTransaction(async (query) => {
+          await query('SELECT SLEEP(60)');
+        }, 'timeout-resource'),
+      ).resolves.toBe(false);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(connection.destroyed).toBe(true);
   });
 });

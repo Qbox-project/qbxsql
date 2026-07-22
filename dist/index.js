@@ -20503,10 +20503,20 @@ var DatabaseService = class {
     await this.awaitConnection();
     const connection = await this.driver.acquire();
     let closed = false;
+    let timedOut = false;
+    let rejectTimeout = null;
+    const timeoutError = new Error(
+      `Transaction timed out after ${this.config.transactionTimeout}ms.`
+    );
     const timeout = setTimeout(() => {
       closed = true;
+      timedOut = true;
+      connection.destroy();
+      rejectTimeout?.(timeoutError);
     }, this.config.transactionTimeout);
-    timeout.unref();
+    const timeoutPromise = new Promise((_, reject) => {
+      rejectTimeout = reject;
+    });
     try {
       await connection.beginTransaction();
       const query = /* @__PURE__ */ __name(async (sql, parameters) => {
@@ -20521,8 +20531,8 @@ ${JSON.stringify(values)}
 ${reason}`);
         }
       }, "query");
-      const result = await work(query);
-      if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
+      const result = await Promise.race([work(query), timeoutPromise]);
+      if (closed) throw timeoutError;
       if (result === false) {
         await connection.rollback();
         return false;
@@ -20530,15 +20540,18 @@ ${reason}`);
       await connection.commit();
       return true;
     } catch (error) {
-      try {
-        await connection.rollback();
-      } catch {
+      if (!timedOut) {
+        try {
+          await connection.rollback();
+        } catch {
+        }
       }
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
       return false;
     } finally {
       clearTimeout(timeout);
+      rejectTimeout = null;
       closed = true;
       connection.release();
     }
