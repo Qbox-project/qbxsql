@@ -18,9 +18,13 @@ import { serializeForRuntime } from '../core/serialize.js';
 
 const resourceName =
   typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
+// Enhanced runs script resources at the server tick rate and deprecates this native.
+const enhancedServer = /(?:^|[\\/])cfx-server(?:\.exe)?$/i.test(process.execPath);
 
 function scheduleResourceTick(): void {
-  if (typeof ScheduleResourceTick === 'function') ScheduleResourceTick(resourceName);
+  if (!enhancedServer && typeof ScheduleResourceTick === 'function') {
+    ScheduleResourceTick(resourceName);
+  }
 }
 
 function booleanOption(value: string, key: string): boolean {

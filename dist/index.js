@@ -20822,8 +20822,11 @@ __name(serializeForRuntime, "serializeForRuntime");
 
 // src/drivers/mysql.ts
 var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
+var enhancedServer = /(?:^|[\\/])cfx-server(?:\.exe)?$/i.test(process.execPath);
 function scheduleResourceTick() {
-  if (typeof ScheduleResourceTick === "function") ScheduleResourceTick(resourceName);
+  if (!enhancedServer && typeof ScheduleResourceTick === "function") {
+    ScheduleResourceTick(resourceName);
+  }
 }
 __name(scheduleResourceTick, "scheduleResourceTick");
 function booleanOption(value, key) {
