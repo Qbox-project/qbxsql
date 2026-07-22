@@ -14,6 +14,8 @@ node scripts/compare-benchmarks.mjs --qbxsql qbxsql.json --oxmysql oxmysql.json
 
 The release workflow records CPU, memory, OS, and kernel before testing. Do not compare results from different hardware or active workloads. Short smoke runs validate the harness only and are not performance evidence.
 
+The benchmark runner disables connector slow-query console logging for both candidates. Slow-query detection is covered by the connector tests and production health counters; synchronous warning output would feed back into latency and make the fixed-workload comparison depend on terminal throughput.
+
 On 2026-07-22, a local stock-Windows smoke comparison using 100 workers for 30 seconds produced 112,935 qbxsql operations at 24 ms median / 45 ms p95 and 112,610 oxmysql 2.14.1 operations at 24 ms median / 44 ms p95. This validates the workload and CFX scheduling path; its duration is too short for the memory or release-candidate gate. A separate live database-restart smoke completed 35,270 operations with zero unexplained failures, one observed reconnect, and no ending connection leak.
 
 ## Required gates
