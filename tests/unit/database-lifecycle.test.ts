@@ -33,6 +33,8 @@ const config: QbxSqlConfig = {
   healthInterval: 1_000,
   connectionRetryMax: 250,
   transactionTimeout: 500,
+  schemaMode: 'auto',
+  schemaAllowBlocking: false,
 };
 
 class FakeConnection implements DatabaseConnection {

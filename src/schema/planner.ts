@@ -19,6 +19,31 @@ import {
   quoteIdentifier,
 } from './sql.js';
 
+export interface SchemaCapabilities {
+  instantAddColumn: boolean;
+  inplaceAlterColumn: boolean;
+  inplaceAddIndex: boolean;
+}
+
+const currentCapabilities: SchemaCapabilities = {
+  instantAddColumn: true,
+  inplaceAlterColumn: true,
+  inplaceAddIndex: true,
+};
+
+export function capabilitiesForVersion(serverVersion: string | null): SchemaCapabilities {
+  if (!serverVersion) return { ...currentCapabilities };
+  const match = serverVersion.match(/^(\d+)\.(\d+)/);
+  const major = Number(match?.[1] ?? 0);
+  const minor = Number(match?.[2] ?? 0);
+  const mariaDb = /mariadb/i.test(serverVersion);
+  return {
+    instantAddColumn: mariaDb ? major > 10 || (major === 10 && minor >= 3) : major >= 8,
+    inplaceAlterColumn: mariaDb ? major >= 10 : major >= 8,
+    inplaceAddIndex: mariaDb ? major >= 10 : major >= 8,
+  };
+}
+
 function desiredPrimaryKey(table: TableDefinition): string[] {
   return (
     table.primaryKey ??
@@ -144,29 +169,111 @@ function sameForeignKey(desired: ForeignKeyDefinition, actual: ActualTable['fore
 
 function action(
   actions: SchemaAction[],
-  value: Omit<SchemaAction, 'table'> & { table?: string },
+  value: Omit<
+    SchemaAction,
+    'table' | 'dataSafe' | 'onlineSafe' | 'automatic' | 'risk' | 'algorithm'
+  > & {
+    table?: string;
+    onlineSafe?: boolean;
+    algorithm?: SchemaAction['algorithm'];
+    risk?: SchemaAction['risk'];
+  },
 ): void {
-  actions.push(value);
+  const dataSafe = value.safe;
+  const onlineSafe = value.onlineSafe ?? false;
+  actions.push({
+    ...value,
+    dataSafe,
+    onlineSafe,
+    automatic: dataSafe && onlineSafe,
+    risk: value.risk ?? (dataSafe ? (onlineSafe ? 'low' : 'medium') : 'high'),
+    algorithm: value.algorithm ?? 'MANUAL',
+  });
+}
+
+function onlineAlterSql(
+  table: string,
+  clause: string,
+  algorithm: 'INSTANT' | 'INPLACE',
+): string {
+  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ALGORITHM=${algorithm}, LOCK=NONE`;
+}
+
+function varcharWideningIsOnline(
+  desired: ColumnDefinition,
+  actual: ActualColumn,
+  table: ActualTable,
+): boolean {
+  if (desired.type !== 'varchar' || actual.type !== 'varchar') return true;
+  const from = actual.maximumLength;
+  const to = desired.length;
+  if (from === null || to === undefined || to <= from) return true;
+  const collation = table.collation?.toLowerCase() ?? '';
+  const bytesPerCharacter = collation.startsWith('utf8mb4_')
+    ? 4
+    : collation.startsWith('utf8_') || collation.startsWith('utf8mb3_')
+      ? 3
+      : collation.startsWith('ucs2_')
+        ? 2
+        : 1;
+  const oneByteLimit = Math.floor(255 / bytesPerCharacter);
+  return !(from <= oneByteLimit && to > oneByteLimit);
+}
+
+function orderedTables(
+  schema: ResourceSchema,
+  actualTables: Map<string, ActualTable>,
+): { entries: Array<[string, TableDefinition]>; inlineForeignKeys: Set<string> } {
+  const entries = Object.entries(schema.tables);
+  const pending = new Map(entries.filter(([name]) => !actualTables.has(name)));
+  const ordered: Array<[string, TableDefinition]> = entries.filter(([name]) => actualTables.has(name));
+  const available = new Set(actualTables.keys());
+  const inlineForeignKeys = new Set<string>();
+
+  while (pending.size > 0) {
+    let progressed = false;
+    for (const [name, table] of pending) {
+      const dependencies = (table.foreignKeys ?? [])
+        .map((foreignKey) => foreignKey.references.table)
+        .filter((dependency) => dependency !== name);
+      if (dependencies.every((dependency) => available.has(dependency))) {
+        ordered.push([name, table]);
+        inlineForeignKeys.add(name);
+        available.add(name);
+        pending.delete(name);
+        progressed = true;
+      }
+    }
+    if (progressed) continue;
+    for (const entry of pending) ordered.push(entry);
+    break;
+  }
+
+  return { entries: ordered, inlineForeignKeys };
 }
 
 export function planSchema(
   resource: string,
   schema: ResourceSchema,
   actualTables: Map<string, ActualTable>,
+  capabilities: SchemaCapabilities = currentCapabilities,
 ): SchemaPlan {
   const actions: SchemaAction[] = [];
   const warnings: string[] = [];
   const createdTables = new Set<string>();
+  const ordering = orderedTables(schema, actualTables);
 
-  for (const [tableName, table] of Object.entries(schema.tables)) {
+  for (const [tableName, table] of ordering.entries) {
     const actual = actualTables.get(tableName);
     if (!actual) {
       createdTables.add(tableName);
       action(actions, {
         kind: 'createTable',
         table: tableName,
-        sql: createTableSql(tableName, table),
+        sql: createTableSql(tableName, table, ordering.inlineForeignKeys.has(tableName)),
         safe: true,
+        onlineSafe: true,
+        algorithm: 'CREATE',
         reason: `create missing table '${tableName}'`,
       });
       continue;
@@ -179,8 +286,14 @@ export function planSchema(
         action(actions, {
           kind: 'addColumn',
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${columnSql(columnName, column)}`,
+          sql: onlineAlterSql(
+            tableName,
+            `ADD COLUMN ${columnSql(columnName, column)}`,
+            capabilities.instantAddColumn ? 'INSTANT' : 'INPLACE',
+          ),
           safe,
+          onlineSafe: capabilities.instantAddColumn || capabilities.inplaceAlterColumn,
+          algorithm: capabilities.instantAddColumn ? 'INSTANT' : 'INPLACE',
           reason: safe
             ? `add compatible column '${tableName}.${columnName}'`
             : `adding required column '${tableName}.${columnName}' needs an explicit backfill migration`,
@@ -190,11 +303,19 @@ export function planSchema(
 
       const change = compareColumn(columnName, column, actualColumn);
       if (change.changed) {
+        const onlineSafe =
+          capabilities.inplaceAlterColumn && varcharWideningIsOnline(column, actualColumn, actual);
         action(actions, {
           kind: 'alterColumn',
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} MODIFY COLUMN ${columnSql(columnName, column)}`,
+          sql: onlineAlterSql(
+            tableName,
+            `MODIFY COLUMN ${columnSql(columnName, column)}`,
+            'INPLACE',
+          ),
           safe: change.safe,
+          onlineSafe,
+          algorithm: 'INPLACE',
           reason: `${tableName}.${columnName}: ${change.reasons.join(', ')}`,
         });
       }
@@ -222,6 +343,8 @@ export function planSchema(
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} ${clauses.join(', ')}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: 'MANUAL',
           reason: `changing the primary key on '${tableName}' requires an explicit migration`,
         });
       }
@@ -233,8 +356,10 @@ export function planSchema(
         action(actions, {
           kind: 'addIndex',
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD ${indexSql(index)}`,
+          sql: onlineAlterSql(tableName, `ADD ${indexSql(index)}`, 'INPLACE'),
           safe: !index.unique,
+          onlineSafe: capabilities.inplaceAddIndex,
+          algorithm: 'INPLACE',
           reason: index.unique
             ? `unique index '${index.name}' requires duplicate validation`
             : `add missing index '${index.name}'`,
@@ -245,6 +370,8 @@ export function planSchema(
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP INDEX ${quoteIdentifier(index.name)}, ADD ${indexSql(index)}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: 'MANUAL',
           reason: `changing index '${index.name}' requires an explicit migration`,
         });
       }
@@ -258,6 +385,8 @@ export function planSchema(
           table: tableName,
           sql: addForeignKeySql(tableName, foreignKey),
           safe: false,
+          onlineSafe: false,
+          algorithm: 'MANUAL',
           reason: `foreign key '${foreignKey.name}' requires existing-row validation`,
         });
       } else if (!sameForeignKey(foreignKey, actualForeignKey)) {
@@ -266,6 +395,8 @@ export function planSchema(
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP FOREIGN KEY ${quoteIdentifier(foreignKey.name)}, ADD ${foreignKeySql(foreignKey)}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: 'MANUAL',
           reason: `changing foreign key '${foreignKey.name}' requires an explicit migration`,
         });
       }
@@ -273,13 +404,16 @@ export function planSchema(
   }
 
   for (const tableName of createdTables) {
+    if (ordering.inlineForeignKeys.has(tableName)) continue;
     for (const foreignKey of schema.tables[tableName]?.foreignKeys ?? []) {
       action(actions, {
         kind: 'addForeignKey',
         table: tableName,
         sql: addForeignKeySql(tableName, foreignKey),
-        safe: true,
-        reason: `add foreign key '${foreignKey.name}' to new table '${tableName}'`,
+        safe: false,
+        onlineSafe: false,
+        algorithm: 'MANUAL',
+        reason: `cyclic foreign key '${foreignKey.name}' requires an explicit migration`,
       });
     }
   }

@@ -25,6 +25,8 @@ const config: QbxSqlConfig = {
   healthInterval: 10_000,
   connectionRetryMax: 30_000,
   transactionTimeout: 30_000,
+  schemaMode: 'auto',
+  schemaAllowBlocking: false,
 };
 
 let database: DatabaseService;

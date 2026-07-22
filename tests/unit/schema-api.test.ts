@@ -17,9 +17,13 @@ describe('schema exports', () => {
       appliedMigrations: [],
     };
     const manager = {
-      ensure: async (resource: string, _schema: unknown, dryRun: boolean) => {
-        calls.push({ resource, dryRun });
-        return { ...result, dryRun };
+      ensure: async (resource: string) => {
+        calls.push({ resource, dryRun: false });
+        return result;
+      },
+      plan: async (resource: string) => {
+        calls.push({ resource, dryRun: true });
+        return { ...result, dryRun: true };
       },
     };
     const exports = new Map<string, ExportFunction>();
@@ -35,4 +39,3 @@ describe('schema exports', () => {
     expect(calls).toEqual([{ resource: 'housing', dryRun: true }]);
   });
 });
-

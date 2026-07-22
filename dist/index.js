@@ -20146,6 +20146,24 @@ function debugOption() {
   return false;
 }
 __name(debugOption, "debugOption");
+function booleanConvar(name, fallback) {
+  const raw = readOptionalConvar(name);
+  if (raw === void 0) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+  console.warn(`[qbxsql] Ignoring invalid boolean convar ${name}.`);
+  return fallback;
+}
+__name(booleanConvar, "booleanConvar");
+function schemaMode() {
+  const raw = readOptionalConvar("qbxsql_schema_mode")?.trim().toLowerCase();
+  if (!raw) return "auto";
+  if (raw === "auto" || raw === "plan" || raw === "off") return raw;
+  console.warn("[qbxsql] qbxsql_schema_mode must be auto, plan, or off; using auto.");
+  return "auto";
+}
+__name(schemaMode, "schemaMode");
 function isolationOption() {
   const raw = preferredConvar(
     "qbxsql_transaction_isolation_level",
@@ -20189,7 +20207,9 @@ function loadConfig() {
     connectionQueueLimit: integerOption("qbxsql_connection_queue_limit", 1e3, 1).value,
     healthInterval: integerOption("qbxsql_health_interval", 1e4, 1e3).value,
     connectionRetryMax: integerOption("qbxsql_connection_retry_max", 3e4, 250).value,
-    transactionTimeout: integerOption("qbxsql_transaction_timeout", 3e4, 1).value
+    transactionTimeout: integerOption("qbxsql_transaction_timeout", 3e4, 1).value,
+    schemaMode: schemaMode(),
+    schemaAllowBlocking: booleanConvar("qbxsql_schema_allow_blocking", false)
   };
 }
 __name(loadConfig, "loadConfig");
@@ -21327,7 +21347,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   __name(resourceName2, "resourceName");
   function operation(schema, dryRun, callback, explicitResource) {
     const resource = resourceName2(explicitResource);
-    void manager.ensure(resource, schema, dryRun).then((result) => callback?.(result)).catch((error) => {
+    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
       const errorMessage2 = message(error);
       console.error(`[qbxsql] schema operation failed [${resource}]: ${errorMessage2}`);
       callback?.(null, errorMessage2);
@@ -21785,13 +21805,16 @@ function foreignKeySql(foreignKey) {
   return parts.join(" ");
 }
 __name(foreignKeySql, "foreignKeySql");
-function createTableSql(name, table) {
+function createTableSql(name, table, includeForeignKeys = false) {
   const definitions = Object.entries(table.columns).map(
     ([columnName, column]) => columnSql(columnName, column)
   );
   const primary = primaryColumns(table);
   if (primary.length > 0) definitions.push(`PRIMARY KEY (${primary.map(quoteIdentifier).join(", ")})`);
   for (const index of table.indexes ?? []) definitions.push(indexSql(index));
+  if (includeForeignKeys) {
+    for (const foreignKey of table.foreignKeys ?? []) definitions.push(foreignKeySql(foreignKey));
+  }
   return `CREATE TABLE ${quoteIdentifier(name)} (
   ${definitions.join(",\n  ")}
 ) ENGINE=${table.engine ?? "InnoDB"} DEFAULT CHARSET=${table.charset ?? "utf8mb4"}${table.collation ? ` COLLATE=${table.collation}` : ""}`;
@@ -21826,6 +21849,24 @@ function migrationOperationSql(operation) {
 __name(migrationOperationSql, "migrationOperationSql");
 
 // src/schema/planner.ts
+var currentCapabilities = {
+  instantAddColumn: true,
+  inplaceAlterColumn: true,
+  inplaceAddIndex: true
+};
+function capabilitiesForVersion(serverVersion) {
+  if (!serverVersion) return { ...currentCapabilities };
+  const match = serverVersion.match(/^(\d+)\.(\d+)/);
+  const major = Number(match?.[1] ?? 0);
+  const minor = Number(match?.[2] ?? 0);
+  const mariaDb = /mariadb/i.test(serverVersion);
+  return {
+    instantAddColumn: mariaDb ? major > 10 || major === 10 && minor >= 3 : major >= 8,
+    inplaceAlterColumn: mariaDb ? major >= 10 : major >= 8,
+    inplaceAddIndex: mariaDb ? major >= 10 : major >= 8
+  };
+}
+__name(capabilitiesForVersion, "capabilitiesForVersion");
 function desiredPrimaryKey(table) {
   return table.primaryKey ?? Object.entries(table.columns).filter(([, column]) => column.primary).map(([name]) => name);
 }
@@ -21914,22 +21955,74 @@ function sameForeignKey(desired, actual) {
 }
 __name(sameForeignKey, "sameForeignKey");
 function action(actions, value) {
-  actions.push(value);
+  const dataSafe = value.safe;
+  const onlineSafe = value.onlineSafe ?? false;
+  actions.push({
+    ...value,
+    dataSafe,
+    onlineSafe,
+    automatic: dataSafe && onlineSafe,
+    risk: value.risk ?? (dataSafe ? onlineSafe ? "low" : "medium" : "high"),
+    algorithm: value.algorithm ?? "MANUAL"
+  });
 }
 __name(action, "action");
-function planSchema(resource, schema, actualTables) {
+function onlineAlterSql(table, clause, algorithm) {
+  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ALGORITHM=${algorithm}, LOCK=NONE`;
+}
+__name(onlineAlterSql, "onlineAlterSql");
+function varcharWideningIsOnline(desired, actual, table) {
+  if (desired.type !== "varchar" || actual.type !== "varchar") return true;
+  const from = actual.maximumLength;
+  const to = desired.length;
+  if (from === null || to === void 0 || to <= from) return true;
+  const collation = table.collation?.toLowerCase() ?? "";
+  const bytesPerCharacter = collation.startsWith("utf8mb4_") ? 4 : collation.startsWith("utf8_") || collation.startsWith("utf8mb3_") ? 3 : collation.startsWith("ucs2_") ? 2 : 1;
+  const oneByteLimit = Math.floor(255 / bytesPerCharacter);
+  return !(from <= oneByteLimit && to > oneByteLimit);
+}
+__name(varcharWideningIsOnline, "varcharWideningIsOnline");
+function orderedTables(schema, actualTables) {
+  const entries = Object.entries(schema.tables);
+  const pending = new Map(entries.filter(([name]) => !actualTables.has(name)));
+  const ordered = entries.filter(([name]) => actualTables.has(name));
+  const available = new Set(actualTables.keys());
+  const inlineForeignKeys = /* @__PURE__ */ new Set();
+  while (pending.size > 0) {
+    let progressed = false;
+    for (const [name, table] of pending) {
+      const dependencies = (table.foreignKeys ?? []).map((foreignKey) => foreignKey.references.table).filter((dependency) => dependency !== name);
+      if (dependencies.every((dependency) => available.has(dependency))) {
+        ordered.push([name, table]);
+        inlineForeignKeys.add(name);
+        available.add(name);
+        pending.delete(name);
+        progressed = true;
+      }
+    }
+    if (progressed) continue;
+    for (const entry of pending) ordered.push(entry);
+    break;
+  }
+  return { entries: ordered, inlineForeignKeys };
+}
+__name(orderedTables, "orderedTables");
+function planSchema(resource, schema, actualTables, capabilities = currentCapabilities) {
   const actions = [];
   const warnings = [];
   const createdTables = /* @__PURE__ */ new Set();
-  for (const [tableName, table] of Object.entries(schema.tables)) {
+  const ordering = orderedTables(schema, actualTables);
+  for (const [tableName, table] of ordering.entries) {
     const actual = actualTables.get(tableName);
     if (!actual) {
       createdTables.add(tableName);
       action(actions, {
         kind: "createTable",
         table: tableName,
-        sql: createTableSql(tableName, table),
+        sql: createTableSql(tableName, table, ordering.inlineForeignKeys.has(tableName)),
         safe: true,
+        onlineSafe: true,
+        algorithm: "CREATE",
         reason: `create missing table '${tableName}'`
       });
       continue;
@@ -21941,19 +22034,32 @@ function planSchema(resource, schema, actualTables) {
         action(actions, {
           kind: "addColumn",
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${columnSql(columnName, column)}`,
+          sql: onlineAlterSql(
+            tableName,
+            `ADD COLUMN ${columnSql(columnName, column)}`,
+            capabilities.instantAddColumn ? "INSTANT" : "INPLACE"
+          ),
           safe,
+          onlineSafe: capabilities.instantAddColumn || capabilities.inplaceAlterColumn,
+          algorithm: capabilities.instantAddColumn ? "INSTANT" : "INPLACE",
           reason: safe ? `add compatible column '${tableName}.${columnName}'` : `adding required column '${tableName}.${columnName}' needs an explicit backfill migration`
         });
         continue;
       }
       const change = compareColumn(columnName, column, actualColumn);
       if (change.changed) {
+        const onlineSafe = capabilities.inplaceAlterColumn && varcharWideningIsOnline(column, actualColumn, actual);
         action(actions, {
           kind: "alterColumn",
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} MODIFY COLUMN ${columnSql(columnName, column)}`,
+          sql: onlineAlterSql(
+            tableName,
+            `MODIFY COLUMN ${columnSql(columnName, column)}`,
+            "INPLACE"
+          ),
           safe: change.safe,
+          onlineSafe,
+          algorithm: "INPLACE",
           reason: `${tableName}.${columnName}: ${change.reasons.join(", ")}`
         });
       }
@@ -21979,6 +22085,8 @@ function planSchema(resource, schema, actualTables) {
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} ${clauses.join(", ")}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: "MANUAL",
           reason: `changing the primary key on '${tableName}' requires an explicit migration`
         });
       }
@@ -21989,8 +22097,10 @@ function planSchema(resource, schema, actualTables) {
         action(actions, {
           kind: "addIndex",
           table: tableName,
-          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD ${indexSql(index)}`,
+          sql: onlineAlterSql(tableName, `ADD ${indexSql(index)}`, "INPLACE"),
           safe: !index.unique,
+          onlineSafe: capabilities.inplaceAddIndex,
+          algorithm: "INPLACE",
           reason: index.unique ? `unique index '${index.name}' requires duplicate validation` : `add missing index '${index.name}'`
         });
       } else if (!sameIndex(index, actualIndex)) {
@@ -21999,6 +22109,8 @@ function planSchema(resource, schema, actualTables) {
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP INDEX ${quoteIdentifier(index.name)}, ADD ${indexSql(index)}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: "MANUAL",
           reason: `changing index '${index.name}' requires an explicit migration`
         });
       }
@@ -22011,6 +22123,8 @@ function planSchema(resource, schema, actualTables) {
           table: tableName,
           sql: addForeignKeySql(tableName, foreignKey),
           safe: false,
+          onlineSafe: false,
+          algorithm: "MANUAL",
           reason: `foreign key '${foreignKey.name}' requires existing-row validation`
         });
       } else if (!sameForeignKey(foreignKey, actualForeignKey)) {
@@ -22019,19 +22133,24 @@ function planSchema(resource, schema, actualTables) {
           table: tableName,
           sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP FOREIGN KEY ${quoteIdentifier(foreignKey.name)}, ADD ${foreignKeySql(foreignKey)}`,
           safe: false,
+          onlineSafe: false,
+          algorithm: "MANUAL",
           reason: `changing foreign key '${foreignKey.name}' requires an explicit migration`
         });
       }
     }
   }
   for (const tableName of createdTables) {
+    if (ordering.inlineForeignKeys.has(tableName)) continue;
     for (const foreignKey of schema.tables[tableName]?.foreignKeys ?? []) {
       action(actions, {
         kind: "addForeignKey",
         table: tableName,
         sql: addForeignKeySql(tableName, foreignKey),
-        safe: true,
-        reason: `add foreign key '${foreignKey.name}' to new table '${tableName}'`
+        safe: false,
+        onlineSafe: false,
+        algorithm: "MANUAL",
+        reason: `cyclic foreign key '${foreignKey.name}' requires an explicit migration`
       });
     }
   }
@@ -22042,7 +22161,7 @@ __name(planSchema, "planSchema");
 // src/schema/manager.ts
 var SchemaMigrationRequiredError = class extends Error {
   constructor(plan) {
-    const blocked = plan.actions.filter((entry) => !entry.safe).map((entry) => entry.reason);
+    const blocked = plan.actions.filter((entry) => !entry.automatic).map((entry) => entry.reason);
     super(`Schema for '${plan.resource}' requires explicit migrations: ${blocked.join("; ")}`);
     this.plan = plan;
     this.name = "SchemaMigrationRequiredError";
@@ -22052,33 +22171,45 @@ var SchemaMigrationRequiredError = class extends Error {
     __name(this, "SchemaMigrationRequiredError");
   }
 };
+var SchemaPendingChangesError = class extends Error {
+  constructor(result) {
+    super(`Schema mode is 'plan'; '${result.resource}' was not changed.`);
+    this.result = result;
+    this.name = "SchemaPendingChangesError";
+  }
+  result;
+  static {
+    __name(this, "SchemaPendingChangesError");
+  }
+};
+var SchemaDisabledError = class extends Error {
+  static {
+    __name(this, "SchemaDisabledError");
+  }
+  constructor(resource) {
+    super(`Schema management is disabled; cannot ensure '${resource}'. Use the planning API to inspect drift.`);
+    this.name = "SchemaDisabledError";
+  }
+};
 function validateResourceName(resource) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(resource)) {
     throw new Error(`Invalid resource name '${resource}'.`);
   }
 }
 __name(validateResourceName, "validateResourceName");
-function migrationActions(migrations) {
-  return migrations.flatMap(
-    (migration) => migration.operations.map((operation) => ({
-      kind: `migration:${operation.type}`,
-      sql: migrationOperationSql(operation),
-      safe: true,
-      reason: `migration ${migration.version} (${migration.name})`,
-      ..."table" in operation && typeof operation.table === "string" ? { table: operation.table } : {}
-    }))
-  );
-}
-__name(migrationActions, "migrationActions");
 var SchemaManager = class {
-  constructor(database2) {
+  constructor(database2, options = {}) {
     this.database = database2;
+    this.mode = options.mode ?? "auto";
+    this.allowBlocking = options.allowBlocking ?? false;
   }
   database;
   static {
     __name(this, "SchemaManager");
   }
   initialization = null;
+  mode;
+  allowBlocking;
   initialize() {
     this.initialization ??= this.createMetadataTables().catch((error) => {
       this.initialization = null;
@@ -22090,6 +22221,9 @@ var SchemaManager = class {
     validateResourceName(resource);
     const schema = validateSchema(input);
     const checksum = schemaChecksum(schema);
+    if (dryRun) return this.plan(resource, schema);
+    if (this.mode === "off") throw new SchemaDisabledError(resource);
+    if (this.mode === "plan") throw new SchemaPendingChangesError(await this.plan(resource, schema));
     await this.initialize();
     const lock = await this.database.driver.acquire();
     try {
@@ -22105,23 +22239,13 @@ var SchemaManager = class {
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
       let actual = await introspectDatabase(this.database);
-      let plan = planSchema(resource, schema, actual);
+      const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+      let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings = [];
       if (registry && registry.version === schema.version && registry.checksum !== checksum) {
         managerWarnings.push(
           `Schema checksum changed without a version bump for '${resource}'; only safe changes will be reconciled.`
         );
-      }
-      if (dryRun) {
-        return {
-          ...plan,
-          actions: [...migrationActions(pendingMigrations), ...plan.actions],
-          warnings: [...managerWarnings, ...plan.warnings],
-          checksum,
-          dryRun: true,
-          appliedActions: [],
-          appliedMigrations: []
-        };
       }
       const appliedMigrations = [];
       for (const migration of pendingMigrations) {
@@ -22131,15 +22255,36 @@ var SchemaManager = class {
         appliedMigrations.push(migration.version);
         actual = await introspectDatabase(this.database);
       }
-      plan = planSchema(resource, schema, actual);
-      const blocked = plan.actions.filter((entry) => !entry.safe);
+      plan = planSchema(resource, schema, actual, capabilities);
+      const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
       const appliedActions = [];
       for (const schemaAction of plan.actions) {
-        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        try {
+          await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new SchemaMigrationRequiredError({
+            ...plan,
+            actions: plan.actions.map(
+              (entry) => entry === schemaAction ? {
+                ...entry,
+                onlineSafe: false,
+                automatic: false,
+                risk: "high",
+                reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`
+              } : entry
+            )
+          });
+        }
         appliedActions.push(schemaAction.sql);
       }
-      const remaining = planSchema(resource, schema, await introspectDatabase(this.database));
+      const remaining = planSchema(
+        resource,
+        schema,
+        await introspectDatabase(this.database),
+        capabilities
+      );
       if (remaining.actions.length > 0) {
         throw new Error(
           `Schema reconciliation for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join("; ")}`
@@ -22162,6 +22307,25 @@ var SchemaManager = class {
         lock.release();
       }
     }
+  }
+  async plan(resource, input) {
+    validateResourceName(resource);
+    const schema = validateSchema(input);
+    const checksum = schemaChecksum(schema);
+    const actual = await introspectDatabase(this.database);
+    const plan = planSchema(
+      resource,
+      schema,
+      actual,
+      capabilitiesForVersion(this.database.driver.serverVersion)
+    );
+    return {
+      ...plan,
+      checksum,
+      dryRun: true,
+      appliedActions: [],
+      appliedMigrations: []
+    };
   }
   async createMetadataTables() {
     await this.database.connect();
@@ -22386,7 +22550,10 @@ var SchemaManager = class {
 var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
 var config = loadConfig();
 var database = new DatabaseService(new MySqlDriver(config), config);
-var schemas = new SchemaManager(database);
+var schemas = new SchemaManager(database, {
+  mode: config.schemaMode,
+  allowBlocking: config.schemaAllowBlocking
+});
 registerCompatibilityExports(database);
 registerSchemaExports(schemas);
 database.onLifecycle((event, status) => {

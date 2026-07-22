@@ -69,6 +69,13 @@ describe('declarative schema planner', () => {
     expect(plan.actions).toHaveLength(1);
     expect(plan.actions[0]?.kind).toBe('createTable');
     expect(plan.actions[0]?.safe).toBe(true);
+    expect(plan.actions[0]).toMatchObject({
+      dataSafe: true,
+      onlineSafe: true,
+      automatic: true,
+      risk: 'low',
+      algorithm: 'CREATE',
+    });
   });
 
   test('automatically widens varchar columns', () => {
@@ -76,11 +83,24 @@ describe('declarative schema planner', () => {
     expect(plan.actions).toHaveLength(1);
     expect(plan.actions[0]).toMatchObject({ kind: 'alterColumn', safe: true });
     expect(plan.actions[0]?.sql).toContain('VARCHAR(100)');
+    expect(plan.actions[0]?.sql).toContain('ALGORITHM=INPLACE, LOCK=NONE');
   });
 
   test('refuses automatic narrowing', () => {
     const plan = planSchema('housing', schema(50), new Map([['properties', actual(100)]]));
     expect(plan.actions[0]).toMatchObject({ kind: 'alterColumn', safe: false });
+  });
+
+  test('refuses an online varchar widening that crosses the length-prefix boundary', () => {
+    const plan = planSchema('housing', schema(100), new Map([['properties', actual(50)]]));
+
+    expect(plan.actions[0]).toMatchObject({
+      kind: 'alterColumn',
+      dataSafe: true,
+      onlineSafe: false,
+      automatic: false,
+      algorithm: 'INPLACE',
+    });
   });
 
   test('allows nullable additions but requires migrations for required columns', () => {
@@ -113,4 +133,3 @@ describe('declarative schema planner', () => {
     expect(plan.warnings[0]).toContain('will not drop it automatically');
   });
 });
-

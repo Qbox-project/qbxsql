@@ -32,8 +32,7 @@ export function registerSchemaExports(
     explicitResource?: string,
   ): void {
     const resource = resourceName(explicitResource);
-    void manager
-      .ensure(resource, schema, dryRun)
+    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema))
       .then((result) => callback?.(result))
       .catch((error: unknown) => {
         const errorMessage = message(error);
@@ -77,4 +76,3 @@ export function registerSchemaExports(
 
   return api;
 }
-

@@ -72,13 +72,20 @@ export function foreignKeySql(foreignKey: ForeignKeyDefinition): string {
   return parts.join(' ');
 }
 
-export function createTableSql(name: string, table: TableDefinition): string {
+export function createTableSql(
+  name: string,
+  table: TableDefinition,
+  includeForeignKeys = false,
+): string {
   const definitions = Object.entries(table.columns).map(([columnName, column]) =>
     columnSql(columnName, column),
   );
   const primary = primaryColumns(table);
   if (primary.length > 0) definitions.push(`PRIMARY KEY (${primary.map(quoteIdentifier).join(', ')})`);
   for (const index of table.indexes ?? []) definitions.push(indexSql(index));
+  if (includeForeignKeys) {
+    for (const foreignKey of table.foreignKeys ?? []) definitions.push(foreignKeySql(foreignKey));
+  }
 
   return `CREATE TABLE ${quoteIdentifier(name)} (\n  ${definitions.join(',\n  ')}\n) ENGINE=${table.engine ?? 'InnoDB'} DEFAULT CHARSET=${table.charset ?? 'utf8mb4'}${table.collation ? ` COLLATE=${table.collation}` : ''}`;
 }
@@ -109,4 +116,3 @@ export function migrationOperationSql(operation: MigrationOperation): string {
       return operation.sql;
   }
 }
-

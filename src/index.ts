@@ -9,7 +9,10 @@ const resourceName =
   typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
 const config = loadConfig();
 const database = new DatabaseService(new MySqlDriver(config), config);
-const schemas = new SchemaManager(database);
+const schemas = new SchemaManager(database, {
+  mode: config.schemaMode,
+  allowBlocking: config.schemaAllowBlocking,
+});
 
 registerCompatibilityExports(database);
 registerSchemaExports(schemas);

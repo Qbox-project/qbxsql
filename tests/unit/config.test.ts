@@ -21,6 +21,8 @@ describe('connector configuration', () => {
     expect(config.healthInterval).toBe(10_000);
     expect(config.connectionRetryMax).toBe(30_000);
     expect(config.transactionTimeout).toBe(30_000);
+    expect(config.schemaMode).toBe('auto');
+    expect(config.schemaAllowBlocking).toBe(false);
   });
 
   test('prefers qbxsql-native aliases over legacy oxmysql convars', () => {

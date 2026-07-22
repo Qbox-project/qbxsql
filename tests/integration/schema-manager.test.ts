@@ -4,7 +4,12 @@ import type { QbxSqlConfig } from '../../src/config.js';
 import { DatabaseService } from '../../src/core/database.js';
 import { MySqlDriver } from '../../src/drivers/mysql.js';
 import { introspectDatabase } from '../../src/schema/introspect.js';
-import { SchemaManager, SchemaMigrationRequiredError } from '../../src/schema/manager.js';
+import {
+  SchemaDisabledError,
+  SchemaManager,
+  SchemaMigrationRequiredError,
+  SchemaPendingChangesError,
+} from '../../src/schema/manager.js';
 import type { ResourceSchema } from '../../src/schema/types.js';
 
 const databaseName = 'qbxsql_schema_test';
@@ -22,6 +27,8 @@ const config: QbxSqlConfig = {
   healthInterval: 10_000,
   connectionRetryMax: 30_000,
   transactionTimeout: 30_000,
+  schemaMode: 'auto',
+  schemaAllowBlocking: false,
 };
 
 let database: DatabaseService;
@@ -81,12 +88,12 @@ describe('resource schema manager integration', () => {
     expect(result.appliedMigrations).toEqual([]);
   });
 
-  test('automatically widens a varchar without requiring a version bump', async () => {
-    const result = await manager.ensure('housing', propertiesSchema(100));
+  test('automatically widens a varchar online without requiring a version bump', async () => {
+    const result = await manager.ensure('housing', propertiesSchema(60));
     expect(result.appliedActions).toHaveLength(1);
     expect(result.warnings.join(' ')).toContain('without a version bump');
     const actual = await introspectDatabase(database);
-    expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(100);
+    expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(60);
   });
 
   test('refuses destructive synchronization without an explicit migration', async () => {
@@ -98,7 +105,7 @@ describe('resource schema manager integration', () => {
     }
     expect(error).toBeInstanceOf(SchemaMigrationRequiredError);
     const actual = await introspectDatabase(database);
-    expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(100);
+    expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(60);
   });
 
   test('applies and journals an explicitly authorized destructive migration', async () => {
@@ -182,9 +189,33 @@ describe('resource schema manager integration', () => {
         },
       },
     });
-    expect(result.appliedActions).toHaveLength(3);
+    expect(result.appliedActions).toHaveLength(2);
     expect((await introspectDatabase(database)).get('vehicles')?.foreignKeys.has('vehicles_garage_fk')).toBe(
       true,
     );
+  });
+
+  test('plan and off modes never apply resource DDL', async () => {
+    const schema: ResourceSchema = {
+      version: 1,
+      tables: {
+        mode_probe: { columns: { id: { type: 'int', primary: true } } },
+      },
+    };
+    const planManager = new SchemaManager(database, { mode: 'plan' });
+    await expect(planManager.ensure('mode_probe_resource', schema)).rejects.toBeInstanceOf(
+      SchemaPendingChangesError,
+    );
+    expect((await introspectDatabase(database)).has('mode_probe')).toBe(false);
+
+    const offManager = new SchemaManager(database, { mode: 'off' });
+    await expect(offManager.ensure('mode_probe_resource', schema)).rejects.toBeInstanceOf(
+      SchemaDisabledError,
+    );
+    expect((await offManager.plan('mode_probe_resource', schema)).actions[0]).toMatchObject({
+      kind: 'createTable',
+      automatic: true,
+    });
+    expect((await introspectDatabase(database)).has('mode_probe')).toBe(false);
   });
 });

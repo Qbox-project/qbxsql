@@ -16,6 +16,8 @@ export interface QbxSqlConfig {
   healthInterval: number;
   connectionRetryMax: number;
   transactionTimeout: number;
+  schemaMode: 'auto' | 'plan' | 'off';
+  schemaAllowBlocking: boolean;
   connectionLimitExplicit?: boolean;
   connectTimeoutExplicit?: boolean;
 }
@@ -80,6 +82,24 @@ function debugOption(): boolean | readonly string[] {
   return false;
 }
 
+function booleanConvar(name: string, fallback: boolean): boolean {
+  const raw = readOptionalConvar(name);
+  if (raw === undefined) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  console.warn(`[qbxsql] Ignoring invalid boolean convar ${name}.`);
+  return fallback;
+}
+
+function schemaMode(): QbxSqlConfig['schemaMode'] {
+  const raw = readOptionalConvar('qbxsql_schema_mode')?.trim().toLowerCase();
+  if (!raw) return 'auto';
+  if (raw === 'auto' || raw === 'plan' || raw === 'off') return raw;
+  console.warn('[qbxsql] qbxsql_schema_mode must be auto, plan, or off; using auto.');
+  return 'auto';
+}
+
 function isolationOption(): TransactionIsolationLevel {
   const raw = preferredConvar(
     'qbxsql_transaction_isolation_level',
@@ -130,5 +150,7 @@ export function loadConfig(): QbxSqlConfig {
     healthInterval: integerOption('qbxsql_health_interval', 10_000, 1_000).value,
     connectionRetryMax: integerOption('qbxsql_connection_retry_max', 30_000, 250).value,
     transactionTimeout: integerOption('qbxsql_transaction_timeout', 30_000, 1).value,
+    schemaMode: schemaMode(),
+    schemaAllowBlocking: booleanConvar('qbxsql_schema_allow_blocking', false),
   };
 }

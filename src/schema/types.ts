@@ -153,6 +153,11 @@ export interface SchemaAction {
   kind: string;
   sql: string;
   safe: boolean;
+  dataSafe: boolean;
+  onlineSafe: boolean;
+  automatic: boolean;
+  risk: 'low' | 'medium' | 'high';
+  algorithm: 'CREATE' | 'INSTANT' | 'INPLACE' | 'MANUAL';
   reason: string;
   table?: string;
 }

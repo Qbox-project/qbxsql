@@ -1,7 +1,7 @@
 import type { DatabaseConnection } from '../core/types.js';
 import type { DatabaseService } from '../core/database.js';
 import { introspectDatabase } from './introspect.js';
-import { compareColumn, planSchema } from './planner.js';
+import { capabilitiesForVersion, compareColumn, planSchema } from './planner.js';
 import { migrationOperationSql } from './sql.js';
 import type {
   ActualTable,
@@ -31,10 +31,29 @@ type Row = Record<string, unknown>;
 
 export class SchemaMigrationRequiredError extends Error {
   public constructor(public readonly plan: SchemaPlan) {
-    const blocked = plan.actions.filter((entry) => !entry.safe).map((entry) => entry.reason);
+    const blocked = plan.actions.filter((entry) => !entry.automatic).map((entry) => entry.reason);
     super(`Schema for '${plan.resource}' requires explicit migrations: ${blocked.join('; ')}`);
     this.name = 'SchemaMigrationRequiredError';
   }
+}
+
+export class SchemaPendingChangesError extends Error {
+  public constructor(public readonly result: SchemaEnsureResult) {
+    super(`Schema mode is 'plan'; '${result.resource}' was not changed.`);
+    this.name = 'SchemaPendingChangesError';
+  }
+}
+
+export class SchemaDisabledError extends Error {
+  public constructor(resource: string) {
+    super(`Schema management is disabled; cannot ensure '${resource}'. Use the planning API to inspect drift.`);
+    this.name = 'SchemaDisabledError';
+  }
+}
+
+export interface SchemaManagerOptions {
+  mode?: 'auto' | 'plan' | 'off';
+  allowBlocking?: boolean;
 }
 
 function validateResourceName(resource: string): void {
@@ -49,6 +68,11 @@ function migrationActions(migrations: MigrationDefinition[]): SchemaAction[] {
       kind: `migration:${operation.type}`,
       sql: migrationOperationSql(operation),
       safe: true,
+      dataSafe: true,
+      onlineSafe: true,
+      automatic: true,
+      risk: 'medium' as const,
+      algorithm: 'MANUAL' as const,
       reason: `migration ${migration.version} (${migration.name})`,
       ...('table' in operation && typeof operation.table === 'string'
         ? { table: operation.table }
@@ -60,7 +84,16 @@ function migrationActions(migrations: MigrationDefinition[]): SchemaAction[] {
 export class SchemaManager {
   private initialization: Promise<void> | null = null;
 
-  public constructor(private readonly database: DatabaseService) {}
+  private readonly mode: 'auto' | 'plan' | 'off';
+  private readonly allowBlocking: boolean;
+
+  public constructor(
+    private readonly database: DatabaseService,
+    options: SchemaManagerOptions = {},
+  ) {
+    this.mode = options.mode ?? 'auto';
+    this.allowBlocking = options.allowBlocking ?? false;
+  }
 
   public initialize(): Promise<void> {
     this.initialization ??= this.createMetadataTables().catch((error: unknown) => {
@@ -78,6 +111,11 @@ export class SchemaManager {
     validateResourceName(resource);
     const schema = validateSchema(input);
     const checksum = schemaChecksum(schema);
+
+    if (dryRun) return this.plan(resource, schema);
+    if (this.mode === 'off') throw new SchemaDisabledError(resource);
+    if (this.mode === 'plan') throw new SchemaPendingChangesError(await this.plan(resource, schema));
+
     await this.initialize();
 
     const lock = await this.database.driver.acquire();
@@ -100,24 +138,13 @@ export class SchemaManager {
         : [];
 
       let actual = await introspectDatabase(this.database);
-      let plan = planSchema(resource, schema, actual);
+      const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+      let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings: string[] = [];
       if (registry && registry.version === schema.version && registry.checksum !== checksum) {
         managerWarnings.push(
           `Schema checksum changed without a version bump for '${resource}'; only safe changes will be reconciled.`,
         );
-      }
-
-      if (dryRun) {
-        return {
-          ...plan,
-          actions: [...migrationActions(pendingMigrations), ...plan.actions],
-          warnings: [...managerWarnings, ...plan.warnings],
-          checksum,
-          dryRun: true,
-          appliedActions: [],
-          appliedMigrations: [],
-        };
       }
 
       const appliedMigrations: number[] = [];
@@ -129,17 +156,40 @@ export class SchemaManager {
         actual = await introspectDatabase(this.database);
       }
 
-      plan = planSchema(resource, schema, actual);
-      const blocked = plan.actions.filter((entry) => !entry.safe);
+      plan = planSchema(resource, schema, actual, capabilities);
+      const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
 
       const appliedActions: string[] = [];
       for (const schemaAction of plan.actions) {
-        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        try {
+          await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new SchemaMigrationRequiredError({
+            ...plan,
+            actions: plan.actions.map((entry) =>
+              entry === schemaAction
+                ? {
+                    ...entry,
+                    onlineSafe: false,
+                    automatic: false,
+                    risk: 'high',
+                    reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`,
+                  }
+                : entry,
+            ),
+          });
+        }
         appliedActions.push(schemaAction.sql);
       }
 
-      const remaining = planSchema(resource, schema, await introspectDatabase(this.database));
+      const remaining = planSchema(
+        resource,
+        schema,
+        await introspectDatabase(this.database),
+        capabilities,
+      );
       if (remaining.actions.length > 0) {
         throw new Error(
           `Schema reconciliation for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join('; ')}`,
@@ -164,6 +214,26 @@ export class SchemaManager {
         lock.release();
       }
     }
+  }
+
+  public async plan(resource: string, input: ResourceSchema): Promise<SchemaEnsureResult> {
+    validateResourceName(resource);
+    const schema = validateSchema(input);
+    const checksum = schemaChecksum(schema);
+    const actual = await introspectDatabase(this.database);
+    const plan = planSchema(
+      resource,
+      schema,
+      actual,
+      capabilitiesForVersion(this.database.driver.serverVersion),
+    );
+    return {
+      ...plan,
+      checksum,
+      dryRun: true,
+      appliedActions: [],
+      appliedMigrations: [],
+    };
   }
 
   private async createMetadataTables(): Promise<void> {
