@@ -58,7 +58,7 @@ jobs:
             --env MARIADB_ROOT_PASSWORD=root \
             --env MARIADB_DATABASE=qbxsql_soak \
             mariadb:11.4
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if docker exec "$DB_CONTAINER" mariadb-admin ping -h localhost -proot --silent; then
               exit 0
             fi
