@@ -227,9 +227,7 @@ export class DatabaseService {
   ): Promise<unknown> {
     const parameterSets = this.parameterSets(parameters);
     const results = await this.executePreparedBatch(sql, parameterSets, options);
-
-    const parsed = results.map((result) => this.parsePreparedResult(sql, result));
-    return parsed.length === 1 ? parsed[0] : parsed;
+    return this.parsePreparedResponse(sql, results);
   }
 
   public async rawExecute(
@@ -538,13 +536,33 @@ export class DatabaseService {
     return this.connectionState === 'closing';
   }
 
-  private parsePreparedResult(sql: string, result: DriverResult): unknown {
+  private parsePreparedResponse(sql: string, results: DriverResult[]): unknown {
     const operation = sql.trimStart().split(/\s+/, 1)[0]?.toUpperCase();
-    if (operation === 'INSERT' || operation === 'REPLACE') return result.insertId || null;
-    if (operation === 'UPDATE' || operation === 'DELETE') return result.affectedRows;
+    const response: unknown[] = [];
 
-    if (!Array.isArray(result.rows)) return result.rows;
-    const first = result.rows[0];
+    for (const result of results) {
+      if (Array.isArray(result.rows) && result.rows.length > 1) {
+        for (const value of result.rows) response.push(value);
+        continue;
+      }
+
+      if (operation === 'INSERT' || operation === 'REPLACE') {
+        response.push(result.insertId || null);
+      } else if (operation === 'UPDATE' || operation === 'DELETE') {
+        response.push(result.affectedRows);
+      } else {
+        response.push(result.rows);
+      }
+    }
+
+    if (response.length !== 1) return response;
+    if (operation === 'INSERT' || operation === 'REPLACE' || operation === 'UPDATE' || operation === 'DELETE') {
+      return response[0];
+    }
+
+    const rows = response[0];
+    if (!Array.isArray(rows)) return rows;
+    const first = rows[0];
     if (!first || typeof first !== 'object') return first ?? null;
     const values = Object.values(first);
     return values.length === 1 ? (values[0] ?? null) : first;

@@ -177,7 +177,16 @@ describe('MySQL driver integration', () => {
   });
 
   test('supports batch prepare and raw execute operations', async () => {
-    expect(await database.prepare('SELECT ? AS value', [[1], [2]])).toEqual([1, 2]);
+    expect(await database.prepare('SELECT ? AS value', [[1], [2]])).toEqual([
+      [{ value: 1 }],
+      [{ value: 2 }],
+    ]);
+    expect(
+      await database.prepare('SELECT id, name FROM values_test ORDER BY id LIMIT 2'),
+    ).toEqual([
+      expect.objectContaining({ id: expect.any(Number), name: expect.any(String) }),
+      expect.objectContaining({ id: expect.any(Number), name: expect.any(String) }),
+    ]);
     expect(await database.rawExecute('SELECT ? AS value', [[3], [4]])).toEqual([
       [{ value: 3 }],
       [{ value: 4 }],
