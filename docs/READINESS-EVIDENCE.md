@@ -6,7 +6,7 @@ This file is the release traceability index for the production-readiness program
 
 | Program area | Evidence |
 | --- | --- |
-| Split core and compatibility resources | Manifest, release-validator, unit, packaged stock-FXServer, import-path, provider-resolution, restart, and live differential gates |
+| Split core and compatibility resources | Manifest, release-validator, unit, packaged stock/enhanced-FXServer, import-path, provider-resolution, concrete-oxmysql conflict, restart, and live differential gates |
 | oxmysql 2.14.1 behavior | Static tagged contract plus exact live differential through packaged `qbxsql_compat`, covering results, errors, prepared batches, raw execution, zero insert IDs, serialization, and failed transactions |
 | mysql-async and ghmattimysql | Contract aliases plus packaged FXServer callback/synchronous/import fixtures |
 | Lifecycle and health | Unit failure matrix, live active-resource restart, database-restart rehearsal, and one-hour reconnect soak |
@@ -17,10 +17,10 @@ This file is the release traceability index for the production-readiness program
 
 | Gate | Result |
 | --- | --- |
-| Unit, contract, and local integration suite | Pass; 111 tests and 389 assertions across 14 files |
+| Unit, contract, and local integration suite | Pass; 111 tests and 395 assertions across 14 files |
 | Required database matrix | Pass; 35 integration tests each on MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 |
 | Rolling MariaDB smoke | Pass on MariaDB 12.0.2; informative only |
-| Packaged stock Windows FXServer | Pass on build 32561, including compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, and core/shim restart during an active query |
+| Packaged Windows FXServer | Pass on stock build 32561 and enhanced CFX, including compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, core/shim restart during an active query, and loud/inert refusal when concrete oxmysql is active |
 | Exact oxmysql live differential | Pass against local oxmysql 2.14.1 through packaged `qbxsql_compat` |
 | Workflow syntax | Pass with actionlint 1.7.12 |
 | Dependency audit | Pass at high severity threshold |
