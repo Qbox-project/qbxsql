@@ -263,4 +263,28 @@ describe('declarative schema planner', () => {
     expect(plan.warnings.join(' ')).toContain("unmanaged index 'manual_idx'");
     expect(plan.warnings.join(' ')).toContain("unmanaged foreign key 'manual_fk'");
   });
+
+  test('treats NO ACTION and RESTRICT foreign-key rules as equivalent', () => {
+    const current = actual(50);
+    current.foreignKeys.set('properties_owner_fk', {
+      name: 'properties_owner_fk',
+      columns: ['id'],
+      referencedTable: 'owners',
+      referencedColumns: ['id'],
+      onDelete: 'NO ACTION',
+      onUpdate: 'NO ACTION',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['id'],
+        references: { table: 'owners', columns: ['id'] },
+      },
+    ];
+
+    expect(
+      planSchema('housing', desired, new Map([['properties', current]])).actions,
+    ).toHaveLength(0);
+  });
 });

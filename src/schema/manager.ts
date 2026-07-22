@@ -114,6 +114,14 @@ function requiresBlockingAuthorization(operation: MigrationOperation): boolean {
   return operation.type === 'sql' || operation.type === 'setTableOptions';
 }
 
+function enforcedAlgorithm(action: SchemaAction): string {
+  return action.algorithm === 'INSTANT'
+    ? 'INSTANT'
+    : action.algorithm === 'INPLACE'
+      ? 'INPLACE/LOCK=NONE'
+      : action.algorithm;
+}
+
 export function migrationActions(
   migrations: MigrationDefinition[],
   operatorAllowsBlocking: boolean,
@@ -742,7 +750,7 @@ export class SchemaManager {
                       onlineSafe: false,
                       automatic: false,
                       risk: 'high',
-                      reason: `${action.reason}; database rejected ${action.algorithm}/LOCK=NONE: ${reason}`,
+                      reason: `${action.reason}; database rejected ${enforcedAlgorithm(action)}: ${reason}`,
                     },
                   ],
                 });
@@ -792,7 +800,7 @@ export class SchemaManager {
                   onlineSafe: false,
                   automatic: false,
                   risk: 'high',
-                  reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`,
+                  reason: `${entry.reason}; database rejected ${enforcedAlgorithm(entry)}: ${reason}`,
                 }
               : entry,
           ),

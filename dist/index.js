@@ -22025,7 +22025,7 @@ function onlineMigrationOperationSql(operation) {
   switch (operation.type) {
     case "addColumn":
     case "dropColumn":
-      return `${sql}, ALGORITHM=INSTANT, LOCK=NONE`;
+      return `${sql}, ALGORITHM=INSTANT`;
     case "renameColumn":
     case "alterColumn":
     case "addIndex":
@@ -22191,7 +22191,8 @@ function sameIndex(desired, actual) {
 }
 __name(sameIndex, "sameIndex");
 function sameForeignKey(desired, actual) {
-  return sameColumns(desired.columns, actual.columns) && desired.references.table === actual.referencedTable && sameColumns(desired.references.columns, actual.referencedColumns) && (desired.onDelete ?? "RESTRICT") === actual.onDelete && (desired.onUpdate ?? "RESTRICT") === actual.onUpdate;
+  const normalizeAction = /* @__PURE__ */ __name((value) => value === "NO ACTION" ? "RESTRICT" : value, "normalizeAction");
+  return sameColumns(desired.columns, actual.columns) && desired.references.table === actual.referencedTable && sameColumns(desired.references.columns, actual.referencedColumns) && normalizeAction(desired.onDelete ?? "RESTRICT") === normalizeAction(actual.onDelete) && normalizeAction(desired.onUpdate ?? "RESTRICT") === normalizeAction(actual.onUpdate);
 }
 __name(sameForeignKey, "sameForeignKey");
 function action(actions, value) {
@@ -22208,7 +22209,8 @@ function action(actions, value) {
 }
 __name(action, "action");
 function onlineAlterSql(table, clause, algorithm) {
-  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ALGORITHM=${algorithm}, LOCK=NONE`;
+  const enforcement = algorithm === "INSTANT" ? "ALGORITHM=INSTANT" : "ALGORITHM=INPLACE, LOCK=NONE";
+  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ${enforcement}`;
 }
 __name(onlineAlterSql, "onlineAlterSql");
 function varcharWideningIsOnline(desired, actual, table) {
@@ -22525,6 +22527,10 @@ function requiresBlockingAuthorization(operation) {
   return operation.type === "sql" || operation.type === "setTableOptions";
 }
 __name(requiresBlockingAuthorization, "requiresBlockingAuthorization");
+function enforcedAlgorithm(action2) {
+  return action2.algorithm === "INSTANT" ? "INSTANT" : action2.algorithm === "INPLACE" ? "INPLACE/LOCK=NONE" : action2.algorithm;
+}
+__name(enforcedAlgorithm, "enforcedAlgorithm");
 function migrationActions(migrations, operatorAllowsBlocking) {
   return migrations.flatMap(
     (migration) => migration.operations.map((operation) => {
@@ -23063,7 +23069,7 @@ var SchemaManager = class {
                       onlineSafe: false,
                       automatic: false,
                       risk: "high",
-                      reason: `${action2.reason}; database rejected ${action2.algorithm}/LOCK=NONE: ${reason}`
+                      reason: `${action2.reason}; database rejected ${enforcedAlgorithm(action2)}: ${reason}`
                     }
                   ]
                 });
@@ -23111,7 +23117,7 @@ var SchemaManager = class {
               onlineSafe: false,
               automatic: false,
               risk: "high",
-              reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`
+              reason: `${entry.reason}; database rejected ${enforcedAlgorithm(entry)}: ${reason}`
             } : entry
           )
         });

@@ -209,12 +209,14 @@ function sameIndex(desired: IndexDefinition, actual: ActualIndex): boolean {
 }
 
 function sameForeignKey(desired: ForeignKeyDefinition, actual: ActualTable['foreignKeys'] extends Map<string, infer V> ? V : never): boolean {
+  const normalizeAction = (value: string): string =>
+    value === 'NO ACTION' ? 'RESTRICT' : value;
   return (
     sameColumns(desired.columns, actual.columns) &&
     desired.references.table === actual.referencedTable &&
     sameColumns(desired.references.columns, actual.referencedColumns) &&
-    (desired.onDelete ?? 'RESTRICT') === actual.onDelete &&
-    (desired.onUpdate ?? 'RESTRICT') === actual.onUpdate
+    normalizeAction(desired.onDelete ?? 'RESTRICT') === normalizeAction(actual.onDelete) &&
+    normalizeAction(desired.onUpdate ?? 'RESTRICT') === normalizeAction(actual.onUpdate)
   );
 }
 
@@ -247,7 +249,8 @@ function onlineAlterSql(
   clause: string,
   algorithm: 'INSTANT' | 'INPLACE',
 ): string {
-  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ALGORITHM=${algorithm}, LOCK=NONE`;
+  const enforcement = algorithm === 'INSTANT' ? 'ALGORITHM=INSTANT' : 'ALGORITHM=INPLACE, LOCK=NONE';
+  return `ALTER TABLE ${quoteIdentifier(table)} ${clause}, ${enforcement}`;
 }
 
 function varcharWideningIsOnline(

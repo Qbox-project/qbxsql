@@ -82,6 +82,14 @@ describe('schema validation and SQL generation', () => {
         allowDataLoss: true,
       }),
     ).toBe('ALTER TABLE `properties` DROP COLUMN `legacy`');
+    expect(
+      onlineMigrationOperationSql({
+        type: 'addColumn',
+        table: 'properties',
+        column: 'notes',
+        definition: { type: 'text', nullable: true },
+      }),
+    ).toBe('ALTER TABLE `properties` ADD COLUMN `notes` TEXT NULL, ALGORITHM=INSTANT');
   });
 
   test('generates structured constraint and table-option migrations', () => {

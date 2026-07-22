@@ -139,7 +139,7 @@ export function onlineMigrationOperationSql(operation: MigrationOperation): stri
   switch (operation.type) {
     case 'addColumn':
     case 'dropColumn':
-      return `${sql}, ALGORITHM=INSTANT, LOCK=NONE`;
+      return `${sql}, ALGORITHM=INSTANT`;
     case 'renameColumn':
     case 'alterColumn':
     case 'addIndex':
