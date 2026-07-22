@@ -262,29 +262,7 @@ export class SchemaManager {
       const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
 
-      const appliedActions: string[] = [];
-      for (const schemaAction of plan.actions) {
-        try {
-          await this.database.query(schemaAction.sql, [], { invokingResource: resource });
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          throw new SchemaMigrationRequiredError({
-            ...plan,
-            actions: plan.actions.map((entry) =>
-              entry === schemaAction
-                ? {
-                    ...entry,
-                    onlineSafe: false,
-                    automatic: false,
-                    risk: 'high',
-                    reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`,
-                  }
-                : entry,
-            ),
-          });
-        }
-        appliedActions.push(schemaAction.sql);
-      }
+      const appliedActions = await this.applySchemaPlan(resource, plan);
 
       const remaining = planSchema(
         resource,
@@ -483,11 +461,7 @@ export class SchemaManager {
       if (plan.actions.some((entry) => !entry.automatic)) {
         throw new SchemaMigrationRequiredError(plan);
       }
-      const appliedActions: string[] = [];
-      for (const schemaAction of plan.actions) {
-        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
-        appliedActions.push(schemaAction.sql);
-      }
+      const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
         schema,
@@ -744,14 +718,37 @@ export class SchemaManager {
     );
 
     try {
-      for (const operation of migration.operations) {
+      for (const [operationIndex, operation] of migration.operations.entries()) {
         const needed = await this.operationNeeded(resource, operation, actual);
         if (needed) {
           if (operation.type === 'releaseTable') {
             await this.releaseTable(resource, operation.table);
           } else {
             const sql = this.migrationSql(operation, blockingAllowed, actual);
-            await this.database.query(sql, [], { invokingResource: resource });
+            try {
+              await this.database.query(sql, [], { invokingResource: resource });
+            } catch (error) {
+              if (!blockingAllowed && operationAlgorithm(operation) !== 'MANUAL') {
+                const reason = error instanceof Error ? error.message : String(error);
+                const action = migrationActions([migration], false)[operationIndex]!;
+                throw new SchemaMigrationRequiredError({
+                  resource,
+                  version: migration.version,
+                  warnings: [],
+                  actions: [
+                    {
+                      ...action,
+                      sql,
+                      onlineSafe: false,
+                      automatic: false,
+                      risk: 'high',
+                      reason: `${action.reason}; database rejected ${action.algorithm}/LOCK=NONE: ${reason}`,
+                    },
+                  ],
+                });
+              }
+              throw error;
+            }
           }
         }
         await this.reconcileOwnershipTransition(resource, operation);
@@ -777,6 +774,33 @@ export class SchemaManager {
       );
       throw error;
     }
+  }
+
+  private async applySchemaPlan(resource: string, plan: SchemaPlan): Promise<string[]> {
+    const appliedActions: string[] = [];
+    for (const schemaAction of plan.actions) {
+      try {
+        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new SchemaMigrationRequiredError({
+          ...plan,
+          actions: plan.actions.map((entry) =>
+            entry === schemaAction
+              ? {
+                  ...entry,
+                  onlineSafe: false,
+                  automatic: false,
+                  risk: 'high',
+                  reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`,
+                }
+              : entry,
+          ),
+        });
+      }
+      appliedActions.push(schemaAction.sql);
+    }
+    return appliedActions;
   }
 
   private migrationSql(

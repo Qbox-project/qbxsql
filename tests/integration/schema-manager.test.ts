@@ -138,6 +138,105 @@ describe('resource schema manager integration', () => {
     expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(60);
   });
 
+  test('returns a migration-required plan when the database rejects enforced online DDL', async () => {
+    const originalQuery = database.query.bind(database);
+    database.query = async (sql, parameters, options) => {
+      if (sql.includes('ALTER TABLE `properties`') && sql.includes('LOCK=NONE')) {
+        throw Object.assign(new Error('LOCK=NONE is not supported for this operation'), {
+          code: 'ER_ALTER_OPERATION_NOT_SUPPORTED_REASON',
+        });
+      }
+      return originalQuery(sql, parameters, options);
+    };
+
+    let error: unknown;
+    try {
+      await manager.ensure('housing', propertiesSchema(61));
+    } catch (caught) {
+      error = caught;
+    } finally {
+      database.query = originalQuery;
+    }
+
+    expect(error).toBeInstanceOf(SchemaMigrationRequiredError);
+    expect((error as SchemaMigrationRequiredError).plan.actions[0]).toMatchObject({
+      automatic: false,
+      onlineSafe: false,
+      risk: 'high',
+    });
+    expect((error as SchemaMigrationRequiredError).plan.actions[0]?.reason).toContain(
+      'database rejected INPLACE/LOCK=NONE',
+    );
+    expect((await introspectDatabase(database)).get('properties')?.columns.get('label')?.maximumLength).toBe(
+      60,
+    );
+  });
+
+  test('returns a migration-required plan when structured online migration DDL is rejected', async () => {
+    await manager.ensure('online_migration_rejection', {
+      version: 1,
+      tables: {
+        online_migration_rejection_table: {
+          columns: { id: { type: 'int', primary: true } },
+        },
+      },
+    });
+    const target: ResourceSchema = {
+      version: 2,
+      tables: {
+        online_migration_rejection_table: {
+          columns: {
+            id: { type: 'int', primary: true },
+            note: { type: 'text', nullable: true },
+          },
+        },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'add online note',
+          operations: [
+            {
+              type: 'addColumn',
+              table: 'online_migration_rejection_table',
+              column: 'note',
+              definition: { type: 'text', nullable: true },
+            },
+          ],
+        },
+      ],
+    };
+    const originalQuery = database.query.bind(database);
+    database.query = async (sql, parameters, options) => {
+      if (sql.includes('ALTER TABLE `online_migration_rejection_table`')) {
+        throw new Error('ALGORITHM=INSTANT is unavailable');
+      }
+      return originalQuery(sql, parameters, options);
+    };
+
+    let error: unknown;
+    try {
+      await manager.ensure('online_migration_rejection', target);
+    } catch (caught) {
+      error = caught;
+    } finally {
+      database.query = originalQuery;
+    }
+
+    expect(error).toBeInstanceOf(SchemaMigrationRequiredError);
+    expect((error as SchemaMigrationRequiredError).plan.actions[0]).toMatchObject({
+      kind: 'migration:addColumn',
+      automatic: false,
+      algorithm: 'INSTANT',
+    });
+    expect(
+      await database.scalar(
+        `SELECT status FROM qbxsql_schema_migrations
+         WHERE resource_name = 'online_migration_rejection' AND version = 2`,
+      ),
+    ).toBe('failed');
+  });
+
   test('applies and journals an explicitly authorized destructive migration', async () => {
     const target = propertiesSchema(50, 2);
     target.migrations = [
