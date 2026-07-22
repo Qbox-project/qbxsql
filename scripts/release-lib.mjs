@@ -87,7 +87,8 @@ export async function releaseFiles() {
 
   const documentation = await existingFiles(['CHANGELOG.md', 'SECURITY.md']);
   const docs = await filesUnder('docs');
-  const core = [...coreRequired, ...documentation, ...docs].sort();
+  const examples = await filesUnder('examples');
+  const core = [...coreRequired, ...documentation, ...docs, ...examples].sort();
   const compat = (await filesUnder('qbxsql_compat')).sort();
   for (const required of [
     'qbxsql_compat/fxmanifest.lua',
