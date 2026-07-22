@@ -11,6 +11,7 @@ This file is the release traceability index for the production-readiness program
 | mysql-async and ghmattimysql | Contract aliases plus packaged FXServer callback/synchronous/import fixtures |
 | Lifecycle and health | Unit failure matrix, live active-resource restart, database-restart rehearsal, and one-hour reconnect soak |
 | Declarative schemas | Planner/unit coverage plus 26 schema-manager integration cases for modes, drift, ownership, adoption, online refusal, blocking approval, recovery, scoped introspection, and separate credentials |
+| Qbox certification evidence | Deliberately incomplete 21-check template plus strict release-identity, evidence-reference, completeness, and credential-safety validation |
 | Canary evidence | Optional non-release monitor, sanitized JSONL lifecycle/status capture, continuity and duration validation, ending-pool checks, and bounded justified error deltas |
 | Release engineering | Actionlint-clean workflows, deterministic release builder/validator, SHA-256 output, guarded development installer, operations/security/migration/release documentation |
 
@@ -18,7 +19,7 @@ This file is the release traceability index for the production-readiness program
 
 | Gate | Result |
 | --- | --- |
-| Unit, contract, and local integration suite | Pass; 120 tests and 449 assertions across 18 files |
+| Unit, contract, and local integration suite | Pass; 123 tests and 462 assertions across 19 files |
 | Required database matrix | Pass; 35 integration tests each on MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 |
 | Rolling MariaDB smoke | Pass on MariaDB 12.0.2; informative only |
 | Packaged FXServer | Pass on stock Windows build 32561, stock Linux build 25770 in the pinned container gate, and enhanced CFX; coverage includes compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, core/shim restart during an active query, and loud/inert refusal when concrete oxmysql is active |

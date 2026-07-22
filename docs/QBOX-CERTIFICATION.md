@@ -2,6 +2,17 @@
 
 This checklist requires a real FiveM client. Record server/client artifacts, Qbox commit/version, database version, qbxsql ZIP checksum, operator, date, and evidence for every item.
 
+Copy [qbox-certification.template.json](qbox-certification.template.json) into the evidence bundle, complete every named check, and validate it against the exact built release:
+
+```sh
+bun run release
+bun run certification:validate -- \
+  --input qbox-certification.json \
+  --output qbox-certification-summary.json
+```
+
+The validator rejects unchecked or unknown items, missing evidence references, credential-shaped content, and release version/checksum mismatches. A passing JSON file proves checklist completeness and release identity; it does not replace actually performing the client actions below.
+
 ## Installation
 
 - [ ] A verified database backup exists and a restore was rehearsed.

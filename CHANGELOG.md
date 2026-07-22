@@ -9,6 +9,7 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 - A local one-hour, 100-worker reconnect soak and ten-minute same-hardware oxmysql 2.14.1 comparison pass every reliability, transaction, pool, memory, median, and p95 gate.
 - Stock Linux FXServer build 25770 passes the pinned containerized release gate, including restart and connector-conflict coverage.
 - Added sanitized runtime evidence archives and a monitor/validator for continuous seven-day canary evidence.
+- Added a strict, release-bound evidence template and validator for the 21 real-client Qbox certification checks.
 - Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
 ## 0.3.0 - 2026-07-22

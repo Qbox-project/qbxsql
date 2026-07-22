@@ -28,7 +28,7 @@ Required evidence before an RC can become stable:
 - quality, security, and deterministic artifact workflows;
 - MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 integration matrix;
 - stock Windows and Linux FXServer gates plus enhanced Windows coverage;
-- completed real-client Qbox checklist;
+- completed real-client Qbox checklist and passing structured certification validator;
 - failure/restart evidence;
 - one-hour 100-worker soak and same-hardware oxmysql comparison;
 - seven-day canary report.
