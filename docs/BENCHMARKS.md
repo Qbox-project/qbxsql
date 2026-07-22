@@ -18,6 +18,15 @@ The benchmark runner disables connector slow-query console logging for both cand
 
 On 2026-07-22, a local stock-Windows smoke comparison using 100 workers for 30 seconds produced 112,935 qbxsql operations at 24 ms median / 45 ms p95 and 112,610 oxmysql 2.14.1 operations at 24 ms median / 44 ms p95. This validates the workload and CFX scheduling path; its duration is too short for the memory or release-candidate gate. A separate live database-restart smoke completed 35,270 operations with zero unexplained failures, one observed reconnect, and no ending connection leak.
 
+The full local Windows gate on 2026-07-22 used an AMD Ryzen 9 7900X (12 cores/24 threads), 31.09 GiB RAM, stock FXServer build 32561, and MariaDB 11.4.12. The one-hour qbxsql reconnect soak completed 12,388,297 operations with five forced database restarts, zero unexplained failures, zero transaction-invariant violations, no ending acquired or queued connections, full 10-connection saturation, 27 ms median / 41 ms p95 latency, and -0.22% final-half memory growth. The separate ten-minute steady comparison produced:
+
+| Connector | Operations | Median | p95 | Failures | Transaction violations |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| qbxsql | 2,056,279 | 28 ms | 40 ms | 0 | 0 |
+| oxmysql 2.14.1 | 2,079,285 | 27 ms | 41 ms | 0 | 0 |
+
+This passes the same-hardware 120% latency gate. Formal release evidence must still archive the self-hosted workflow artifact rather than relying only on a developer workstation result.
+
 ## Required gates
 
 - zero unexplained query/transaction failures;

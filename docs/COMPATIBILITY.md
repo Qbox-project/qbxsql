@@ -17,7 +17,7 @@ The compatibility contract is pinned to [oxmysql 2.14.1](https://github.com/over
 
 Required stable-release gates are MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. The rolling MariaDB job is informative and non-blocking. A matrix definition or local run is not final release evidence: release notes must link the completed workflow before `1.0.0`.
 
-Local development on 2026-07-22 passed the complete 33-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
+Local development on 2026-07-22 passed the complete 35-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
 
 ## FXServer target
 
