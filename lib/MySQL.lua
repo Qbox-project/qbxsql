@@ -13,8 +13,12 @@ local function resolveQuery(query)
     return query
 end
 
-local function arguments(query, parameters, callback)
-    query = resolveQuery(query)
+local function arguments(method, query, parameters, callback)
+    if method == 'transaction' then
+        assert(type(query) == 'table', 'Transaction queries must be a table')
+    else
+        query = resolveQuery(query)
+    end
 
     if type(parameters) == 'function' then
         callback = parameters
@@ -25,12 +29,12 @@ local function arguments(query, parameters, callback)
 end
 
 local function call(method, query, parameters, callback)
-    query, parameters, callback = arguments(query, parameters, callback)
+    query, parameters, callback = arguments(method, query, parameters, callback)
     return adapter[method](nil, query, parameters, callback, currentResource)
 end
 
 local function await(method, query, parameters)
-    query, parameters = arguments(query, parameters)
+    query, parameters = arguments(method, query, parameters)
     local response = promise.new()
 
     adapter[method](nil, query, parameters, function(result, err)
@@ -113,4 +117,3 @@ MySQL.ready = setmetatable({
 })
 
 _ENV.MySQL = MySQL
-

@@ -2,13 +2,17 @@ import { loadConfig } from './config.js';
 import { DatabaseService } from './core/database.js';
 import { MySqlDriver } from './drivers/mysql.js';
 import { registerCompatibilityExports } from './api/compatibility.js';
+import { registerSchemaExports } from './api/schema.js';
+import { SchemaManager } from './schema/manager.js';
 
 const resourceName =
   typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
 const config = loadConfig();
 const database = new DatabaseService(new MySqlDriver(config), config);
+const schemas = new SchemaManager(database);
 
 registerCompatibilityExports(database);
+registerSchemaExports(schemas);
 
 void database
   .connect()
@@ -28,4 +32,4 @@ if (typeof on === 'function') {
   });
 }
 
-export { database };
+export { database, schemas };

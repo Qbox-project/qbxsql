@@ -431,7 +431,7 @@ var require_lib = __commonJS({
       return sql;
     }, "arrayToList");
     exports2.arrayToList = arrayToList;
-    var escape = /* @__PURE__ */ __name((value, stringifyObjects, timezone) => {
+    var escape2 = /* @__PURE__ */ __name((value, stringifyObjects, timezone) => {
       if (value === void 0 || value === null)
         return "NULL";
       switch (typeof value) {
@@ -467,7 +467,7 @@ var require_lib = __commonJS({
           return escapeString(String(value));
       }
     }, "escape");
-    exports2.escape = escape;
+    exports2.escape = escape2;
     var format = /* @__PURE__ */ __name((sql, values, stringifyObjects, timezone) => {
       if (values === void 0 || values === null)
         return sql;
@@ -10772,12 +10772,12 @@ var require_packet = __commonJS({
           this.skip(1);
           sqlState = this.readBuffer(5).toString();
         }
-        const message = this.readString(void 0, encoding);
-        const err = new Error(message);
+        const message2 = this.readString(void 0, encoding);
+        const err = new Error(message2);
         err.code = ErrorCodeToName[errorCode];
         err.errno = errorCode;
         err.sqlState = sqlState;
-        err.sqlMessage = message;
+        err.sqlMessage = message2;
         return err;
       }
       writeInt32(n) {
@@ -13336,7 +13336,7 @@ var require_packets = __commonJS({
         const insertId = args.insertId || 0;
         const serverStatus = args.serverStatus || 0;
         const warningCount = args.warningCount || 0;
-        const message = args.message || "";
+        const message2 = args.message || "";
         let length = 9 + Packet.lengthCodedNumberLength(affectedRows);
         length += Packet.lengthCodedNumberLength(insertId);
         const buffer = Buffer.allocUnsafe(length);
@@ -13347,7 +13347,7 @@ var require_packets = __commonJS({
         packet.writeLengthCodedNumber(insertId);
         packet.writeInt16(serverStatus);
         packet.writeInt16(warningCount);
-        packet.writeString(message, encoding);
+        packet.writeString(message2, encoding);
         packet._name = "OK";
         return packet;
       }
@@ -13394,9 +13394,9 @@ var require_packets = __commonJS({
         const code = packet.readInt16();
         packet.readString(1, "ascii");
         packet.readString(5, "ascii");
-        const message = packet.readNullTerminatedString("utf8");
+        const message2 = packet.readNullTerminatedString("utf8");
         const error = new _Error();
-        error.message = message;
+        error.message = message2;
         error.code = code;
         return error;
       }
@@ -14715,12 +14715,12 @@ var require_helpers = __commonJS({
       const REQUIRE_TERMINATOR = "";
       highlightFn = require(`cardinal${REQUIRE_TERMINATOR}`).highlight;
     } catch {
-      highlightFn = /* @__PURE__ */ __name((text) => {
+      highlightFn = /* @__PURE__ */ __name((text2) => {
         if (!cardinalRecommended) {
           console.log("For nicer debug output consider install cardinal@^2.0.0");
           cardinalRecommended = true;
         }
-        return text;
+        return text2;
       }, "highlightFn");
     }
     function printDebugWithCode(msg, code) {
@@ -17363,7 +17363,7 @@ var require_named_placeholders = __commonJS({
       let end;
       const parts = [];
       let inQuote = false;
-      let escape = false;
+      let escape2 = false;
       let qchr;
       const tokens = [];
       let qcnt = 0;
@@ -17373,10 +17373,10 @@ var require_named_placeholders = __commonJS({
         do {
           for (i = curpos, end = ppos.index; i < end; ++i) {
             const chr = query.charCodeAt(i);
-            if (chr === BSLASH) escape = !escape;
+            if (chr === BSLASH) escape2 = !escape2;
             else {
-              if (escape) {
-                escape = false;
+              if (escape2) {
+                escape2 = false;
                 continue;
               }
               if (inQuote && chr === qchr) {
@@ -17882,11 +17882,11 @@ var require_connection = __commonJS({
         });
         this.stream = secureSocket;
       }
-      protocolError(message, code) {
+      protocolError(message2, code) {
         if (this._closing) {
           return;
         }
-        const err = new Error(message);
+        const err = new Error(message2);
         err.fatal = true;
         err.code = code || "PROTOCOL_ERROR";
         this.emit("error", err);
@@ -19978,10 +19978,127 @@ var require_promise = __commonJS({
   }
 });
 
+// node_modules/mysql2/lib/server.js
+var require_server = __commonJS({
+  "node_modules/mysql2/lib/server.js"(exports2, module2) {
+    "use strict";
+    var net = require("net");
+    var EventEmitter = require("events").EventEmitter;
+    var Connection = require_connection3();
+    var ConnectionConfig = require_connection_config();
+    var Server = class extends EventEmitter {
+      static {
+        __name(this, "Server");
+      }
+      constructor() {
+        super();
+        this.connections = [];
+        this._server = net.createServer(this._handleConnection.bind(this));
+      }
+      _handleConnection(socket) {
+        const connectionConfig = new ConnectionConfig({
+          stream: socket,
+          isServer: true
+        });
+        const connection = new Connection({ config: connectionConfig });
+        this.emit("connection", connection);
+      }
+      listen(port) {
+        this._port = port;
+        this._server.listen.apply(this._server, arguments);
+        return this;
+      }
+      close(cb) {
+        this._server.close(cb);
+      }
+    };
+    module2.exports = Server;
+  }
+});
+
+// node_modules/mysql2/lib/auth_plugins/index.js
+var require_auth_plugins = __commonJS({
+  "node_modules/mysql2/lib/auth_plugins/index.js"(exports2, module2) {
+    "use strict";
+    module2.exports = {
+      caching_sha2_password: require_caching_sha2_password(),
+      mysql_clear_password: require_mysql_clear_password(),
+      mysql_native_password: require_mysql_native_password(),
+      sha256_password: require_sha256_password()
+    };
+  }
+});
+
+// node_modules/mysql2/index.js
+var require_mysql2 = __commonJS({
+  "node_modules/mysql2/index.js"(exports2) {
+    "use strict";
+    var SqlString = require_lib();
+    var ConnectionConfig = require_connection_config();
+    var parserCache = require_parser_cache();
+    var Connection = require_connection3();
+    exports2.createConnection = require_create_connection();
+    exports2.connect = exports2.createConnection;
+    exports2.Connection = Connection;
+    exports2.ConnectionConfig = ConnectionConfig;
+    var Pool = require_pool3();
+    var PoolCluster = require_pool_cluster();
+    var createPool2 = require_create_pool();
+    var createPoolCluster = require_create_pool_cluster();
+    exports2.createPool = createPool2;
+    exports2.createPoolCluster = createPoolCluster;
+    exports2.createQuery = Connection.createQuery;
+    exports2.Pool = Pool;
+    exports2.PoolCluster = PoolCluster;
+    exports2.createServer = function(handler) {
+      const Server = require_server();
+      const s = new Server();
+      if (handler) {
+        s.on("connection", handler);
+      }
+      return s;
+    };
+    exports2.PoolConnection = require_pool_connection2();
+    exports2.authPlugins = require_auth_plugins();
+    exports2.escape = SqlString.escape;
+    exports2.escapeId = SqlString.escapeId;
+    exports2.format = SqlString.format;
+    exports2.raw = SqlString.raw;
+    exports2.__defineGetter__(
+      "createConnectionPromise",
+      () => require_promise().createConnection
+    );
+    exports2.__defineGetter__(
+      "createPoolPromise",
+      () => require_promise().createPool
+    );
+    exports2.__defineGetter__(
+      "createPoolClusterPromise",
+      () => require_promise().createPoolCluster
+    );
+    exports2.__defineGetter__("Types", () => require_types());
+    exports2.__defineGetter__(
+      "Charsets",
+      () => require_charsets()
+    );
+    exports2.__defineGetter__(
+      "CharsetToEncoding",
+      () => require_charset_encodings()
+    );
+    exports2.setMaxParserCache = function(max) {
+      parserCache.setMaxCache(max);
+    };
+    exports2.clearParserCache = function() {
+      parserCache.clearCache();
+    };
+  }
+});
+
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
-  database: () => database
+  database: () => database,
+  schemas: () => schemas
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -20499,9 +20616,9 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   const runtime = bindings ?? fallbackBindings;
   function callbackOperation(operation, callback, resource) {
     void operation.then((result) => callback?.(result)).catch((error) => {
-      const message = errorMessage(error);
-      console.error(`[qbxsql] query failed [${resource}]: ${message}`);
-      callback?.(null, message);
+      const message2 = errorMessage(error);
+      console.error(`[qbxsql] query failed [${resource}]: ${message2}`);
+      callback?.(null, message2);
     });
   }
   __name(callbackOperation, "callbackOperation");
@@ -20616,11 +20733,1084 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
 }
 __name(registerCompatibilityExports, "registerCompatibilityExports");
 
+// src/api/schema.ts
+function message(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+__name(message, "message");
+function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
+  const runtime = bindings ?? {
+    addExport() {
+    },
+    addProviderExport() {
+    },
+    invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
+  };
+  function resourceName2(explicit) {
+    return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
+  }
+  __name(resourceName2, "resourceName");
+  function operation(schema, dryRun, callback, explicitResource) {
+    const resource = resourceName2(explicitResource);
+    void manager.ensure(resource, schema, dryRun).then((result) => callback?.(result)).catch((error) => {
+      const errorMessage2 = message(error);
+      console.error(`[qbxsql] schema operation failed [${resource}]: ${errorMessage2}`);
+      callback?.(null, errorMessage2);
+    });
+  }
+  __name(operation, "operation");
+  const api = {
+    ensureSchema(schema, callback, explicitResource) {
+      operation(schema, false, callback, explicitResource);
+    },
+    planSchema(schema, callback, explicitResource) {
+      operation(schema, true, callback, explicitResource);
+    }
+  };
+  for (const [name, callback] of Object.entries(api)) {
+    runtime.addExport(name, callback);
+    runtime.addExport(
+      `${name}_async`,
+      (schema, explicitResource) => new Promise((resolve, reject) => {
+        callback(
+          schema,
+          (result, error) => {
+            if (error) reject(new Error(error));
+            else resolve(result);
+          },
+          explicitResource
+        );
+      })
+    );
+  }
+  return api;
+}
+__name(registerSchemaExports, "registerSchemaExports");
+
+// src/schema/introspect.ts
+function text(value) {
+  return value === null || value === void 0 ? "" : String(value);
+}
+__name(text, "text");
+function numberOrNull(value) {
+  if (value === null || value === void 0) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+__name(numberOrNull, "numberOrNull");
+async function introspectDatabase(database2) {
+  await database2.connect();
+  const schemaName = database2.driver.databaseName;
+  if (!schemaName) throw new Error("No database is selected in the connection string.");
+  const [tableRows, columnRows, indexRows, foreignKeyRows] = await Promise.all([
+    database2.query(
+      `SELECT TABLE_NAME AS tableName, ENGINE AS engine, TABLE_COLLATION AS collation
+       FROM INFORMATION_SCHEMA.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
+      [schemaName],
+      { invokingResource: "qbxsql:schema" }
+    ),
+    database2.query(
+      `SELECT TABLE_NAME AS tableName, COLUMN_NAME AS columnName, DATA_TYPE AS dataType,
+              COLUMN_TYPE AS columnType, IS_NULLABLE AS isNullable, COLUMN_DEFAULT AS defaultValue,
+              EXTRA AS extra, CHARACTER_MAXIMUM_LENGTH AS maximumLength,
+              NUMERIC_PRECISION AS numericPrecision, NUMERIC_SCALE AS numericScale,
+              COLUMN_COMMENT AS comment
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+       ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+      [schemaName],
+      { invokingResource: "qbxsql:schema" }
+    ),
+    database2.query(
+      `SELECT TABLE_NAME AS tableName, INDEX_NAME AS indexName, COLUMN_NAME AS columnName,
+              NON_UNIQUE AS nonUnique, SEQ_IN_INDEX AS sequenceNumber, INDEX_TYPE AS indexType
+       FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = ?
+       ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
+      [schemaName],
+      { invokingResource: "qbxsql:schema" }
+    ),
+    database2.query(
+      `SELECT k.TABLE_NAME AS tableName, k.CONSTRAINT_NAME AS constraintName,
+              k.COLUMN_NAME AS columnName, k.REFERENCED_TABLE_NAME AS referencedTable,
+              k.REFERENCED_COLUMN_NAME AS referencedColumn, k.ORDINAL_POSITION AS sequenceNumber,
+              r.DELETE_RULE AS deleteRule, r.UPDATE_RULE AS updateRule
+       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS r
+         ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+        AND r.TABLE_NAME = k.TABLE_NAME
+        AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+       WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
+       ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`,
+      [schemaName],
+      { invokingResource: "qbxsql:schema" }
+    )
+  ]);
+  const tables = /* @__PURE__ */ new Map();
+  for (const row of tableRows) {
+    const name = text(row.tableName);
+    tables.set(name, {
+      name,
+      engine: text(row.engine),
+      collation: row.collation === null ? null : text(row.collation),
+      columns: /* @__PURE__ */ new Map(),
+      indexes: /* @__PURE__ */ new Map(),
+      foreignKeys: /* @__PURE__ */ new Map()
+    });
+  }
+  for (const row of columnRows) {
+    const table = tables.get(text(row.tableName));
+    if (!table) continue;
+    const column = {
+      name: text(row.columnName),
+      type: text(row.dataType).toLowerCase(),
+      columnType: text(row.columnType).toLowerCase(),
+      nullable: text(row.isNullable) === "YES",
+      defaultValue: row.defaultValue,
+      extra: text(row.extra).toLowerCase(),
+      maximumLength: numberOrNull(row.maximumLength),
+      numericPrecision: numberOrNull(row.numericPrecision),
+      numericScale: numberOrNull(row.numericScale),
+      comment: text(row.comment)
+    };
+    table.columns.set(column.name, column);
+  }
+  for (const row of indexRows) {
+    const table = tables.get(text(row.tableName));
+    if (!table) continue;
+    const name = text(row.indexName);
+    let index = table.indexes.get(name);
+    if (!index) {
+      index = {
+        name,
+        columns: [],
+        unique: Number(row.nonUnique) === 0,
+        primary: name === "PRIMARY",
+        indexType: text(row.indexType).toUpperCase()
+      };
+      table.indexes.set(name, index);
+    }
+    index.columns.push(text(row.columnName));
+  }
+  for (const row of foreignKeyRows) {
+    const table = tables.get(text(row.tableName));
+    if (!table) continue;
+    const name = text(row.constraintName);
+    let foreignKey = table.foreignKeys.get(name);
+    if (!foreignKey) {
+      foreignKey = {
+        name,
+        columns: [],
+        referencedTable: text(row.referencedTable),
+        referencedColumns: [],
+        onDelete: text(row.deleteRule),
+        onUpdate: text(row.updateRule)
+      };
+      table.foreignKeys.set(name, foreignKey);
+    }
+    foreignKey.columns.push(text(row.columnName));
+    foreignKey.referencedColumns.push(text(row.referencedColumn));
+  }
+  return tables;
+}
+__name(introspectDatabase, "introspectDatabase");
+
+// src/schema/sql.ts
+var import_mysql2 = __toESM(require_mysql2(), 1);
+
+// src/schema/validate.ts
+var import_node_crypto = require("node:crypto");
+var identifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var columnTypes = /* @__PURE__ */ new Set([
+  "tinyint",
+  "smallint",
+  "mediumint",
+  "int",
+  "bigint",
+  "decimal",
+  "float",
+  "double",
+  "boolean",
+  "char",
+  "varchar",
+  "tinytext",
+  "text",
+  "mediumtext",
+  "longtext",
+  "binary",
+  "varbinary",
+  "tinyblob",
+  "blob",
+  "mediumblob",
+  "longblob",
+  "date",
+  "datetime",
+  "timestamp",
+  "time",
+  "year",
+  "json",
+  "enum"
+]);
+var integerTypes = /* @__PURE__ */ new Set(["tinyint", "smallint", "mediumint", "int", "bigint"]);
+var lengthTypes = /* @__PURE__ */ new Set(["char", "varchar", "binary", "varbinary"]);
+var expressionPattern = /^CURRENT_TIMESTAMP(?:\([0-6]\))?$/;
+function assertIdentifier(identifier, label = "identifier") {
+  if (!identifierPattern.test(identifier)) {
+    throw new Error(`Invalid ${label} '${identifier}'. Use letters, numbers, and underscores only.`);
+  }
+}
+__name(assertIdentifier, "assertIdentifier");
+function validateColumn(name, column) {
+  assertIdentifier(name, "column name");
+  if (!column || typeof column !== "object") throw new Error(`Column '${name}' must be an object.`);
+  if (!columnTypes.has(column.type)) throw new Error(`Column '${name}' has unsupported type '${column.type}'.`);
+  if (lengthTypes.has(column.type)) {
+    if (!Number.isInteger(column.length) || (column.length ?? 0) < 1 || (column.length ?? 0) > 65535) {
+      throw new Error(`Column '${name}' requires a length between 1 and 65535.`);
+    }
+  }
+  if (column.type === "decimal") {
+    if (!Number.isInteger(column.precision) || (column.precision ?? 0) < 1 || (column.precision ?? 0) > 65) {
+      throw new Error(`Decimal column '${name}' requires precision between 1 and 65.`);
+    }
+    if (!Number.isInteger(column.scale) || (column.scale ?? -1) < 0 || (column.scale ?? 0) > 30) {
+      throw new Error(`Decimal column '${name}' requires scale between 0 and 30.`);
+    }
+    if ((column.scale ?? 0) > (column.precision ?? 0)) {
+      throw new Error(`Decimal column '${name}' cannot have scale greater than precision.`);
+    }
+  }
+  if (column.type === "enum") {
+    if (!Array.isArray(column.values) || column.values.length === 0) {
+      throw new Error(`Enum column '${name}' requires at least one value.`);
+    }
+    if (new Set(column.values).size !== column.values.length) {
+      throw new Error(`Enum column '${name}' contains duplicate values.`);
+    }
+  }
+  if (column.unsigned && !integerTypes.has(column.type) && !["decimal", "float", "double"].includes(column.type)) {
+    throw new Error(`Column '${name}' cannot be unsigned because it is ${column.type}.`);
+  }
+  if (column.autoIncrement && !integerTypes.has(column.type)) {
+    throw new Error(`Auto-increment column '${name}' must use an integer type.`);
+  }
+  if (column.autoIncrement && column.nullable) {
+    throw new Error(`Auto-increment column '${name}' cannot be nullable.`);
+  }
+  if (column.default !== void 0 && column.defaultExpression !== void 0) {
+    throw new Error(`Column '${name}' cannot define both default and defaultExpression.`);
+  }
+  if (column.defaultExpression && !expressionPattern.test(column.defaultExpression)) {
+    throw new Error(`Column '${name}' has an unsafe default expression.`);
+  }
+  if (column.onUpdateCurrentTimestamp && !["datetime", "timestamp"].includes(column.type)) {
+    throw new Error(`Column '${name}' can only use onUpdateCurrentTimestamp with datetime or timestamp.`);
+  }
+}
+__name(validateColumn, "validateColumn");
+function validateIndex(tableName, table, index) {
+  assertIdentifier(index.name, "index name");
+  if (!Array.isArray(index.columns) || index.columns.length === 0) {
+    throw new Error(`Index '${index.name}' on '${tableName}' requires columns.`);
+  }
+  for (const column of index.columns) {
+    if (!table.columns[column]) throw new Error(`Index '${index.name}' references missing column '${column}'.`);
+  }
+  if (index.unique && index.fulltext) {
+    throw new Error(`Index '${index.name}' cannot be both unique and fulltext.`);
+  }
+}
+__name(validateIndex, "validateIndex");
+function validateForeignKey(tableName, table, foreignKey) {
+  assertIdentifier(foreignKey.name, "foreign key name");
+  assertIdentifier(foreignKey.references.table, "referenced table name");
+  if (!Array.isArray(foreignKey.columns) || foreignKey.columns.length === 0 || foreignKey.columns.length !== foreignKey.references.columns.length) {
+    throw new Error(`Foreign key '${foreignKey.name}' on '${tableName}' has mismatched columns.`);
+  }
+  for (const column of foreignKey.columns) {
+    if (!table.columns[column]) {
+      throw new Error(`Foreign key '${foreignKey.name}' references missing local column '${column}'.`);
+    }
+  }
+  for (const column of foreignKey.references.columns) assertIdentifier(column, "referenced column name");
+}
+__name(validateForeignKey, "validateForeignKey");
+function validateTable(name, table) {
+  assertIdentifier(name, "table name");
+  if (name.startsWith("qbxsql_")) throw new Error(`Table '${name}' uses qbxsql's reserved prefix.`);
+  if (!table || typeof table !== "object" || !table.columns || Object.keys(table.columns).length === 0) {
+    throw new Error(`Table '${name}' requires at least one column.`);
+  }
+  for (const [columnName, column] of Object.entries(table.columns)) validateColumn(columnName, column);
+  for (const column of table.primaryKey ?? []) {
+    if (!table.columns[column]) throw new Error(`Primary key on '${name}' references missing column '${column}'.`);
+  }
+  for (const [columnName, column] of Object.entries(table.columns)) {
+    if (column.primary && table.primaryKey && !table.primaryKey.includes(columnName)) {
+      throw new Error(`Column '${columnName}' conflicts with the table-level primary key.`);
+    }
+  }
+  for (const index of table.indexes ?? []) validateIndex(name, table, index);
+  for (const foreignKey of table.foreignKeys ?? []) validateForeignKey(name, table, foreignKey);
+  if (table.collation && !/^[A-Za-z0-9_]+$/.test(table.collation)) {
+    throw new Error(`Table '${name}' has an invalid collation.`);
+  }
+}
+__name(validateTable, "validateTable");
+function validateMigrationOperation(operation) {
+  switch (operation.type) {
+    case "renameTable":
+      assertIdentifier(operation.from, "source table name");
+      assertIdentifier(operation.to, "target table name");
+      break;
+    case "renameColumn":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.from, "source column name");
+      assertIdentifier(operation.to, "target column name");
+      break;
+    case "dropTable":
+      assertIdentifier(operation.table, "table name");
+      if (operation.allowDataLoss !== true) throw new Error("dropTable requires allowDataLoss=true.");
+      break;
+    case "dropColumn":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.column, "column name");
+      if (operation.allowDataLoss !== true) throw new Error("dropColumn requires allowDataLoss=true.");
+      break;
+    case "addColumn":
+    case "alterColumn":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.column, "column name");
+      validateColumn(operation.column, operation.definition);
+      break;
+    case "addIndex":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.definition.name, "index name");
+      for (const column of operation.definition.columns) assertIdentifier(column, "index column name");
+      break;
+    case "dropIndex":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.index, "index name");
+      break;
+    case "sql":
+      if (!operation.sql.trim()) throw new Error("Raw SQL migration cannot be empty.");
+      if (operation.allowDataLoss !== true) throw new Error("Raw SQL migration requires allowDataLoss=true.");
+      break;
+  }
+}
+__name(validateMigrationOperation, "validateMigrationOperation");
+function validateMigrations(migrations) {
+  let previousVersion = 0;
+  for (const migration of [...migrations].sort((a, b) => a.version - b.version)) {
+    if (!Number.isInteger(migration.version) || migration.version < 1) {
+      throw new Error("Migration versions must be positive integers.");
+    }
+    if (migration.version === previousVersion) throw new Error(`Duplicate migration version ${migration.version}.`);
+    if (!migration.name?.trim()) throw new Error(`Migration ${migration.version} requires a name.`);
+    if (!Array.isArray(migration.operations) || migration.operations.length === 0) {
+      throw new Error(`Migration ${migration.version} requires at least one operation.`);
+    }
+    for (const operation of migration.operations) validateMigrationOperation(operation);
+    previousVersion = migration.version;
+  }
+}
+__name(validateMigrations, "validateMigrations");
+function validateSchema(schema) {
+  if (!schema || typeof schema !== "object") throw new TypeError("Schema must be an object.");
+  if (!Number.isInteger(schema.version) || schema.version < 1) {
+    throw new Error("Schema version must be a positive integer.");
+  }
+  if (!schema.tables || typeof schema.tables !== "object") throw new Error("Schema requires a tables object.");
+  for (const [name, table] of Object.entries(schema.tables)) validateTable(name, table);
+  validateMigrations(schema.migrations ?? []);
+  if ((schema.migrations ?? []).some((migration) => migration.version > schema.version)) {
+    throw new Error("Migration version cannot exceed the schema version.");
+  }
+  return schema;
+}
+__name(validateSchema, "validateSchema");
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, stableValue(entry)])
+    );
+  }
+  return value;
+}
+__name(stableValue, "stableValue");
+function stableChecksum(value) {
+  return (0, import_node_crypto.createHash)("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+}
+__name(stableChecksum, "stableChecksum");
+function schemaChecksum(schema) {
+  return stableChecksum(schema);
+}
+__name(schemaChecksum, "schemaChecksum");
+
+// src/schema/sql.ts
+function quoteIdentifier(identifier) {
+  assertIdentifier(identifier);
+  return `\`${identifier}\``;
+}
+__name(quoteIdentifier, "quoteIdentifier");
+function sqlType(column) {
+  switch (column.type) {
+    case "boolean":
+      return "TINYINT(1)";
+    case "char":
+    case "varchar":
+    case "binary":
+    case "varbinary":
+      return `${column.type.toUpperCase()}(${column.length})`;
+    case "decimal":
+      return `DECIMAL(${column.precision},${column.scale})`;
+    case "enum":
+      return `ENUM(${column.values.map((value) => (0, import_mysql2.escape)(value)).join(", ")})`;
+    default:
+      return column.type.toUpperCase();
+  }
+}
+__name(sqlType, "sqlType");
+function columnSql(name, column) {
+  const parts = [quoteIdentifier(name), sqlType(column)];
+  if (column.unsigned) parts.push("UNSIGNED");
+  parts.push(column.nullable ? "NULL" : "NOT NULL");
+  if (column.defaultExpression !== void 0) parts.push(`DEFAULT ${column.defaultExpression}`);
+  else if (column.default !== void 0) {
+    if (column.default === null) parts.push("DEFAULT NULL");
+    else if (typeof column.default === "boolean") parts.push(`DEFAULT ${column.default ? 1 : 0}`);
+    else parts.push(`DEFAULT ${(0, import_mysql2.escape)(column.default)}`);
+  }
+  if (column.autoIncrement) parts.push("AUTO_INCREMENT");
+  if (column.onUpdateCurrentTimestamp) parts.push("ON UPDATE CURRENT_TIMESTAMP");
+  if (column.comment) parts.push(`COMMENT ${(0, import_mysql2.escape)(column.comment)}`);
+  return parts.join(" ");
+}
+__name(columnSql, "columnSql");
+function primaryColumns(table) {
+  const inline = Object.entries(table.columns).filter(([, column]) => column.primary).map(([name]) => name);
+  return table.primaryKey ?? inline;
+}
+__name(primaryColumns, "primaryColumns");
+function indexSql(index) {
+  const prefix = index.fulltext ? "FULLTEXT KEY" : index.unique ? "UNIQUE KEY" : "KEY";
+  return `${prefix} ${quoteIdentifier(index.name)} (${index.columns.map(quoteIdentifier).join(", ")})`;
+}
+__name(indexSql, "indexSql");
+function foreignKeySql(foreignKey) {
+  const parts = [
+    `CONSTRAINT ${quoteIdentifier(foreignKey.name)}`,
+    `FOREIGN KEY (${foreignKey.columns.map(quoteIdentifier).join(", ")})`,
+    `REFERENCES ${quoteIdentifier(foreignKey.references.table)} (${foreignKey.references.columns.map(quoteIdentifier).join(", ")})`
+  ];
+  if (foreignKey.onDelete) parts.push(`ON DELETE ${foreignKey.onDelete}`);
+  if (foreignKey.onUpdate) parts.push(`ON UPDATE ${foreignKey.onUpdate}`);
+  return parts.join(" ");
+}
+__name(foreignKeySql, "foreignKeySql");
+function createTableSql(name, table) {
+  const definitions = Object.entries(table.columns).map(
+    ([columnName, column]) => columnSql(columnName, column)
+  );
+  const primary = primaryColumns(table);
+  if (primary.length > 0) definitions.push(`PRIMARY KEY (${primary.map(quoteIdentifier).join(", ")})`);
+  for (const index of table.indexes ?? []) definitions.push(indexSql(index));
+  return `CREATE TABLE ${quoteIdentifier(name)} (
+  ${definitions.join(",\n  ")}
+) ENGINE=${table.engine ?? "InnoDB"} DEFAULT CHARSET=${table.charset ?? "utf8mb4"}${table.collation ? ` COLLATE=${table.collation}` : ""}`;
+}
+__name(createTableSql, "createTableSql");
+function addForeignKeySql(table, foreignKey) {
+  return `ALTER TABLE ${quoteIdentifier(table)} ADD ${foreignKeySql(foreignKey)}`;
+}
+__name(addForeignKeySql, "addForeignKeySql");
+function migrationOperationSql(operation) {
+  switch (operation.type) {
+    case "renameTable":
+      return `RENAME TABLE ${quoteIdentifier(operation.from)} TO ${quoteIdentifier(operation.to)}`;
+    case "renameColumn":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} RENAME COLUMN ${quoteIdentifier(operation.from)} TO ${quoteIdentifier(operation.to)}`;
+    case "dropTable":
+      return `DROP TABLE IF EXISTS ${quoteIdentifier(operation.table)}`;
+    case "dropColumn":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP COLUMN ${quoteIdentifier(operation.column)}`;
+    case "addColumn":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} ADD COLUMN ${columnSql(operation.column, operation.definition)}`;
+    case "alterColumn":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} MODIFY COLUMN ${columnSql(operation.column, operation.definition)}`;
+    case "addIndex":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} ADD ${indexSql(operation.definition)}`;
+    case "dropIndex":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP INDEX ${quoteIdentifier(operation.index)}`;
+    case "sql":
+      return operation.sql;
+  }
+}
+__name(migrationOperationSql, "migrationOperationSql");
+
+// src/schema/planner.ts
+function desiredPrimaryKey(table) {
+  return table.primaryKey ?? Object.entries(table.columns).filter(([, column]) => column.primary).map(([name]) => name);
+}
+__name(desiredPrimaryKey, "desiredPrimaryKey");
+function expectedType(column) {
+  return column.type === "boolean" ? "tinyint" : column.type;
+}
+__name(expectedType, "expectedType");
+function normalizedDefault(value) {
+  if (value === null || value === void 0) return null;
+  const normalized = String(value).toLowerCase().replace(/\(\)$/, "");
+  return normalized === "null" ? null : normalized;
+}
+__name(normalizedDefault, "normalizedDefault");
+function compareColumn(name, desired, actual) {
+  let changed = false;
+  let safe = true;
+  const reasons = [];
+  const targetType = expectedType(desired);
+  if (targetType !== actual.type) {
+    changed = true;
+    safe = false;
+    reasons.push(`type ${actual.type} -> ${targetType}`);
+  }
+  if (["char", "varchar", "binary", "varbinary"].includes(targetType)) {
+    const targetLength = desired.length ?? null;
+    if (targetLength !== actual.maximumLength) {
+      changed = true;
+      if (actual.maximumLength !== null && targetLength !== null && targetLength < actual.maximumLength) {
+        safe = false;
+      }
+      reasons.push(`length ${actual.maximumLength ?? "?"} -> ${targetLength ?? "?"}`);
+    }
+  }
+  if (targetType === "decimal") {
+    if (desired.precision !== actual.numericPrecision || desired.scale !== actual.numericScale) {
+      changed = true;
+      if ((desired.precision ?? 0) < (actual.numericPrecision ?? 0) || (desired.scale ?? 0) < (actual.numericScale ?? 0)) {
+        safe = false;
+      }
+      reasons.push(
+        `decimal(${actual.numericPrecision ?? "?"},${actual.numericScale ?? "?"}) -> decimal(${desired.precision},${desired.scale})`
+      );
+    }
+  }
+  const actualUnsigned = actual.columnType.includes("unsigned");
+  if (Boolean(desired.unsigned) !== actualUnsigned) {
+    changed = true;
+    safe = false;
+    reasons.push(desired.unsigned ? "make unsigned" : "remove unsigned");
+  }
+  if (Boolean(desired.nullable) !== actual.nullable) {
+    changed = true;
+    if (!desired.nullable) safe = false;
+    reasons.push(desired.nullable ? "allow NULL" : "disallow NULL");
+  }
+  const desiredAutoIncrement = Boolean(desired.autoIncrement);
+  const actualAutoIncrement = actual.extra.includes("auto_increment");
+  if (desiredAutoIncrement !== actualAutoIncrement) {
+    changed = true;
+    safe = false;
+    reasons.push(desiredAutoIncrement ? "add auto increment" : "remove auto increment");
+  }
+  const expectedDefault = desired.defaultExpression !== void 0 ? normalizedDefault(desired.defaultExpression) : desired.default !== void 0 ? normalizedDefault(typeof desired.default === "boolean" ? Number(desired.default) : desired.default) : null;
+  if (expectedDefault !== normalizedDefault(actual.defaultValue)) {
+    changed = true;
+    reasons.push("change default");
+  }
+  if ((desired.comment ?? "") !== actual.comment) {
+    changed = true;
+    reasons.push("change comment");
+  }
+  return { changed, safe, reasons: reasons.length > 0 ? reasons : [`change ${name}`] };
+}
+__name(compareColumn, "compareColumn");
+function sameColumns(left, right) {
+  return left.length === right.length && left.every((column, index) => column === right[index]);
+}
+__name(sameColumns, "sameColumns");
+function sameIndex(desired, actual) {
+  return sameColumns(desired.columns, actual.columns) && Boolean(desired.unique) === actual.unique && Boolean(desired.fulltext) === (actual.indexType === "FULLTEXT");
+}
+__name(sameIndex, "sameIndex");
+function sameForeignKey(desired, actual) {
+  return sameColumns(desired.columns, actual.columns) && desired.references.table === actual.referencedTable && sameColumns(desired.references.columns, actual.referencedColumns) && (desired.onDelete ?? "RESTRICT") === actual.onDelete && (desired.onUpdate ?? "RESTRICT") === actual.onUpdate;
+}
+__name(sameForeignKey, "sameForeignKey");
+function action(actions, value) {
+  actions.push(value);
+}
+__name(action, "action");
+function planSchema(resource, schema, actualTables) {
+  const actions = [];
+  const warnings = [];
+  const createdTables = /* @__PURE__ */ new Set();
+  for (const [tableName, table] of Object.entries(schema.tables)) {
+    const actual = actualTables.get(tableName);
+    if (!actual) {
+      createdTables.add(tableName);
+      action(actions, {
+        kind: "createTable",
+        table: tableName,
+        sql: createTableSql(tableName, table),
+        safe: true,
+        reason: `create missing table '${tableName}'`
+      });
+      continue;
+    }
+    for (const [columnName, column] of Object.entries(table.columns)) {
+      const actualColumn = actual.columns.get(columnName);
+      if (!actualColumn) {
+        const safe = Boolean(column.nullable) || column.default !== void 0 || column.defaultExpression !== void 0;
+        action(actions, {
+          kind: "addColumn",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${columnSql(columnName, column)}`,
+          safe,
+          reason: safe ? `add compatible column '${tableName}.${columnName}'` : `adding required column '${tableName}.${columnName}' needs an explicit backfill migration`
+        });
+        continue;
+      }
+      const change = compareColumn(columnName, column, actualColumn);
+      if (change.changed) {
+        action(actions, {
+          kind: "alterColumn",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} MODIFY COLUMN ${columnSql(columnName, column)}`,
+          safe: change.safe,
+          reason: `${tableName}.${columnName}: ${change.reasons.join(", ")}`
+        });
+      }
+    }
+    for (const columnName of actual.columns.keys()) {
+      if (!table.columns[columnName]) {
+        warnings.push(
+          `Table '${tableName}' contains unmanaged column '${columnName}'; qbxsql will not drop it automatically.`
+        );
+      }
+    }
+    const desiredPrimary = desiredPrimaryKey(table);
+    const actualPrimary = actual.indexes.get("PRIMARY")?.columns ?? [];
+    if (!sameColumns(desiredPrimary, actualPrimary)) {
+      const clauses = [];
+      if (actualPrimary.length > 0) clauses.push("DROP PRIMARY KEY");
+      if (desiredPrimary.length > 0) {
+        clauses.push(`ADD PRIMARY KEY (${desiredPrimary.map(quoteIdentifier).join(", ")})`);
+      }
+      if (clauses.length > 0) {
+        action(actions, {
+          kind: "alterPrimaryKey",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ${clauses.join(", ")}`,
+          safe: false,
+          reason: `changing the primary key on '${tableName}' requires an explicit migration`
+        });
+      }
+    }
+    for (const index of table.indexes ?? []) {
+      const actualIndex = actual.indexes.get(index.name);
+      if (!actualIndex) {
+        action(actions, {
+          kind: "addIndex",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} ADD ${indexSql(index)}`,
+          safe: !index.unique,
+          reason: index.unique ? `unique index '${index.name}' requires duplicate validation` : `add missing index '${index.name}'`
+        });
+      } else if (!sameIndex(index, actualIndex)) {
+        action(actions, {
+          kind: "replaceIndex",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP INDEX ${quoteIdentifier(index.name)}, ADD ${indexSql(index)}`,
+          safe: false,
+          reason: `changing index '${index.name}' requires an explicit migration`
+        });
+      }
+    }
+    for (const foreignKey of table.foreignKeys ?? []) {
+      const actualForeignKey = actual.foreignKeys.get(foreignKey.name);
+      if (!actualForeignKey) {
+        action(actions, {
+          kind: "addForeignKey",
+          table: tableName,
+          sql: addForeignKeySql(tableName, foreignKey),
+          safe: false,
+          reason: `foreign key '${foreignKey.name}' requires existing-row validation`
+        });
+      } else if (!sameForeignKey(foreignKey, actualForeignKey)) {
+        action(actions, {
+          kind: "replaceForeignKey",
+          table: tableName,
+          sql: `ALTER TABLE ${quoteIdentifier(tableName)} DROP FOREIGN KEY ${quoteIdentifier(foreignKey.name)}, ADD ${foreignKeySql(foreignKey)}`,
+          safe: false,
+          reason: `changing foreign key '${foreignKey.name}' requires an explicit migration`
+        });
+      }
+    }
+  }
+  for (const tableName of createdTables) {
+    for (const foreignKey of schema.tables[tableName]?.foreignKeys ?? []) {
+      action(actions, {
+        kind: "addForeignKey",
+        table: tableName,
+        sql: addForeignKeySql(tableName, foreignKey),
+        safe: true,
+        reason: `add foreign key '${foreignKey.name}' to new table '${tableName}'`
+      });
+    }
+  }
+  return { resource, version: schema.version, actions, warnings };
+}
+__name(planSchema, "planSchema");
+
+// src/schema/manager.ts
+var SchemaMigrationRequiredError = class extends Error {
+  constructor(plan) {
+    const blocked = plan.actions.filter((entry) => !entry.safe).map((entry) => entry.reason);
+    super(`Schema for '${plan.resource}' requires explicit migrations: ${blocked.join("; ")}`);
+    this.plan = plan;
+    this.name = "SchemaMigrationRequiredError";
+  }
+  plan;
+  static {
+    __name(this, "SchemaMigrationRequiredError");
+  }
+};
+function validateResourceName(resource) {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(resource)) {
+    throw new Error(`Invalid resource name '${resource}'.`);
+  }
+}
+__name(validateResourceName, "validateResourceName");
+function migrationActions(migrations) {
+  return migrations.flatMap(
+    (migration) => migration.operations.map((operation) => ({
+      kind: `migration:${operation.type}`,
+      sql: migrationOperationSql(operation),
+      safe: true,
+      reason: `migration ${migration.version} (${migration.name})`,
+      ..."table" in operation && typeof operation.table === "string" ? { table: operation.table } : {}
+    }))
+  );
+}
+__name(migrationActions, "migrationActions");
+var SchemaManager = class {
+  constructor(database2) {
+    this.database = database2;
+  }
+  database;
+  static {
+    __name(this, "SchemaManager");
+  }
+  initialization = null;
+  initialize() {
+    this.initialization ??= this.createMetadataTables();
+    return this.initialization;
+  }
+  async ensure(resource, input, dryRun = false) {
+    validateResourceName(resource);
+    const schema = validateSchema(input);
+    const checksum = schemaChecksum(schema);
+    await this.initialize();
+    const lock = await this.database.driver.acquire();
+    try {
+      await this.acquireLock(lock);
+      const registry = await this.readRegistry(resource);
+      if (registry && registry.version > schema.version) {
+        throw new Error(
+          `Refusing to downgrade '${resource}' from schema version ${registry.version} to ${schema.version}.`
+        );
+      }
+      await this.assertOwnership(resource, Object.keys(schema.tables));
+      const migrationRows = await this.readMigrationRows(resource);
+      this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
+      const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
+      let actual = await introspectDatabase(this.database);
+      let plan = planSchema(resource, schema, actual);
+      const managerWarnings = [];
+      if (registry && registry.version === schema.version && registry.checksum !== checksum) {
+        managerWarnings.push(
+          `Schema checksum changed without a version bump for '${resource}'; only safe changes will be reconciled.`
+        );
+      }
+      if (dryRun) {
+        return {
+          ...plan,
+          actions: [...migrationActions(pendingMigrations), ...plan.actions],
+          warnings: [...managerWarnings, ...plan.warnings],
+          checksum,
+          dryRun: true,
+          appliedActions: [],
+          appliedMigrations: []
+        };
+      }
+      const appliedMigrations = [];
+      for (const migration of pendingMigrations) {
+        const existing = migrationRows.get(migration.version);
+        if (existing?.status === "success") continue;
+        await this.applyMigration(resource, migration, existing, actual);
+        appliedMigrations.push(migration.version);
+        actual = await introspectDatabase(this.database);
+      }
+      plan = planSchema(resource, schema, actual);
+      const blocked = plan.actions.filter((entry) => !entry.safe);
+      if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
+      const appliedActions = [];
+      for (const schemaAction of plan.actions) {
+        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        appliedActions.push(schemaAction.sql);
+      }
+      const remaining = planSchema(resource, schema, await introspectDatabase(this.database));
+      if (remaining.actions.length > 0) {
+        throw new Error(
+          `Schema reconciliation for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join("; ")}`
+        );
+      }
+      await this.claimTables(resource, Object.keys(schema.tables));
+      await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
+      return {
+        ...plan,
+        warnings: [...managerWarnings, ...plan.warnings, ...remaining.warnings],
+        checksum,
+        dryRun: false,
+        appliedActions,
+        appliedMigrations
+      };
+    } finally {
+      try {
+        await lock.query(`SELECT RELEASE_LOCK('qbxsql:schema') AS released`);
+      } finally {
+        lock.release();
+      }
+    }
+  }
+  async createMetadataTables() {
+    await this.database.connect();
+    await this.database.query(
+      `CREATE TABLE IF NOT EXISTS qbxsql_schema_registry (
+        resource_name VARCHAR(100) NOT NULL PRIMARY KEY,
+        version INT UNSIGNED NOT NULL,
+        checksum CHAR(64) NOT NULL,
+        tables_json LONGTEXT NOT NULL,
+        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+    await this.database.query(
+      `CREATE TABLE IF NOT EXISTS qbxsql_schema_migrations (
+        resource_name VARCHAR(100) NOT NULL,
+        version INT UNSIGNED NOT NULL,
+        name VARCHAR(190) NOT NULL,
+        checksum CHAR(64) NOT NULL,
+        status VARCHAR(16) NOT NULL,
+        error TEXT NULL,
+        started_at TIMESTAMP(6) NULL,
+        applied_at TIMESTAMP(6) NULL,
+        PRIMARY KEY (resource_name, version)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+    await this.database.query(
+      `CREATE TABLE IF NOT EXISTS qbxsql_schema_tables (
+        table_name VARCHAR(64) NOT NULL PRIMARY KEY,
+        resource_name VARCHAR(100) NOT NULL,
+        claimed_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        KEY qbxsql_schema_tables_resource_idx (resource_name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+  }
+  async acquireLock(connection) {
+    const result = await connection.query(`SELECT GET_LOCK('qbxsql:schema', 30) AS acquired`);
+    const rows = result.rows;
+    if (Number(rows[0]?.acquired) !== 1) throw new Error("Timed out waiting for the qbxsql schema lock.");
+  }
+  async readRegistry(resource) {
+    const row = await this.database.single(
+      `SELECT resource_name AS resourceName, version, checksum, tables_json AS tablesJson
+       FROM qbxsql_schema_registry WHERE resource_name = ?`,
+      [resource],
+      { invokingResource: "qbxsql:schema" }
+    );
+    if (!row) return null;
+    return {
+      resourceName: String(row.resourceName),
+      version: Number(row.version),
+      checksum: String(row.checksum),
+      tablesJson: String(row.tablesJson)
+    };
+  }
+  async readMigrationRows(resource) {
+    const rows = await this.database.query(
+      `SELECT version, checksum, status FROM qbxsql_schema_migrations WHERE resource_name = ?`,
+      [resource],
+      { invokingResource: "qbxsql:schema" }
+    );
+    return new Map(
+      rows.map((row) => [
+        Number(row.version),
+        {
+          version: Number(row.version),
+          checksum: String(row.checksum),
+          status: String(row.status)
+        }
+      ])
+    );
+  }
+  assertMigrationChecksums(migrations, existing) {
+    for (const migration of migrations) {
+      const row = existing.get(migration.version);
+      if (row && row.checksum !== stableChecksum(migration)) {
+        throw new Error(
+          `Migration ${migration.version} was changed after it ran; create a new migration instead.`
+        );
+      }
+    }
+  }
+  async assertOwnership(resource, tableNames) {
+    if (tableNames.length === 0) return;
+    const rows = await this.database.query(
+      `SELECT table_name AS tableName, resource_name AS resourceName FROM qbxsql_schema_tables`,
+      [],
+      { invokingResource: "qbxsql:schema" }
+    );
+    const desired = new Set(tableNames);
+    for (const row of rows) {
+      const tableName = String(row.tableName);
+      if (desired.has(tableName) && String(row.resourceName) !== resource) {
+        throw new Error(
+          `Table '${tableName}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`
+        );
+      }
+    }
+  }
+  async applyMigration(resource, migration, existing, actual) {
+    const checksum = stableChecksum(migration);
+    if (existing?.status === "failed" && migration.operations.some((operation) => operation.type === "sql")) {
+      throw new Error(
+        `Migration ${migration.version} contains raw SQL and previously failed; inspect it before retrying.`
+      );
+    }
+    await this.database.update(
+      `INSERT INTO qbxsql_schema_migrations
+        (resource_name, version, name, checksum, status, error, started_at, applied_at)
+       VALUES (?, ?, ?, ?, 'running', NULL, CURRENT_TIMESTAMP(6), NULL)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), checksum = VALUES(checksum),
+         status = 'running', error = NULL, started_at = CURRENT_TIMESTAMP(6), applied_at = NULL`,
+      [resource, migration.version, migration.name, checksum],
+      { invokingResource: resource }
+    );
+    try {
+      for (const operation of migration.operations) {
+        if (await this.operationNeeded(operation, actual)) {
+          await this.database.query(migrationOperationSql(operation), [], { invokingResource: resource });
+          actual = await introspectDatabase(this.database);
+        }
+      }
+      await this.database.update(
+        `UPDATE qbxsql_schema_migrations
+         SET status = 'success', error = NULL, applied_at = CURRENT_TIMESTAMP(6)
+         WHERE resource_name = ? AND version = ?`,
+        [resource, migration.version],
+        { invokingResource: resource }
+      );
+    } catch (error) {
+      const message2 = error instanceof Error ? error.message : String(error);
+      await this.database.update(
+        `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
+         WHERE resource_name = ? AND version = ?`,
+        [message2.slice(0, 65535), resource, migration.version],
+        { invokingResource: resource }
+      );
+      throw error;
+    }
+  }
+  async operationNeeded(operation, actual) {
+    switch (operation.type) {
+      case "renameTable": {
+        const source = actual.has(operation.from);
+        const target = actual.has(operation.to);
+        if (!source && target) return false;
+        if (!source) throw new Error(`Cannot rename missing table '${operation.from}'.`);
+        if (target) throw new Error(`Cannot rename '${operation.from}' because '${operation.to}' exists.`);
+        return true;
+      }
+      case "renameColumn": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot rename a column on missing table '${operation.table}'.`);
+        const source = table.columns.has(operation.from);
+        const target = table.columns.has(operation.to);
+        if (!source && target) return false;
+        if (!source) throw new Error(`Cannot rename missing column '${operation.table}.${operation.from}'.`);
+        if (target) throw new Error(`Target column '${operation.table}.${operation.to}' already exists.`);
+        return true;
+      }
+      case "dropTable":
+        return actual.has(operation.table);
+      case "dropColumn":
+        return actual.get(operation.table)?.columns.has(operation.column) ?? false;
+      case "addColumn": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot add a column to missing table '${operation.table}'.`);
+        return !table.columns.has(operation.column);
+      }
+      case "alterColumn": {
+        const column = actual.get(operation.table)?.columns.get(operation.column);
+        if (!column) throw new Error(`Cannot alter missing column '${operation.table}.${operation.column}'.`);
+        const comparison = compareColumn(operation.column, operation.definition, column);
+        if (!comparison.changed) return false;
+        if (!comparison.safe && operation.allowDataLoss !== true) {
+          throw new Error(
+            `Alter of '${operation.table}.${operation.column}' may lose data; set allowDataLoss=true.`
+          );
+        }
+        return true;
+      }
+      case "addIndex": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot add an index to missing table '${operation.table}'.`);
+        return !table.indexes.has(operation.definition.name);
+      }
+      case "dropIndex":
+        return actual.get(operation.table)?.indexes.has(operation.index) ?? false;
+      case "sql":
+        return true;
+    }
+  }
+  async claimTables(resource, tableNames) {
+    for (const tableName of tableNames) {
+      await this.database.update(
+        `INSERT INTO qbxsql_schema_tables (table_name, resource_name)
+         VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE resource_name = VALUES(resource_name)`,
+        [tableName, resource],
+        { invokingResource: "qbxsql:schema" }
+      );
+    }
+  }
+  async writeRegistry(resource, version, checksum, tableNames) {
+    await this.database.update(
+      `INSERT INTO qbxsql_schema_registry (resource_name, version, checksum, tables_json)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE version = VALUES(version), checksum = VALUES(checksum),
+         tables_json = VALUES(tables_json), updated_at = CURRENT_TIMESTAMP(6)`,
+      [resource, version, checksum, JSON.stringify(tableNames)],
+      { invokingResource: "qbxsql:schema" }
+    );
+  }
+};
+
 // src/index.ts
 var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
 var config = loadConfig();
 var database = new DatabaseService(new MySqlDriver(config), config);
+var schemas = new SchemaManager(database);
 registerCompatibilityExports(database);
+registerSchemaExports(schemas);
 void database.connect().then(() => {
   const driver = database.driver;
   console.log(
@@ -20636,7 +21826,8 @@ if (typeof on === "function") {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  database
+  database,
+  schemas
 });
 /*! Bundled license information:
 
