@@ -41,6 +41,16 @@ CreateThread(function()
             'INSERT INTO qbxsql_contract_values (value, enabled, payload) VALUES (?, ?, ?)',
             { 22, false, nil }
         )
+        local zeroInsert = awaitCall(
+            'insert',
+            'INSERT IGNORE INTO qbxsql_contract_values (id, value, enabled) VALUES (?, ?, ?)',
+            { firstId, 99, true }
+        )
+        local zeroPreparedInsert = awaitCall(
+            'prepare',
+            'INSERT IGNORE INTO qbxsql_contract_values (id, value, enabled) VALUES (?, ?, ?)',
+            { firstId, 100, true }
+        )
 
         return {
             query = awaitCall(
@@ -53,6 +63,8 @@ CreateThread(function()
                 { firstId }
             ),
             scalar = awaitCall('scalar', 'SELECT 42 AS value'),
+            zeroInsert = zeroInsert,
+            zeroPreparedInsert = zeroPreparedInsert,
             prepareOne = awaitCall('prepare', 'SELECT 43 AS value'),
             prepareMany = awaitCall(
                 'prepare',

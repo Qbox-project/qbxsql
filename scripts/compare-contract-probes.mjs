@@ -19,6 +19,8 @@ async function probe(name, expectedProvider) {
     'query',
     'single',
     'scalar',
+    'zeroInsert',
+    'zeroPreparedInsert',
     'prepareOne',
     'prepareMany',
     'prepareBatch',
