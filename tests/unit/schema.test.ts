@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { columnSql, createTableSql, migrationOperationSql } from '../../src/schema/sql.js';
+import {
+  columnSql,
+  createTableSql,
+  migrationOperationSql,
+  onlineMigrationOperationSql,
+} from '../../src/schema/sql.js';
+import { migrationActions } from '../../src/schema/manager.js';
 import { schemaChecksum, validateSchema } from '../../src/schema/validate.js';
 import type { ResourceSchema } from '../../src/schema/types.js';
 
@@ -76,5 +82,63 @@ describe('schema validation and SQL generation', () => {
         allowDataLoss: true,
       }),
     ).toBe('ALTER TABLE `properties` DROP COLUMN `legacy`');
+  });
+
+  test('generates structured constraint and table-option migrations', () => {
+    expect(
+      migrationOperationSql({
+        type: 'addForeignKey',
+        table: 'properties',
+        definition: {
+          name: 'properties_owner_fk',
+          columns: ['owner_id'],
+          references: { table: 'players', columns: ['id'] },
+        },
+      }),
+    ).toContain('ADD CONSTRAINT `properties_owner_fk`');
+    expect(
+      migrationOperationSql({ type: 'setPrimaryKey', table: 'properties', columns: ['id'] }),
+    ).toContain('DROP PRIMARY KEY, ADD PRIMARY KEY (`id`)');
+    expect(
+      migrationOperationSql({
+        type: 'setTableOptions',
+        table: 'properties',
+        engine: 'InnoDB',
+        charset: 'utf8mb4',
+      }),
+    ).toContain('ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4');
+    expect(
+      onlineMigrationOperationSql({
+        type: 'addIndex',
+        table: 'properties',
+        definition: { name: 'properties_owner_idx', columns: ['owner_id'] },
+      }),
+    ).toContain('ALGORITHM=INPLACE, LOCK=NONE');
+  });
+
+  test('requires both migration and operator approval for opaque DDL', () => {
+    const migration = {
+      version: 2,
+      name: 'opaque ddl',
+      allowBlocking: true,
+      operations: [
+        {
+          type: 'sql' as const,
+          sql: 'OPTIMIZE TABLE `properties`',
+          allowDataLoss: true as const,
+        },
+      ],
+    };
+
+    expect(migrationActions([migration], false)[0]).toMatchObject({
+      automatic: false,
+      onlineSafe: false,
+      algorithm: 'MANUAL',
+    });
+    expect(migrationActions([migration], true)[0]).toMatchObject({
+      automatic: true,
+      onlineSafe: false,
+      algorithm: 'MANUAL',
+    });
   });
 });

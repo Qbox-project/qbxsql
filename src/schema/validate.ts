@@ -196,6 +196,51 @@ function validateMigrationOperation(operation: MigrationOperation): void {
       assertIdentifier(operation.table, 'table name');
       assertIdentifier(operation.index, 'index name');
       break;
+    case 'addForeignKey':
+      assertIdentifier(operation.table, 'table name');
+      assertIdentifier(operation.definition.name, 'foreign key name');
+      assertIdentifier(operation.definition.references.table, 'referenced table name');
+      if (
+        !Array.isArray(operation.definition.columns) ||
+        operation.definition.columns.length === 0 ||
+        operation.definition.columns.length !== operation.definition.references.columns.length
+      ) {
+        throw new Error(`Foreign key '${operation.definition.name}' has mismatched columns.`);
+      }
+      for (const column of operation.definition.columns) assertIdentifier(column, 'foreign key column');
+      for (const column of operation.definition.references.columns) {
+        assertIdentifier(column, 'referenced column name');
+      }
+      break;
+    case 'dropForeignKey':
+      assertIdentifier(operation.table, 'table name');
+      assertIdentifier(operation.foreignKey, 'foreign key name');
+      break;
+    case 'setPrimaryKey':
+      assertIdentifier(operation.table, 'table name');
+      if (!Array.isArray(operation.columns) || operation.columns.length === 0) {
+        throw new Error('setPrimaryKey requires at least one column.');
+      }
+      for (const column of operation.columns) assertIdentifier(column, 'primary key column');
+      break;
+    case 'dropPrimaryKey':
+      assertIdentifier(operation.table, 'table name');
+      break;
+    case 'setTableOptions':
+      assertIdentifier(operation.table, 'table name');
+      if (!operation.engine && !operation.charset && !operation.collation) {
+        throw new Error('setTableOptions requires engine, charset, or collation.');
+      }
+      if (operation.collation && !/^[A-Za-z0-9_]+$/.test(operation.collation)) {
+        throw new Error('setTableOptions has an invalid collation.');
+      }
+      break;
+    case 'releaseTable':
+      assertIdentifier(operation.table, 'table name');
+      if (operation.allowOwnershipTransfer !== true) {
+        throw new Error('releaseTable requires allowOwnershipTransfer=true.');
+      }
+      break;
     case 'sql':
       if (!operation.sql.trim()) throw new Error('Raw SQL migration cannot be empty.');
       if (operation.allowDataLoss !== true) throw new Error('Raw SQL migration requires allowDataLoss=true.');
@@ -211,6 +256,9 @@ function validateMigrations(migrations: MigrationDefinition[]): void {
     }
     if (migration.version === previousVersion) throw new Error(`Duplicate migration version ${migration.version}.`);
     if (!migration.name?.trim()) throw new Error(`Migration ${migration.version} requires a name.`);
+    if (migration.allowBlocking !== undefined && typeof migration.allowBlocking !== 'boolean') {
+      throw new Error(`Migration ${migration.version} allowBlocking must be a boolean.`);
+    }
     if (!Array.isArray(migration.operations) || migration.operations.length === 0) {
       throw new Error(`Migration ${migration.version} requires at least one operation.`);
     }

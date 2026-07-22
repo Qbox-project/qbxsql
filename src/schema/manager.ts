@@ -2,7 +2,7 @@ import type { DatabaseConnection } from '../core/types.js';
 import type { DatabaseService } from '../core/database.js';
 import { introspectDatabase } from './introspect.js';
 import { capabilitiesForVersion, compareColumn, planSchema } from './planner.js';
-import { migrationOperationSql } from './sql.js';
+import { migrationOperationSql, onlineMigrationOperationSql } from './sql.js';
 import type {
   ActualTable,
   MigrationDefinition,
@@ -62,22 +62,58 @@ function validateResourceName(resource: string): void {
   }
 }
 
-function migrationActions(migrations: MigrationDefinition[]): SchemaAction[] {
+function operationAlgorithm(operation: MigrationOperation): SchemaAction['algorithm'] {
+  switch (operation.type) {
+    case 'addColumn':
+    case 'dropColumn':
+      return 'INSTANT';
+    case 'renameColumn':
+    case 'alterColumn':
+    case 'addIndex':
+    case 'dropIndex':
+    case 'addForeignKey':
+    case 'dropForeignKey':
+    case 'setPrimaryKey':
+    case 'dropPrimaryKey':
+      return 'INPLACE';
+    default:
+      return 'MANUAL';
+  }
+}
+
+function requiresBlockingAuthorization(operation: MigrationOperation): boolean {
+  return operation.type === 'sql' || operation.type === 'setTableOptions';
+}
+
+export function migrationActions(
+  migrations: MigrationDefinition[],
+  operatorAllowsBlocking: boolean,
+): SchemaAction[] {
   return migrations.flatMap((migration) =>
-    migration.operations.map((operation) => ({
-      kind: `migration:${operation.type}`,
-      sql: migrationOperationSql(operation),
-      safe: true,
-      dataSafe: true,
-      onlineSafe: true,
-      automatic: true,
-      risk: 'medium' as const,
-      algorithm: 'MANUAL' as const,
-      reason: `migration ${migration.version} (${migration.name})`,
-      ...('table' in operation && typeof operation.table === 'string'
-        ? { table: operation.table }
-        : {}),
-    })),
+    migration.operations.map((operation) => {
+      const blockingAllowed = migration.allowBlocking === true && operatorAllowsBlocking;
+      const requiresBlocking = requiresBlockingAuthorization(operation);
+      const algorithm = blockingAllowed ? 'MANUAL' : operationAlgorithm(operation);
+      return {
+        kind: `migration:${operation.type}`,
+        sql: blockingAllowed
+          ? migrationOperationSql(operation)
+          : onlineMigrationOperationSql(operation),
+        safe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
+        dataSafe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
+        onlineSafe: !blockingAllowed && !requiresBlocking,
+        automatic: !requiresBlocking || blockingAllowed,
+        risk: requiresBlocking || 'allowDataLoss' in operation ? ('high' as const) : ('medium' as const),
+        algorithm,
+        reason:
+          requiresBlocking && !blockingAllowed
+            ? `migration ${migration.version} (${migration.name}) requires both allowBlocking=true and qbxsql_schema_allow_blocking=true`
+            : `migration ${migration.version} (${migration.name})`,
+        ...('table' in operation && typeof operation.table === 'string'
+          ? { table: operation.table }
+          : {}),
+      };
+    }),
   );
 }
 
@@ -221,12 +257,25 @@ export class SchemaManager {
     const schema = validateSchema(input);
     const checksum = schemaChecksum(schema);
     const actual = await introspectDatabase(this.database);
-    const plan = planSchema(
+    let plan = planSchema(
       resource,
       schema,
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion),
     );
+    const metadataReady = await this.metadataTablesExist();
+    if (metadataReady) {
+      const registry = await this.readRegistry(resource);
+      const pendingMigrations = registry
+        ? (schema.migrations ?? [])
+            .filter((migration) => migration.version > registry.version && migration.version <= schema.version)
+            .sort((left, right) => left.version - right.version)
+        : [];
+      plan = {
+        ...plan,
+        actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...plan.actions],
+      };
+    }
     return {
       ...plan,
       checksum,
@@ -273,6 +322,22 @@ export class SchemaManager {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       [],
       { invokingResource: 'qbxsql:schema' },
+    );
+  }
+
+  private async metadataTablesExist(): Promise<boolean> {
+    await this.database.connect();
+    const schemaName = this.database.driver.databaseName;
+    if (!schemaName) return false;
+    return (
+      Number(
+        await this.database.scalar(
+          `SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'qbxsql_schema_registry'`,
+          [schemaName],
+          { invokingResource: 'qbxsql:schema' },
+        ),
+      ) === 1
     );
   }
 
@@ -355,6 +420,13 @@ export class SchemaManager {
     actual: Map<string, ActualTable>,
   ): Promise<void> {
     const checksum = stableChecksum(migration);
+    const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
+    const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+    if (blockedOperation && !blockingAllowed) {
+      throw new Error(
+        `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`,
+      );
+    }
     if (existing?.status === 'failed' && migration.operations.some((operation) => operation.type === 'sql')) {
       throw new Error(
         `Migration ${migration.version} contains raw SQL and previously failed; inspect it before retrying.`,
@@ -374,7 +446,14 @@ export class SchemaManager {
     try {
       for (const operation of migration.operations) {
         if (await this.operationNeeded(operation, actual)) {
-          await this.database.query(migrationOperationSql(operation), [], { invokingResource: resource });
+          if (operation.type === 'releaseTable') {
+            await this.releaseTable(resource, operation.table);
+          } else {
+            const sql = blockingAllowed
+              ? migrationOperationSql(operation)
+              : onlineMigrationOperationSql(operation);
+            await this.database.query(sql, [], { invokingResource: resource });
+          }
           actual = await introspectDatabase(this.database);
         }
       }
@@ -448,6 +527,35 @@ export class SchemaManager {
       }
       case 'dropIndex':
         return actual.get(operation.table)?.indexes.has(operation.index) ?? false;
+      case 'addForeignKey': {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot add a foreign key to missing table '${operation.table}'.`);
+        return !table.foreignKeys.has(operation.definition.name);
+      }
+      case 'dropForeignKey':
+        return actual.get(operation.table)?.foreignKeys.has(operation.foreignKey) ?? false;
+      case 'setPrimaryKey': {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot set a primary key on missing table '${operation.table}'.`);
+        const existing = table.indexes.get('PRIMARY')?.columns ?? [];
+        return (
+          existing.length !== operation.columns.length ||
+          existing.some((column, index) => column !== operation.columns[index])
+        );
+      }
+      case 'dropPrimaryKey':
+        return actual.get(operation.table)?.indexes.has('PRIMARY') ?? false;
+      case 'setTableOptions': {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot alter options on missing table '${operation.table}'.`);
+        return (
+          (operation.engine !== undefined && table.engine !== operation.engine) ||
+          (operation.charset !== undefined && table.charset !== operation.charset) ||
+          (operation.collation !== undefined && table.collation !== operation.collation)
+        );
+      }
+      case 'releaseTable':
+        return true;
       case 'sql':
         return true;
     }
@@ -462,6 +570,17 @@ export class SchemaManager {
         [tableName, resource],
         { invokingResource: 'qbxsql:schema' },
       );
+    }
+  }
+
+  private async releaseTable(resource: string, tableName: string): Promise<void> {
+    const affected = await this.database.update(
+      `DELETE FROM qbxsql_schema_tables WHERE table_name = ? AND resource_name = ?`,
+      [tableName, resource],
+      { invokingResource: 'qbxsql:schema' },
+    );
+    if (affected !== 1) {
+      throw new Error(`Cannot release table '${tableName}' because it is not owned by '${resource}'.`);
     }
   }
 

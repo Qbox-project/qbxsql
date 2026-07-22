@@ -21689,6 +21689,47 @@ function validateMigrationOperation(operation) {
       assertIdentifier(operation.table, "table name");
       assertIdentifier(operation.index, "index name");
       break;
+    case "addForeignKey":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.definition.name, "foreign key name");
+      assertIdentifier(operation.definition.references.table, "referenced table name");
+      if (!Array.isArray(operation.definition.columns) || operation.definition.columns.length === 0 || operation.definition.columns.length !== operation.definition.references.columns.length) {
+        throw new Error(`Foreign key '${operation.definition.name}' has mismatched columns.`);
+      }
+      for (const column of operation.definition.columns) assertIdentifier(column, "foreign key column");
+      for (const column of operation.definition.references.columns) {
+        assertIdentifier(column, "referenced column name");
+      }
+      break;
+    case "dropForeignKey":
+      assertIdentifier(operation.table, "table name");
+      assertIdentifier(operation.foreignKey, "foreign key name");
+      break;
+    case "setPrimaryKey":
+      assertIdentifier(operation.table, "table name");
+      if (!Array.isArray(operation.columns) || operation.columns.length === 0) {
+        throw new Error("setPrimaryKey requires at least one column.");
+      }
+      for (const column of operation.columns) assertIdentifier(column, "primary key column");
+      break;
+    case "dropPrimaryKey":
+      assertIdentifier(operation.table, "table name");
+      break;
+    case "setTableOptions":
+      assertIdentifier(operation.table, "table name");
+      if (!operation.engine && !operation.charset && !operation.collation) {
+        throw new Error("setTableOptions requires engine, charset, or collation.");
+      }
+      if (operation.collation && !/^[A-Za-z0-9_]+$/.test(operation.collation)) {
+        throw new Error("setTableOptions has an invalid collation.");
+      }
+      break;
+    case "releaseTable":
+      assertIdentifier(operation.table, "table name");
+      if (operation.allowOwnershipTransfer !== true) {
+        throw new Error("releaseTable requires allowOwnershipTransfer=true.");
+      }
+      break;
     case "sql":
       if (!operation.sql.trim()) throw new Error("Raw SQL migration cannot be empty.");
       if (operation.allowDataLoss !== true) throw new Error("Raw SQL migration requires allowDataLoss=true.");
@@ -21704,6 +21745,9 @@ function validateMigrations(migrations) {
     }
     if (migration.version === previousVersion) throw new Error(`Duplicate migration version ${migration.version}.`);
     if (!migration.name?.trim()) throw new Error(`Migration ${migration.version} requires a name.`);
+    if (migration.allowBlocking !== void 0 && typeof migration.allowBlocking !== "boolean") {
+      throw new Error(`Migration ${migration.version} allowBlocking must be a boolean.`);
+    }
     if (!Array.isArray(migration.operations) || migration.operations.length === 0) {
       throw new Error(`Migration ${migration.version} requires at least one operation.`);
     }
@@ -21843,11 +21887,48 @@ function migrationOperationSql(operation) {
       return `ALTER TABLE ${quoteIdentifier(operation.table)} ADD ${indexSql(operation.definition)}`;
     case "dropIndex":
       return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP INDEX ${quoteIdentifier(operation.index)}`;
+    case "addForeignKey":
+      return addForeignKeySql(operation.table, operation.definition);
+    case "dropForeignKey":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP FOREIGN KEY ${quoteIdentifier(operation.foreignKey)}`;
+    case "setPrimaryKey":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP PRIMARY KEY, ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(", ")})`;
+    case "dropPrimaryKey":
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP PRIMARY KEY`;
+    case "setTableOptions": {
+      const options = [];
+      if (operation.engine) options.push(`ENGINE=${operation.engine}`);
+      if (operation.charset) options.push(`DEFAULT CHARACTER SET=${operation.charset}`);
+      if (operation.collation) options.push(`COLLATE=${operation.collation}`);
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} ${options.join(" ")}`;
+    }
+    case "releaseTable":
+      return `-- release qbxsql ownership of ${quoteIdentifier(operation.table)}`;
     case "sql":
       return operation.sql;
   }
 }
 __name(migrationOperationSql, "migrationOperationSql");
+function onlineMigrationOperationSql(operation) {
+  const sql = migrationOperationSql(operation);
+  switch (operation.type) {
+    case "addColumn":
+    case "dropColumn":
+      return `${sql}, ALGORITHM=INSTANT, LOCK=NONE`;
+    case "renameColumn":
+    case "alterColumn":
+    case "addIndex":
+    case "dropIndex":
+    case "addForeignKey":
+    case "dropForeignKey":
+    case "setPrimaryKey":
+    case "dropPrimaryKey":
+      return `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+    default:
+      return sql;
+  }
+}
+__name(onlineMigrationOperationSql, "onlineMigrationOperationSql");
 
 // src/schema/planner.ts
 var currentCapabilities = {
@@ -22290,6 +22371,51 @@ function validateResourceName(resource) {
   }
 }
 __name(validateResourceName, "validateResourceName");
+function operationAlgorithm(operation) {
+  switch (operation.type) {
+    case "addColumn":
+    case "dropColumn":
+      return "INSTANT";
+    case "renameColumn":
+    case "alterColumn":
+    case "addIndex":
+    case "dropIndex":
+    case "addForeignKey":
+    case "dropForeignKey":
+    case "setPrimaryKey":
+    case "dropPrimaryKey":
+      return "INPLACE";
+    default:
+      return "MANUAL";
+  }
+}
+__name(operationAlgorithm, "operationAlgorithm");
+function requiresBlockingAuthorization(operation) {
+  return operation.type === "sql" || operation.type === "setTableOptions";
+}
+__name(requiresBlockingAuthorization, "requiresBlockingAuthorization");
+function migrationActions(migrations, operatorAllowsBlocking) {
+  return migrations.flatMap(
+    (migration) => migration.operations.map((operation) => {
+      const blockingAllowed = migration.allowBlocking === true && operatorAllowsBlocking;
+      const requiresBlocking = requiresBlockingAuthorization(operation);
+      const algorithm = blockingAllowed ? "MANUAL" : operationAlgorithm(operation);
+      return {
+        kind: `migration:${operation.type}`,
+        sql: blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation),
+        safe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
+        dataSafe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
+        onlineSafe: !blockingAllowed && !requiresBlocking,
+        automatic: !requiresBlocking || blockingAllowed,
+        risk: requiresBlocking || "allowDataLoss" in operation ? "high" : "medium",
+        algorithm,
+        reason: requiresBlocking && !blockingAllowed ? `migration ${migration.version} (${migration.name}) requires both allowBlocking=true and qbxsql_schema_allow_blocking=true` : `migration ${migration.version} (${migration.name})`,
+        ..."table" in operation && typeof operation.table === "string" ? { table: operation.table } : {}
+      };
+    })
+  );
+}
+__name(migrationActions, "migrationActions");
 var SchemaManager = class {
   constructor(database2, options = {}) {
     this.database = database2;
@@ -22406,12 +22532,21 @@ var SchemaManager = class {
     const schema = validateSchema(input);
     const checksum = schemaChecksum(schema);
     const actual = await introspectDatabase(this.database);
-    const plan = planSchema(
+    let plan = planSchema(
       resource,
       schema,
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion)
     );
+    const metadataReady = await this.metadataTablesExist();
+    if (metadataReady) {
+      const registry = await this.readRegistry(resource);
+      const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
+      plan = {
+        ...plan,
+        actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...plan.actions]
+      };
+    }
     return {
       ...plan,
       checksum,
@@ -22458,6 +22593,19 @@ var SchemaManager = class {
       [],
       { invokingResource: "qbxsql:schema" }
     );
+  }
+  async metadataTablesExist() {
+    await this.database.connect();
+    const schemaName = this.database.driver.databaseName;
+    if (!schemaName) return false;
+    return Number(
+      await this.database.scalar(
+        `SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+           WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'qbxsql_schema_registry'`,
+        [schemaName],
+        { invokingResource: "qbxsql:schema" }
+      )
+    ) === 1;
   }
   async acquireLock(connection) {
     const result = await connection.query(`SELECT GET_LOCK('qbxsql:schema', 30) AS acquired`);
@@ -22525,6 +22673,13 @@ var SchemaManager = class {
   }
   async applyMigration(resource, migration, existing, actual) {
     const checksum = stableChecksum(migration);
+    const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
+    const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+    if (blockedOperation && !blockingAllowed) {
+      throw new Error(
+        `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`
+      );
+    }
     if (existing?.status === "failed" && migration.operations.some((operation) => operation.type === "sql")) {
       throw new Error(
         `Migration ${migration.version} contains raw SQL and previously failed; inspect it before retrying.`
@@ -22542,7 +22697,12 @@ var SchemaManager = class {
     try {
       for (const operation of migration.operations) {
         if (await this.operationNeeded(operation, actual)) {
-          await this.database.query(migrationOperationSql(operation), [], { invokingResource: resource });
+          if (operation.type === "releaseTable") {
+            await this.releaseTable(resource, operation.table);
+          } else {
+            const sql = blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation);
+            await this.database.query(sql, [], { invokingResource: resource });
+          }
           actual = await introspectDatabase(this.database);
         }
       }
@@ -22612,6 +22772,28 @@ var SchemaManager = class {
       }
       case "dropIndex":
         return actual.get(operation.table)?.indexes.has(operation.index) ?? false;
+      case "addForeignKey": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot add a foreign key to missing table '${operation.table}'.`);
+        return !table.foreignKeys.has(operation.definition.name);
+      }
+      case "dropForeignKey":
+        return actual.get(operation.table)?.foreignKeys.has(operation.foreignKey) ?? false;
+      case "setPrimaryKey": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot set a primary key on missing table '${operation.table}'.`);
+        const existing = table.indexes.get("PRIMARY")?.columns ?? [];
+        return existing.length !== operation.columns.length || existing.some((column, index) => column !== operation.columns[index]);
+      }
+      case "dropPrimaryKey":
+        return actual.get(operation.table)?.indexes.has("PRIMARY") ?? false;
+      case "setTableOptions": {
+        const table = actual.get(operation.table);
+        if (!table) throw new Error(`Cannot alter options on missing table '${operation.table}'.`);
+        return operation.engine !== void 0 && table.engine !== operation.engine || operation.charset !== void 0 && table.charset !== operation.charset || operation.collation !== void 0 && table.collation !== operation.collation;
+      }
+      case "releaseTable":
+        return true;
       case "sql":
         return true;
     }
@@ -22625,6 +22807,16 @@ var SchemaManager = class {
         [tableName, resource],
         { invokingResource: "qbxsql:schema" }
       );
+    }
+  }
+  async releaseTable(resource, tableName) {
+    const affected = await this.database.update(
+      `DELETE FROM qbxsql_schema_tables WHERE table_name = ? AND resource_name = ?`,
+      [tableName, resource],
+      { invokingResource: "qbxsql:schema" }
+    );
+    if (affected !== 1) {
+      throw new Error(`Cannot release table '${tableName}' because it is not owned by '${resource}'.`);
     }
   }
   async writeRegistry(resource, version, checksum, tableNames) {

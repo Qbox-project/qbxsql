@@ -96,12 +96,25 @@ export type MigrationOperation =
     }
   | { type: 'addIndex'; table: string; definition: IndexDefinition }
   | { type: 'dropIndex'; table: string; index: string }
+  | { type: 'addForeignKey'; table: string; definition: ForeignKeyDefinition }
+  | { type: 'dropForeignKey'; table: string; foreignKey: string }
+  | { type: 'setPrimaryKey'; table: string; columns: string[] }
+  | { type: 'dropPrimaryKey'; table: string }
+  | {
+      type: 'setTableOptions';
+      table: string;
+      engine?: 'InnoDB';
+      charset?: 'utf8mb4';
+      collation?: string;
+    }
+  | { type: 'releaseTable'; table: string; allowOwnershipTransfer: true }
   | { type: 'sql'; sql: string; allowDataLoss: true };
 
 export interface MigrationDefinition {
   version: number;
   name: string;
   operations: MigrationOperation[];
+  allowBlocking?: boolean;
 }
 
 export interface ResourceSchema {

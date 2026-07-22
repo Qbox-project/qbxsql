@@ -114,6 +114,7 @@ describe('resource schema manager integration', () => {
       {
         version: 2,
         name: 'shrink property labels',
+        allowBlocking: true,
         operations: [
           {
             type: 'alterColumn',
@@ -125,7 +126,7 @@ describe('resource schema manager integration', () => {
         ],
       },
     ];
-    const result = await manager.ensure('housing', target);
+    const result = await new SchemaManager(database, { allowBlocking: true }).ensure('housing', target);
     expect(result.appliedMigrations).toEqual([2]);
     const actual = await introspectDatabase(database);
     expect(actual.get('properties')?.columns.get('label')?.maximumLength).toBe(50);
@@ -218,4 +219,5 @@ describe('resource schema manager integration', () => {
     });
     expect((await introspectDatabase(database)).has('mode_probe')).toBe(false);
   });
+
 });

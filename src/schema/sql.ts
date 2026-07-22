@@ -112,7 +112,44 @@ export function migrationOperationSql(operation: MigrationOperation): string {
       return `ALTER TABLE ${quoteIdentifier(operation.table)} ADD ${indexSql(operation.definition)}`;
     case 'dropIndex':
       return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP INDEX ${quoteIdentifier(operation.index)}`;
+    case 'addForeignKey':
+      return addForeignKeySql(operation.table, operation.definition);
+    case 'dropForeignKey':
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP FOREIGN KEY ${quoteIdentifier(operation.foreignKey)}`;
+    case 'setPrimaryKey':
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP PRIMARY KEY, ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(', ')})`;
+    case 'dropPrimaryKey':
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} DROP PRIMARY KEY`;
+    case 'setTableOptions': {
+      const options: string[] = [];
+      if (operation.engine) options.push(`ENGINE=${operation.engine}`);
+      if (operation.charset) options.push(`DEFAULT CHARACTER SET=${operation.charset}`);
+      if (operation.collation) options.push(`COLLATE=${operation.collation}`);
+      return `ALTER TABLE ${quoteIdentifier(operation.table)} ${options.join(' ')}`;
+    }
+    case 'releaseTable':
+      return `-- release qbxsql ownership of ${quoteIdentifier(operation.table)}`;
     case 'sql':
       return operation.sql;
+  }
+}
+
+export function onlineMigrationOperationSql(operation: MigrationOperation): string {
+  const sql = migrationOperationSql(operation);
+  switch (operation.type) {
+    case 'addColumn':
+    case 'dropColumn':
+      return `${sql}, ALGORITHM=INSTANT, LOCK=NONE`;
+    case 'renameColumn':
+    case 'alterColumn':
+    case 'addIndex':
+    case 'dropIndex':
+    case 'addForeignKey':
+    case 'dropForeignKey':
+    case 'setPrimaryKey':
+    case 'dropPrimaryKey':
+      return `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+    default:
+      return sql;
   }
 }
