@@ -65,6 +65,18 @@ local function runTests()
         blockedSchema.err.plan and #blockedSchema.err.plan.actions > 0,
         'blocked schema error omitted its migration plan'
     )
+    local awaitSuccess, awaitFailure = pcall(QBXSQL.Schema.ensure.await, narrowingSchema)
+    assertEqual(awaitSuccess, false, 'blocked schema await success')
+    assert(type(awaitFailure) == 'table', 'blocked schema await error was not structured')
+    assertEqual(
+        awaitFailure.code,
+        'QBXSQL_SCHEMA_MIGRATION_REQUIRED',
+        'blocked schema await error code'
+    )
+    assert(
+        awaitFailure.plan and #awaitFailure.plan.actions > 0,
+        'blocked schema await error omitted its migration plan'
+    )
 
     MySQL.update.await('DELETE FROM fxsql_values')
 
