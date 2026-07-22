@@ -36,6 +36,27 @@ describe('legacy MySQL connection strings', () => {
     expect(warnings[0]).toContain('SQL injection');
   });
 
+  test('validates and filters typed URI query options', () => {
+    const warnings: string[] = [];
+    const options = parseMySqlConnectionString(
+      'mysql://root@localhost/qbox?waitForConnections=false&queueLimit=20&enableKeepAlive=true&unknownSecret=value',
+      (message) => warnings.push(message),
+    );
+
+    expect(options).toMatchObject({
+      waitForConnections: false,
+      queueLimit: 20,
+      enableKeepAlive: true,
+    });
+    expect(String(options.uri)).not.toContain('unknownSecret');
+    expect(warnings).toEqual([
+      "[qbxsql] Ignoring unknown connection-string option 'unknownSecret'.",
+    ]);
+    expect(() =>
+      parseMySqlConnectionString('mysql://root@localhost/qbox?queueLimit=unbounded'),
+    ).toThrow("Connection-string option 'queueLimit' must be an integer");
+  });
+
   test('validates typed values and warns about unknown options without exposing values', () => {
     expect(() => parseMySqlConnectionString('port=not-a-number')).toThrow('must be an integer');
     expect(() => parseMySqlConnectionString('multipleStatements=maybe')).toThrow(

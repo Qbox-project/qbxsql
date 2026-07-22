@@ -20798,20 +20798,51 @@ function warnMultipleStatements(enabled, warn) {
 __name(warnMultipleStatements, "warnMultipleStatements");
 function parseMySqlConnectionString(connectionString, warn = console.warn) {
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) {
-    const options2 = { uri: connectionString };
     const url = new URL(connectionString);
-    const connectionLimit = url.searchParams.get("connectionLimit");
-    const connectTimeout = url.searchParams.get("connectTimeout");
-    const multipleStatements = url.searchParams.get("multipleStatements");
-    if (connectionLimit !== null) {
-      options2.connectionLimit = integerOption2(connectionLimit, "connectionLimit", 1);
-    }
-    if (connectTimeout !== null) {
-      options2.connectTimeout = integerOption2(connectTimeout, "connectTimeout", 1);
-    }
-    if (multipleStatements !== null) {
-      options2.multipleStatements = booleanOption(multipleStatements, "multipleStatements");
-      warnMultipleStatements(options2.multipleStatements, warn);
+    const parameters = [...url.searchParams];
+    url.search = "";
+    const options2 = { uri: url.toString() };
+    for (const [sourceKey, value] of parameters) {
+      const normalized = sourceKey.toLowerCase().replace(/[ _-]/g, "");
+      const integerKeys = {
+        connectionlimit: { name: "connectionLimit", minimum: 1 },
+        connecttimeout: { name: "connectTimeout", minimum: 1 },
+        queuelimit: { name: "queueLimit", minimum: 0 },
+        maxidle: { name: "maxIdle", minimum: 0 },
+        idletimeout: { name: "idleTimeout", minimum: 1 },
+        keepaliveinitialdelay: { name: "keepAliveInitialDelay", minimum: 0 }
+      };
+      const booleanKeys = {
+        multiplestatements: "multipleStatements",
+        decimalnumbers: "decimalNumbers",
+        bignumberstrings: "bigNumberStrings",
+        supportbignumbers: "supportBigNumbers",
+        waitforconnections: "waitForConnections",
+        jsonstrings: "jsonStrings",
+        namedplaceholders: "namedPlaceholders",
+        trace: "trace",
+        enablekeepalive: "enableKeepAlive"
+      };
+      if (integerKeys[normalized]) {
+        const target = integerKeys[normalized];
+        options2[target.name] = integerOption2(value, target.name, target.minimum);
+      } else if (booleanKeys[normalized]) {
+        const target = booleanKeys[normalized];
+        options2[target] = booleanOption(value, target);
+        if (target === "multipleStatements") {
+          warnMultipleStatements(options2[target], warn);
+        }
+      } else if (normalized === "charset" || normalized === "timezone" || normalized === "socketpath") {
+        options2[normalized === "socketpath" ? "socketPath" : normalized] = value;
+      } else if (normalized === "ssl") {
+        try {
+          options2.ssl = JSON.parse(value);
+        } catch {
+          options2.ssl = value;
+        }
+      } else {
+        warn(`[qbxsql] Ignoring unknown connection-string option '${sourceKey}'.`);
+      }
     }
     return options2;
   }
@@ -20830,9 +20861,26 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
       options.password = value;
     } else if (["database", "db", "initialcatalog"].includes(sourceKey)) {
       options.database = value;
-    } else if (sourceKey === "port" || sourceKey === "connectionlimit" || sourceKey === "connecttimeout") {
-      const target = sourceKey === "connectionlimit" ? "connectionLimit" : sourceKey === "connecttimeout" ? "connectTimeout" : "port";
-      options[target] = integerOption2(value, target, 1);
+    } else if ([
+      "port",
+      "connectionlimit",
+      "connecttimeout",
+      "queuelimit",
+      "maxidle",
+      "idletimeout",
+      "keepaliveinitialdelay"
+    ].includes(sourceKey)) {
+      const integerKeys = {
+        port: { name: "port", minimum: 1 },
+        connectionlimit: { name: "connectionLimit", minimum: 1 },
+        connecttimeout: { name: "connectTimeout", minimum: 1 },
+        queuelimit: { name: "queueLimit", minimum: 0 },
+        maxidle: { name: "maxIdle", minimum: 0 },
+        idletimeout: { name: "idleTimeout", minimum: 1 },
+        keepaliveinitialdelay: { name: "keepAliveInitialDelay", minimum: 0 }
+      };
+      const target = integerKeys[sourceKey];
+      options[target.name] = integerOption2(value, target.name, target.minimum);
     } else if ([
       "multiplestatements",
       "decimalnumbers",
@@ -20841,7 +20889,8 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
       "waitforconnections",
       "jsonstrings",
       "namedplaceholders",
-      "trace"
+      "trace",
+      "enablekeepalive"
     ].includes(sourceKey)) {
       const booleanKeys = {
         multiplestatements: "multipleStatements",
@@ -20851,7 +20900,8 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
         waitforconnections: "waitForConnections",
         jsonstrings: "jsonStrings",
         namedplaceholders: "namedPlaceholders",
-        trace: "trace"
+        trace: "trace",
+        enablekeepalive: "enableKeepAlive"
       };
       const key = booleanKeys[sourceKey];
       options[key] = booleanOption(value, key);
