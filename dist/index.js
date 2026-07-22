@@ -20490,20 +20490,35 @@ var DatabaseService = class {
   }
   async prepare(sql, parameters, options = {}) {
     const parameterSets = this.parameterSets(parameters);
-    const results = [];
-    for (const values of parameterSets) {
-      const result = await this.run(sql, values, { ...options, prepared: true });
-      results.push(this.parsePreparedResult(sql, result));
-    }
-    return results.length === 1 ? results[0] : results;
+    const results = await this.executePreparedBatch(sql, parameterSets, options);
+    const parsed = results.map((result) => this.parsePreparedResult(sql, result));
+    return parsed.length === 1 ? parsed[0] : parsed;
   }
   async rawExecute(sql, parameters, options = {}) {
-    const results = [];
-    for (const values of this.parameterSets(parameters)) {
-      const result = await this.run(sql, values, { ...options, prepared: true });
-      results.push(result.rows);
-    }
+    const results = (await this.executePreparedBatch(sql, this.parameterSets(parameters), options)).map((result) => result.rows);
     return results.length === 1 ? results[0] : results;
+  }
+  async executePreparedBatch(sql, parameterSets, options) {
+    if (parameterSets.length === 1) {
+      return [
+        await this.run(sql, parameterSets[0], { ...options, prepared: true })
+      ];
+    }
+    await this.awaitConnection();
+    const connection = await this.driver.acquire();
+    const resource = options.invokingResource ?? "unknown";
+    const results = [];
+    try {
+      for (const parameters of parameterSets) {
+        const [query, values] = normalizeParameters(sql, parameters);
+        results.push(
+          await this.measureQuery(query, resource, () => connection.execute(query, values))
+        );
+      }
+      return results;
+    } finally {
+      connection.release();
+    }
   }
   async transaction(statements, invokingResource = "unknown") {
     await this.awaitConnection();

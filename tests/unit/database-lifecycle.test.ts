@@ -56,6 +56,7 @@ class FakeDriver implements DatabaseDriver {
   serverVersion: string | null = '11.4.7-MariaDB';
   ready = false;
   connectAttempts = 0;
+  acquireAttempts = 0;
   failures = 0;
   private fatalListener: ((error: unknown) => void) | null = null;
   connection: DatabaseConnection = new FakeConnection();
@@ -82,6 +83,7 @@ class FakeDriver implements DatabaseDriver {
   }
 
   async acquire(): Promise<DatabaseConnection> {
+    this.acquireAttempts += 1;
     return this.connection;
   }
 
@@ -244,5 +246,28 @@ describe('database connection lifecycle', () => {
     }
 
     expect(database.getStatus().totals).toMatchObject({ queries: 2, errors: 1 });
+  });
+
+  test('pins one connection for prepared batches', async () => {
+    const driver = new FakeDriver();
+    const connection = new FakeConnection();
+    let executeCalls = 0;
+    connection.execute = async () => {
+      executeCalls += 1;
+      return { ...result, rows: [{ value: executeCalls }] };
+    };
+    driver.connection = connection;
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+
+    await expect(database.rawExecute('SELECT ? AS value', [[1], [2], [3], [4]])).resolves.toEqual([
+      [{ value: 1 }],
+      [{ value: 2 }],
+      [{ value: 3 }],
+      [{ value: 4 }],
+    ]);
+    expect(driver.acquireAttempts).toBe(1);
+    expect(executeCalls).toBe(4);
+    expect(database.getStatus().totals.queries).toBe(4);
   });
 });

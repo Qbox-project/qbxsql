@@ -226,14 +226,10 @@ export class DatabaseService {
     options: QueryOptions = {},
   ): Promise<unknown> {
     const parameterSets = this.parameterSets(parameters);
-    const results: unknown[] = [];
+    const results = await this.executePreparedBatch(sql, parameterSets, options);
 
-    for (const values of parameterSets) {
-      const result = await this.run(sql, values as SqlParameters, { ...options, prepared: true });
-      results.push(this.parsePreparedResult(sql, result));
-    }
-
-    return results.length === 1 ? results[0] : results;
+    const parsed = results.map((result) => this.parsePreparedResult(sql, result));
+    return parsed.length === 1 ? parsed[0] : parsed;
   }
 
   public async rawExecute(
@@ -241,12 +237,38 @@ export class DatabaseService {
     parameters?: SqlParameters,
     options: QueryOptions = {},
   ): Promise<unknown> {
-    const results: unknown[] = [];
-    for (const values of this.parameterSets(parameters)) {
-      const result = await this.run(sql, values as SqlParameters, { ...options, prepared: true });
-      results.push(result.rows);
-    }
+    const results = (
+      await this.executePreparedBatch(sql, this.parameterSets(parameters), options)
+    ).map((result) => result.rows);
     return results.length === 1 ? results[0] : results;
+  }
+
+  private async executePreparedBatch(
+    sql: string,
+    parameterSets: Array<SqlParameters | undefined>,
+    options: QueryOptions,
+  ): Promise<DriverResult[]> {
+    if (parameterSets.length === 1) {
+      return [
+        await this.run(sql, parameterSets[0], { ...options, prepared: true }),
+      ];
+    }
+
+    await this.awaitConnection();
+    const connection = await this.driver.acquire();
+    const resource = options.invokingResource ?? 'unknown';
+    const results: DriverResult[] = [];
+    try {
+      for (const parameters of parameterSets) {
+        const [query, values] = normalizeParameters(sql, parameters);
+        results.push(
+          await this.measureQuery(query, resource, () => connection.execute(query, values)),
+        );
+      }
+      return results;
+    } finally {
+      connection.release();
+    }
   }
 
   public async transaction(
