@@ -197,4 +197,70 @@ describe('declarative schema planner', () => {
       ]),
     );
   });
+
+  test('detects primary-key, index, and foreign-key drift', () => {
+    const current = actual(50);
+    current.indexes.set('properties_label_idx', {
+      name: 'properties_label_idx',
+      columns: ['id'],
+      unique: false,
+      primary: false,
+      indexType: 'BTREE',
+    });
+    current.foreignKeys.set('properties_owner_fk', {
+      name: 'properties_owner_fk',
+      columns: ['id'],
+      referencedTable: 'legacy_owners',
+      referencedColumns: ['id'],
+      onDelete: 'RESTRICT',
+      onUpdate: 'RESTRICT',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.primaryKey = ['label'];
+    desired.tables.properties!.columns.id!.primary = false;
+    desired.tables.properties!.indexes = [
+      { name: 'properties_label_idx', columns: ['label'], unique: true },
+    ];
+    desired.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['id'],
+        references: { table: 'owners', columns: ['id'] },
+        onDelete: 'CASCADE',
+      },
+    ];
+
+    const actions = planSchema('housing', desired, new Map([['properties', current]])).actions;
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'alterPrimaryKey', automatic: false }),
+        expect.objectContaining({ kind: 'replaceIndex', automatic: false }),
+        expect.objectContaining({ kind: 'replaceForeignKey', automatic: false }),
+      ]),
+    );
+  });
+
+  test('warns about unmanaged indexes and foreign keys without removing them', () => {
+    const current = actual(50);
+    current.indexes.set('manual_idx', {
+      name: 'manual_idx',
+      columns: ['label'],
+      unique: false,
+      primary: false,
+      indexType: 'BTREE',
+    });
+    current.foreignKeys.set('manual_fk', {
+      name: 'manual_fk',
+      columns: ['id'],
+      referencedTable: 'owners',
+      referencedColumns: ['id'],
+      onDelete: 'RESTRICT',
+      onUpdate: 'RESTRICT',
+    });
+
+    const plan = planSchema('housing', schema(50), new Map([['properties', current]]));
+    expect(plan.actions).toHaveLength(0);
+    expect(plan.warnings.join(' ')).toContain("unmanaged index 'manual_idx'");
+    expect(plan.warnings.join(' ')).toContain("unmanaged foreign key 'manual_fk'");
+  });
 });

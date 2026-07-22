@@ -325,6 +325,34 @@ describe('resource schema manager integration', () => {
     );
   });
 
+  test('serializes concurrent resource schema startup without conflicts', async () => {
+    const [first, second] = await Promise.all([
+      manager.ensure('concurrent_first', {
+        version: 1,
+        tables: {
+          concurrent_first_table: { columns: { id: { type: 'int', primary: true } } },
+        },
+      }),
+      manager.ensure('concurrent_second', {
+        version: 1,
+        tables: {
+          concurrent_second_table: { columns: { id: { type: 'int', primary: true } } },
+        },
+      }),
+    ]);
+
+    expect(first.appliedActions).toHaveLength(1);
+    expect(second.appliedActions).toHaveLength(1);
+    const actual = await introspectDatabase(database, [
+      'concurrent_first_table',
+      'concurrent_second_table',
+    ]);
+    expect([...actual.keys()].sort()).toEqual([
+      'concurrent_first_table',
+      'concurrent_second_table',
+    ]);
+  });
+
   test('plan and off modes never apply resource DDL', async () => {
     const schema: ResourceSchema = {
       version: 1,
@@ -474,6 +502,42 @@ describe('resource schema manager integration', () => {
         .get('primary_key_migration_table')
         ?.indexes.get('PRIMARY')?.columns,
     ).toEqual(['id']);
+  });
+
+  test('requires both migration and operator approval for blocking DDL', async () => {
+    await manager.ensure('blocking_gate', {
+      version: 1,
+      tables: {
+        blocking_gate_table: { columns: { id: { type: 'int', primary: true } } },
+      },
+    });
+    const target: ResourceSchema = {
+      version: 2,
+      tables: {
+        blocking_gate_table: { columns: { id: { type: 'int', primary: true } } },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'explicit blocking maintenance',
+          allowBlocking: true,
+          operations: [
+            {
+              type: 'sql',
+              sql: 'OPTIMIZE TABLE `blocking_gate_table`',
+              allowDataLoss: true,
+            },
+          ],
+        },
+      ],
+    };
+
+    await expect(manager.ensure('blocking_gate', target)).rejects.toThrow(
+      'requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true',
+    );
+    await expect(
+      new SchemaManager(database, { allowBlocking: true }).ensure('blocking_gate', target),
+    ).resolves.toMatchObject({ appliedMigrations: [2] });
   });
 
   test('adopts an unmanaged legacy schema from an explicit baseline', async () => {
