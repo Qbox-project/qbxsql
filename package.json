@@ -12,7 +12,9 @@
     "test": "bun test tests/unit tests/contract tests/integration",
     "test:unit": "bun test tests/unit",
     "test:contract": "bun test tests/contract",
-    "test:integration": "bun test tests/integration"
+    "test:integration": "bun test tests/integration",
+    "release": "bun run build && node scripts/build-release.mjs",
+    "release:validate": "node scripts/validate-release.mjs"
   },
   "dependencies": {
     "mysql2": "3.23.1"

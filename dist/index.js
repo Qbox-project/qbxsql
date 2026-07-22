@@ -20506,7 +20506,7 @@ var DatabaseService = class {
       await connection.beginTransaction();
       for (const statement of statements) {
         const [query, parameters] = normalizeParameters(statement.query, statement.parameters);
-        await connection.query(query, parameters);
+        await this.measureQuery(query, invokingResource, () => connection.query(query, parameters));
       }
       await connection.commit();
       return true;
@@ -20546,7 +20546,11 @@ var DatabaseService = class {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = normalizeParameters(sql, parameters);
         try {
-          return (await connection.query(statement, values)).rows;
+          return (await this.measureQuery(
+            statement,
+            invokingResource,
+            () => connection.query(statement, values)
+          )).rows;
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           throw new Error(`Query: ${statement}
@@ -20582,16 +20586,22 @@ ${reason}`);
   async run(sql, parameters, options = {}) {
     await this.awaitConnection();
     const [query, values] = normalizeParameters(sql, parameters);
+    return this.measureQuery(
+      query,
+      options.invokingResource ?? "unknown",
+      () => options.prepared ? this.driver.execute(query, values) : this.driver.query(query, values)
+    );
+  }
+  async measureQuery(query, resource, operation) {
     const started = import_node_perf_hooks.performance.now();
     this.queryTotal += 1;
     try {
-      return options.prepared ? await this.driver.execute(query, values) : await this.driver.query(query, values);
+      return await operation();
     } catch (error) {
       this.errorTotal += 1;
       throw error;
     } finally {
       const duration = import_node_perf_hooks.performance.now() - started;
-      const resource = options.invokingResource ?? "unknown";
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
       if (slow) this.slowQueryTotal += 1;
       const debug = this.config.debug === true || Array.isArray(this.config.debug) && this.config.debug.includes(resource);
@@ -21325,7 +21335,11 @@ ${message2}`
   };
   for (const [name, method] of Object.entries(ghmattiAliases)) {
     runtime.addProviderExport("ghmattimysql", name, method);
-    if (name !== "store") runtime.addProviderExport("ghmattimysql", `${name}Sync`, asyncExport(method));
+    runtime.addProviderExport(
+      "ghmattimysql",
+      `${name}Sync`,
+      name === "store" ? (query) => api.store(query) : asyncExport(method)
+    );
   }
   return api;
 }
@@ -22567,27 +22581,7 @@ var SchemaManager = class {
       plan = planSchema(resource, schema, actual, capabilities);
       const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
-      const appliedActions = [];
-      for (const schemaAction of plan.actions) {
-        try {
-          await this.database.query(schemaAction.sql, [], { invokingResource: resource });
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          throw new SchemaMigrationRequiredError({
-            ...plan,
-            actions: plan.actions.map(
-              (entry) => entry === schemaAction ? {
-                ...entry,
-                onlineSafe: false,
-                automatic: false,
-                risk: "high",
-                reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`
-              } : entry
-            )
-          });
-        }
-        appliedActions.push(schemaAction.sql);
-      }
+      const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
         schema,
@@ -22756,11 +22750,7 @@ var SchemaManager = class {
       if (plan.actions.some((entry) => !entry.automatic)) {
         throw new SchemaMigrationRequiredError(plan);
       }
-      const appliedActions = [];
-      for (const schemaAction of plan.actions) {
-        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
-        appliedActions.push(schemaAction.sql);
-      }
+      const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
         schema,
@@ -22993,14 +22983,37 @@ var SchemaManager = class {
       { invokingResource: resource }
     );
     try {
-      for (const operation of migration.operations) {
+      for (const [operationIndex, operation] of migration.operations.entries()) {
         const needed = await this.operationNeeded(resource, operation, actual);
         if (needed) {
           if (operation.type === "releaseTable") {
             await this.releaseTable(resource, operation.table);
           } else {
-            const sql = blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation);
-            await this.database.query(sql, [], { invokingResource: resource });
+            const sql = this.migrationSql(operation, blockingAllowed, actual);
+            try {
+              await this.database.query(sql, [], { invokingResource: resource });
+            } catch (error) {
+              if (!blockingAllowed && operationAlgorithm(operation) !== "MANUAL") {
+                const reason = error instanceof Error ? error.message : String(error);
+                const action2 = migrationActions([migration], false)[operationIndex];
+                throw new SchemaMigrationRequiredError({
+                  resource,
+                  version: migration.version,
+                  warnings: [],
+                  actions: [
+                    {
+                      ...action2,
+                      sql,
+                      onlineSafe: false,
+                      automatic: false,
+                      risk: "high",
+                      reason: `${action2.reason}; database rejected ${action2.algorithm}/LOCK=NONE: ${reason}`
+                    }
+                  ]
+                });
+              }
+              throw error;
+            }
           }
         }
         await this.reconcileOwnershipTransition(resource, operation);
@@ -23026,6 +23039,43 @@ var SchemaManager = class {
       );
       throw error;
     }
+  }
+  async applySchemaPlan(resource, plan) {
+    const appliedActions = [];
+    for (const schemaAction of plan.actions) {
+      try {
+        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new SchemaMigrationRequiredError({
+          ...plan,
+          actions: plan.actions.map(
+            (entry) => entry === schemaAction ? {
+              ...entry,
+              onlineSafe: false,
+              automatic: false,
+              risk: "high",
+              reason: `${entry.reason}; database rejected ${entry.algorithm}/LOCK=NONE: ${reason}`
+            } : entry
+          )
+        });
+      }
+      appliedActions.push(schemaAction.sql);
+    }
+    return appliedActions;
+  }
+  migrationSql(operation, blockingAllowed, actual) {
+    if (operation.type !== "setPrimaryKey") {
+      return blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation);
+    }
+    const table = actual.get(operation.table);
+    const hasPrimaryKey = table?.indexes.has("PRIMARY") === true;
+    const clauses = [
+      ...hasPrimaryKey ? ["DROP PRIMARY KEY"] : [],
+      `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(", ")})`
+    ];
+    const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(", ")}`;
+    return blockingAllowed ? sql : `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
   }
   async operationNeeded(resource, operation, actual) {
     switch (operation.type) {
