@@ -116,6 +116,19 @@ describe('MySQL driver integration', () => {
     expect(await database.update('UPDATE values_test SET name = ? WHERE name = ?', ['Grace', 'Ada'])).toBe(
       1,
     );
+    const existingId = await database.scalar('SELECT MIN(id) FROM values_test');
+    expect(
+      await database.insert(
+        'INSERT IGNORE INTO values_test (id, name, enabled) VALUES (?, ?, ?)',
+        [existingId as number, 'ignored', true],
+      ),
+    ).toBe(0);
+    expect(
+      await database.prepare(
+        'INSERT IGNORE INTO values_test (id, name, enabled) VALUES (?, ?, ?)',
+        [existingId as number, 'ignored prepared', true],
+      ),
+    ).toBe(0);
   });
 
   test('commits successful transactions and rolls back failed transactions', async () => {

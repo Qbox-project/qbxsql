@@ -209,7 +209,7 @@ export class DatabaseService {
     options: QueryOptions = {},
   ): Promise<number | string | null> {
     const result = await this.run(sql, parameters, options);
-    return result.insertId || null;
+    return result.insertId ?? null;
   }
 
   public async update(
@@ -547,7 +547,7 @@ export class DatabaseService {
       }
 
       if (operation === 'INSERT' || operation === 'REPLACE') {
-        response.push(result.insertId || null);
+        response.push(result.insertId ?? null);
       } else if (operation === 'UPDATE' || operation === 'DELETE') {
         response.push(result.affectedRows);
       } else {

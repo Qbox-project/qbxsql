@@ -20500,7 +20500,7 @@ var DatabaseService = class {
   }
   async insert(sql, parameters, options = {}) {
     const result = await this.run(sql, parameters, options);
-    return result.insertId || null;
+    return result.insertId ?? null;
   }
   async update(sql, parameters, options = {}) {
     return (await this.run(sql, parameters, options)).affectedRows;
@@ -20770,7 +20770,7 @@ ${reason}`);
         continue;
       }
       if (operation === "INSERT" || operation === "REPLACE") {
-        response.push(result.insertId || null);
+        response.push(result.insertId ?? null);
       } else if (operation === "UPDATE" || operation === "DELETE") {
         response.push(result.affectedRows);
       } else {
