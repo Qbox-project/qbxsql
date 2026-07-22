@@ -21428,16 +21428,22 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 __name(numberOrNull, "numberOrNull");
-async function introspectDatabase(database2) {
+async function introspectDatabase(database2, tableNames) {
   await database2.connect();
   const schemaName = database2.driver.databaseName;
   if (!schemaName) throw new Error("No database is selected in the connection string.");
+  const scope = tableNames ? [...new Set(tableNames)] : null;
+  if (scope?.length === 0) return /* @__PURE__ */ new Map();
+  const placeholders = scope ? scope.map(() => "?").join(", ") : "";
+  const tableFilter = scope ? ` AND TABLE_NAME IN (${placeholders})` : "";
+  const qualifiedTableFilter = scope ? ` AND k.TABLE_NAME IN (${placeholders})` : "";
+  const parameters = scope ? [schemaName, ...scope] : [schemaName];
   const [tableRows, columnRows, indexRows, foreignKeyRows] = await Promise.all([
     database2.query(
       `SELECT TABLE_NAME AS tableName, ENGINE AS engine, TABLE_COLLATION AS collation
        FROM INFORMATION_SCHEMA.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
-      [schemaName],
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'${tableFilter}`,
+      parameters,
       { invokingResource: "qbxsql:schema" }
     ),
     database2.query(
@@ -21447,18 +21453,18 @@ async function introspectDatabase(database2) {
               NUMERIC_PRECISION AS numericPrecision, NUMERIC_SCALE AS numericScale,
               COLUMN_COMMENT AS comment
        FROM INFORMATION_SCHEMA.COLUMNS
-       WHERE TABLE_SCHEMA = ?
+       WHERE TABLE_SCHEMA = ?${tableFilter}
        ORDER BY TABLE_NAME, ORDINAL_POSITION`,
-      [schemaName],
+      parameters,
       { invokingResource: "qbxsql:schema" }
     ),
     database2.query(
       `SELECT TABLE_NAME AS tableName, INDEX_NAME AS indexName, COLUMN_NAME AS columnName,
               NON_UNIQUE AS nonUnique, SEQ_IN_INDEX AS sequenceNumber, INDEX_TYPE AS indexType
        FROM INFORMATION_SCHEMA.STATISTICS
-       WHERE TABLE_SCHEMA = ?
+       WHERE TABLE_SCHEMA = ?${tableFilter}
        ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
-      [schemaName],
+      parameters,
       { invokingResource: "qbxsql:schema" }
     ),
     database2.query(
@@ -21471,9 +21477,9 @@ async function introspectDatabase(database2) {
          ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
         AND r.TABLE_NAME = k.TABLE_NAME
         AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-       WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
+       WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL${qualifiedTableFilter}
        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`,
-      [schemaName],
+      parameters,
       { invokingResource: "qbxsql:schema" }
     )
   ]);
@@ -22504,10 +22510,11 @@ var SchemaManager = class {
     await this.initialize();
     const preflightRegistry = await this.readRegistry(resource);
     if (!preflightRegistry) {
+      const preflightTables = this.relevantOwnershipTables(schema, schema.migrations ?? []);
       await this.refuseImplicitAdoption(
         resource,
-        schema,
-        await introspectDatabase(this.database)
+        preflightTables,
+        await introspectDatabase(this.database, preflightTables)
       );
     }
     const preflightMigrations = preflightRegistry ? (schema.migrations ?? []).filter(
@@ -22528,8 +22535,13 @@ var SchemaManager = class {
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
       const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
+      const introspectionTables = this.introspectionTables(
+        schema,
+        pendingMigrations,
+        registry
+      );
       await this.assertOwnership(resource, relevantTables);
-      let actual = await introspectDatabase(this.database);
+      let actual = await introspectDatabase(this.database, introspectionTables);
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings = [];
@@ -22542,9 +22554,15 @@ var SchemaManager = class {
       for (const migration of pendingMigrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === "success") continue;
-        await this.applyMigration(resource, migration, existing, actual);
+        await this.applyMigration(
+          resource,
+          migration,
+          existing,
+          actual,
+          introspectionTables
+        );
         appliedMigrations.push(migration.version);
-        actual = await introspectDatabase(this.database);
+        actual = await introspectDatabase(this.database, introspectionTables);
       }
       plan = planSchema(resource, schema, actual, capabilities);
       const blocked = plan.actions.filter((entry) => !entry.automatic);
@@ -22573,7 +22591,7 @@ var SchemaManager = class {
       const remaining = planSchema(
         resource,
         schema,
-        await introspectDatabase(this.database),
+        await introspectDatabase(this.database, introspectionTables),
         capabilities
       );
       if (remaining.actions.length > 0) {
@@ -22601,22 +22619,32 @@ var SchemaManager = class {
     const schema = validateSchema(input);
     await this.verifySchemaTarget();
     const checksum = schemaChecksum(schema);
-    const actual = await introspectDatabase(this.database);
-    let plan = planSchema(
+    const metadataReady = await this.metadataTablesExist();
+    let registry = null;
+    let pendingMigrations = [];
+    if (metadataReady) {
+      registry = await this.readRegistry(resource);
+      if (registry) {
+        const registryVersion = registry.version;
+        pendingMigrations = (schema.migrations ?? []).filter(
+          (migration) => migration.version > registryVersion && migration.version <= schema.version
+        ).sort((left, right) => left.version - right.version);
+      }
+    }
+    const actual = await introspectDatabase(
+      this.database,
+      this.introspectionTables(schema, pendingMigrations, registry)
+    );
+    const basePlan = planSchema(
       resource,
       schema,
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion)
     );
-    const metadataReady = await this.metadataTablesExist();
-    if (metadataReady) {
-      const registry = await this.readRegistry(resource);
-      const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
-      plan = {
-        ...plan,
-        actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...plan.actions]
-      };
-    }
+    const plan = {
+      ...basePlan,
+      actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...basePlan.actions]
+    };
     return {
       ...plan,
       checksum,
@@ -22643,7 +22671,8 @@ var SchemaManager = class {
       }
       await this.assertAdoptionOwnership(resource, this.relevantOwnershipTables(schema, migrations));
     }
-    const actual = await introspectDatabase(this.database);
+    const scope = this.introspectionTables(schema, migrations, null);
+    const actual = await introspectDatabase(this.database, scope);
     this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
     const plan = planSchema(
       resource,
@@ -22698,7 +22727,8 @@ var SchemaManager = class {
       ).sort((left, right) => left.version - right.version);
       this.assertBlockingPolicy(migrations);
       const relevantTables = this.relevantOwnershipTables(schema, migrations);
-      let actual = await introspectDatabase(this.database);
+      const introspectionTables = this.introspectionTables(schema, migrations, null);
+      let actual = await introspectDatabase(this.database, introspectionTables);
       if (!adoptionRecorded) {
         await this.assertAdoptionOwnership(resource, relevantTables);
         this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
@@ -22711,9 +22741,15 @@ var SchemaManager = class {
       for (const migration of migrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === "success") continue;
-        await this.applyMigration(resource, migration, existing, actual);
+        await this.applyMigration(
+          resource,
+          migration,
+          existing,
+          actual,
+          introspectionTables
+        );
         appliedMigrations.push(migration.version);
-        actual = await introspectDatabase(this.database);
+        actual = await introspectDatabase(this.database, introspectionTables);
       }
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       const plan = planSchema(resource, schema, actual, capabilities);
@@ -22728,7 +22764,7 @@ var SchemaManager = class {
       const remaining = planSchema(
         resource,
         schema,
-        await introspectDatabase(this.database),
+        await introspectDatabase(this.database, introspectionTables),
         capabilities
       );
       if (remaining.actions.length > 0) {
@@ -22933,7 +22969,7 @@ var SchemaManager = class {
       }
     }
   }
-  async applyMigration(resource, migration, existing, actual) {
+  async applyMigration(resource, migration, existing, actual, introspectionTables) {
     const checksum = stableChecksum(migration);
     const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
     const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
@@ -22969,7 +23005,7 @@ var SchemaManager = class {
         }
         await this.reconcileOwnershipTransition(resource, operation);
         if (needed && operation.type !== "releaseTable") {
-          actual = await introspectDatabase(this.database);
+          actual = await introspectDatabase(this.database, introspectionTables);
         }
       }
       await this.database.update(
@@ -23100,8 +23136,8 @@ var SchemaManager = class {
       );
     }
   }
-  async refuseImplicitAdoption(resource, schema, actual) {
-    const existing = Object.keys(schema.tables).filter((table) => actual.has(table));
+  async refuseImplicitAdoption(resource, tableNames, actual) {
+    const existing = tableNames.filter((table) => actual.has(table));
     if (existing.length === 0) return;
     const ownership = await this.readOwnership(existing);
     const unmanaged = existing.filter((table) => !ownership.has(table));
@@ -23173,6 +23209,19 @@ var SchemaManager = class {
         } else if ("table" in operation && typeof operation.table === "string") {
           tables.add(operation.table);
         }
+      }
+    }
+    return [...tables];
+  }
+  introspectionTables(schema, migrations, registry) {
+    const tables = new Set(this.relevantOwnershipTables(schema, migrations));
+    if (registry) {
+      try {
+        const owned = JSON.parse(registry.tablesJson);
+        if (Array.isArray(owned)) {
+          for (const table of owned) if (typeof table === "string") tables.add(table);
+        }
+      } catch {
       }
     }
     return [...tables];

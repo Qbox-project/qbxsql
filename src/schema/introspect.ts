@@ -18,17 +18,26 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function introspectDatabase(database: DatabaseService): Promise<Map<string, ActualTable>> {
+export async function introspectDatabase(
+  database: DatabaseService,
+  tableNames?: Iterable<string>,
+): Promise<Map<string, ActualTable>> {
   await database.connect();
   const schemaName = database.driver.databaseName;
   if (!schemaName) throw new Error('No database is selected in the connection string.');
+  const scope = tableNames ? [...new Set(tableNames)] : null;
+  if (scope?.length === 0) return new Map();
+  const placeholders = scope ? scope.map(() => '?').join(', ') : '';
+  const tableFilter = scope ? ` AND TABLE_NAME IN (${placeholders})` : '';
+  const qualifiedTableFilter = scope ? ` AND k.TABLE_NAME IN (${placeholders})` : '';
+  const parameters = scope ? [schemaName, ...scope] : [schemaName];
 
   const [tableRows, columnRows, indexRows, foreignKeyRows] = await Promise.all([
     database.query(
       `SELECT TABLE_NAME AS tableName, ENGINE AS engine, TABLE_COLLATION AS collation
        FROM INFORMATION_SCHEMA.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
-      [schemaName],
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'${tableFilter}`,
+      parameters,
       { invokingResource: 'qbxsql:schema' },
     ),
     database.query(
@@ -38,18 +47,18 @@ export async function introspectDatabase(database: DatabaseService): Promise<Map
               NUMERIC_PRECISION AS numericPrecision, NUMERIC_SCALE AS numericScale,
               COLUMN_COMMENT AS comment
        FROM INFORMATION_SCHEMA.COLUMNS
-       WHERE TABLE_SCHEMA = ?
+       WHERE TABLE_SCHEMA = ?${tableFilter}
        ORDER BY TABLE_NAME, ORDINAL_POSITION`,
-      [schemaName],
+      parameters,
       { invokingResource: 'qbxsql:schema' },
     ),
     database.query(
       `SELECT TABLE_NAME AS tableName, INDEX_NAME AS indexName, COLUMN_NAME AS columnName,
               NON_UNIQUE AS nonUnique, SEQ_IN_INDEX AS sequenceNumber, INDEX_TYPE AS indexType
        FROM INFORMATION_SCHEMA.STATISTICS
-       WHERE TABLE_SCHEMA = ?
+       WHERE TABLE_SCHEMA = ?${tableFilter}
        ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
-      [schemaName],
+      parameters,
       { invokingResource: 'qbxsql:schema' },
     ),
     database.query(
@@ -62,9 +71,9 @@ export async function introspectDatabase(database: DatabaseService): Promise<Map
          ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
         AND r.TABLE_NAME = k.TABLE_NAME
         AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-       WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
+       WHERE k.TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL${qualifiedTableFilter}
        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`,
-      [schemaName],
+      parameters,
       { invokingResource: 'qbxsql:schema' },
     ),
   ]);

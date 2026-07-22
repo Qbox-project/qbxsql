@@ -487,4 +487,11 @@ describe('resource schema manager integration', () => {
     await cleanup.end();
   });
 
+  test('supports introspection scoped to relevant tables', async () => {
+    const scoped = await introspectDatabase(database, ['properties', 'vehicles']);
+
+    expect([...scoped.keys()].sort()).toEqual(['properties', 'vehicles']);
+    expect(scoped.has('legacy_properties')).toBe(false);
+  });
+
 });

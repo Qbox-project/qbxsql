@@ -186,10 +186,11 @@ export class SchemaManager {
 
     const preflightRegistry = await this.readRegistry(resource);
     if (!preflightRegistry) {
+      const preflightTables = this.relevantOwnershipTables(schema, schema.migrations ?? []);
       await this.refuseImplicitAdoption(
         resource,
-        schema,
-        await introspectDatabase(this.database),
+        preflightTables,
+        await introspectDatabase(this.database, preflightTables),
       );
     }
     const preflightMigrations = preflightRegistry
@@ -221,9 +222,14 @@ export class SchemaManager {
             .sort((left, right) => left.version - right.version)
         : [];
       const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
+      const introspectionTables = this.introspectionTables(
+        schema,
+        pendingMigrations,
+        registry,
+      );
       await this.assertOwnership(resource, relevantTables);
 
-      let actual = await introspectDatabase(this.database);
+      let actual = await introspectDatabase(this.database, introspectionTables);
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings: string[] = [];
@@ -237,9 +243,15 @@ export class SchemaManager {
       for (const migration of pendingMigrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === 'success') continue;
-        await this.applyMigration(resource, migration, existing, actual);
+        await this.applyMigration(
+          resource,
+          migration,
+          existing,
+          actual,
+          introspectionTables,
+        );
         appliedMigrations.push(migration.version);
-        actual = await introspectDatabase(this.database);
+        actual = await introspectDatabase(this.database, introspectionTables);
       }
 
       plan = planSchema(resource, schema, actual, capabilities);
@@ -273,7 +285,7 @@ export class SchemaManager {
       const remaining = planSchema(
         resource,
         schema,
-        await introspectDatabase(this.database),
+        await introspectDatabase(this.database, introspectionTables),
         capabilities,
       );
       if (remaining.actions.length > 0) {
@@ -304,26 +316,35 @@ export class SchemaManager {
     const schema = validateSchema(input);
     await this.verifySchemaTarget();
     const checksum = schemaChecksum(schema);
-    const actual = await introspectDatabase(this.database);
-    let plan = planSchema(
+    const metadataReady = await this.metadataTablesExist();
+    let registry: RegistryRow | null = null;
+    let pendingMigrations: MigrationDefinition[] = [];
+    if (metadataReady) {
+      registry = await this.readRegistry(resource);
+      if (registry) {
+        const registryVersion = registry.version;
+        pendingMigrations = (schema.migrations ?? [])
+          .filter(
+            (migration) =>
+              migration.version > registryVersion && migration.version <= schema.version,
+          )
+          .sort((left, right) => left.version - right.version);
+      }
+    }
+    const actual = await introspectDatabase(
+      this.database,
+      this.introspectionTables(schema, pendingMigrations, registry),
+    );
+    const basePlan = planSchema(
       resource,
       schema,
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion),
     );
-    const metadataReady = await this.metadataTablesExist();
-    if (metadataReady) {
-      const registry = await this.readRegistry(resource);
-      const pendingMigrations = registry
-        ? (schema.migrations ?? [])
-            .filter((migration) => migration.version > registry.version && migration.version <= schema.version)
-            .sort((left, right) => left.version - right.version)
-        : [];
-      plan = {
-        ...plan,
-        actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...plan.actions],
-      };
-    }
+    const plan = {
+      ...basePlan,
+      actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...basePlan.actions],
+    };
     return {
       ...plan,
       checksum,
@@ -357,7 +378,8 @@ export class SchemaManager {
       }
       await this.assertAdoptionOwnership(resource, this.relevantOwnershipTables(schema, migrations));
     }
-    const actual = await introspectDatabase(this.database);
+    const scope = this.introspectionTables(schema, migrations, null);
+    const actual = await introspectDatabase(this.database, scope);
     this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
     const plan = planSchema(
       resource,
@@ -425,7 +447,8 @@ export class SchemaManager {
         .sort((left, right) => left.version - right.version);
       this.assertBlockingPolicy(migrations);
       const relevantTables = this.relevantOwnershipTables(schema, migrations);
-      let actual = await introspectDatabase(this.database);
+      const introspectionTables = this.introspectionTables(schema, migrations, null);
+      let actual = await introspectDatabase(this.database, introspectionTables);
 
       if (!adoptionRecorded) {
         await this.assertAdoptionOwnership(resource, relevantTables);
@@ -440,9 +463,15 @@ export class SchemaManager {
       for (const migration of migrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === 'success') continue;
-        await this.applyMigration(resource, migration, existing, actual);
+        await this.applyMigration(
+          resource,
+          migration,
+          existing,
+          actual,
+          introspectionTables,
+        );
         appliedMigrations.push(migration.version);
-        actual = await introspectDatabase(this.database);
+        actual = await introspectDatabase(this.database, introspectionTables);
       }
 
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
@@ -458,7 +487,7 @@ export class SchemaManager {
       const remaining = planSchema(
         resource,
         schema,
-        await introspectDatabase(this.database),
+        await introspectDatabase(this.database, introspectionTables),
         capabilities,
       );
       if (remaining.actions.length > 0) {
@@ -684,6 +713,7 @@ export class SchemaManager {
     migration: MigrationDefinition,
     existing: MigrationRow | undefined,
     actual: Map<string, ActualTable>,
+    introspectionTables: string[],
   ): Promise<void> {
     const checksum = stableChecksum(migration);
     const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
@@ -724,7 +754,7 @@ export class SchemaManager {
         }
         await this.reconcileOwnershipTransition(resource, operation);
         if (needed && operation.type !== 'releaseTable') {
-          actual = await introspectDatabase(this.database);
+          actual = await introspectDatabase(this.database, introspectionTables);
         }
       }
       await this.database.update(
@@ -879,10 +909,10 @@ export class SchemaManager {
 
   private async refuseImplicitAdoption(
     resource: string,
-    schema: ResourceSchema,
+    tableNames: string[],
     actual: Map<string, ActualTable>,
   ): Promise<void> {
-    const existing = Object.keys(schema.tables).filter((table) => actual.has(table));
+    const existing = tableNames.filter((table) => actual.has(table));
     if (existing.length === 0) return;
     const ownership = await this.readOwnership(existing);
     const unmanaged = existing.filter((table) => !ownership.has(table));
@@ -976,6 +1006,25 @@ export class SchemaManager {
         } else if ('table' in operation && typeof operation.table === 'string') {
           tables.add(operation.table);
         }
+      }
+    }
+    return [...tables];
+  }
+
+  private introspectionTables(
+    schema: ResourceSchema,
+    migrations: MigrationDefinition[],
+    registry: RegistryRow | null,
+  ): string[] {
+    const tables = new Set(this.relevantOwnershipTables(schema, migrations));
+    if (registry) {
+      try {
+        const owned = JSON.parse(registry.tablesJson) as unknown;
+        if (Array.isArray(owned)) {
+          for (const table of owned) if (typeof table === 'string') tables.add(table);
+        }
+      } catch {
+        // The ownership transition validator reports malformed registry data with context.
       }
     }
     return [...tables];
