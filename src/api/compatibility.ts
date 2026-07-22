@@ -13,6 +13,7 @@ interface LegacyTransactionStatement {
 export interface RuntimeBindings {
   addExport(name: string, callback: ExportFunction): void;
   addProviderExport(resource: string, name: string, callback: ExportFunction): void;
+  emitEvent?(name: string, payload: Record<string, unknown>): void;
   invokingResource(): string;
 }
 
@@ -74,6 +75,9 @@ export function createRuntimeBindings(): RuntimeBindings | null {
         setCallback(callback);
       });
     },
+    emitEvent(name, payload) {
+      if (typeof emit === 'function') emit(name, payload);
+    },
     invokingResource() {
       if (typeof GetInvokingResource !== 'function') return 'unknown';
       return GetInvokingResource() ?? 'unknown';
@@ -88,22 +92,51 @@ export function registerCompatibilityExports(
   const fallbackBindings: RuntimeBindings = {
     addExport() {},
     addProviderExport() {},
+    emitEvent() {},
     invokingResource: () => 'unknown',
   };
   const runtime = bindings ?? fallbackBindings;
+
+  function operationError(
+    error: unknown,
+    callback: CfxCallback | undefined,
+    returnCallbackErrors: boolean,
+    resource: string,
+    query?: string,
+    parameters?: SqlParameters,
+  ): void {
+    const message = errorMessage(error);
+    const output = `${resource} was unable to execute a query!${query ? `\nQuery: ${query}` : ''}\n${message}`;
+
+    runtime.emitEvent?.('oxmysql:error', {
+      query,
+      parameters,
+      message,
+      err: error,
+      resource,
+    });
+
+    if (callback && returnCallbackErrors) {
+      callback(null, output);
+      return;
+    }
+
+    console.error(output);
+  }
 
   function callbackOperation(
     operation: Promise<unknown>,
     callback: CfxCallback | undefined,
     resource: string,
+    returnCallbackErrors: boolean,
+    query?: string,
+    parameters?: SqlParameters,
   ): void {
     void operation
       .then((result) => callback?.(result))
-      .catch((error: unknown) => {
-        const message = errorMessage(error);
-        console.error(`[qbxsql] query failed [${resource}]: ${message}`);
-        callback?.(null, message);
-      });
+      .catch((error: unknown) =>
+        operationError(error, callback, returnCallbackErrors, resource, query, parameters),
+      );
   }
 
   function queryMethod(method: 'query' | 'single' | 'scalar' | 'insert' | 'update') {
@@ -112,6 +145,7 @@ export function registerCompatibilityExports(
       parameters: SqlParameters | CfxCallback = [],
       callback?: CfxCallback,
       explicitResource?: string,
+      returnCallbackErrors = false,
     ): void => {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
@@ -119,6 +153,9 @@ export function registerCompatibilityExports(
         database[method](query, values, { invokingResource: resource }),
         resolvedCallback,
         resource,
+        returnCallbackErrors,
+        query,
+        values,
       );
     };
   }
@@ -139,6 +176,7 @@ export function registerCompatibilityExports(
       parameters: SqlParameters | CfxCallback = [],
       callback?: CfxCallback,
       explicitResource?: string,
+      returnCallbackErrors = false,
     ) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
@@ -146,6 +184,9 @@ export function registerCompatibilityExports(
         database.prepare(query, values, { invokingResource: resource }),
         resolvedCallback,
         resource,
+        returnCallbackErrors,
+        query,
+        values,
       );
     },
     rawExecute(
@@ -153,6 +194,7 @@ export function registerCompatibilityExports(
       parameters: SqlParameters | CfxCallback = [],
       callback?: CfxCallback,
       explicitResource?: string,
+      returnCallbackErrors = false,
     ) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
@@ -160,6 +202,9 @@ export function registerCompatibilityExports(
         database.rawExecute(query, values, { invokingResource: resource }),
         resolvedCallback,
         resource,
+        returnCallbackErrors,
+        query,
+        values,
       );
     },
     transaction(
@@ -167,6 +212,7 @@ export function registerCompatibilityExports(
       parameters: SqlParameters | CfxCallback = [],
       callback?: CfxCallback,
       explicitResource?: string,
+      returnCallbackErrors = false,
     ) {
       const [sharedParameters, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
@@ -174,10 +220,38 @@ export function registerCompatibilityExports(
       try {
         statements = normalizeTransactionStatements(queries, sharedParameters);
       } catch (error) {
-        resolvedCallback?.(false, errorMessage(error));
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          undefined,
+          sharedParameters,
+        );
         return;
       }
-      callbackOperation(database.transaction(statements, resource), resolvedCallback, resource);
+      void database
+        .transaction(statements, resource)
+        .then((result) => resolvedCallback?.(result))
+        .catch((error: unknown) => {
+          const message = errorMessage(error);
+          const failedQuery =
+            typeof error === 'object' && error && 'sql' in error
+              ? String((error as { sql?: unknown }).sql ?? '')
+              : statements.map((statement) => statement.query).join('; ');
+
+          runtime.emitEvent?.('oxmysql:transaction-error', {
+            query: failedQuery,
+            parameters: sharedParameters,
+            message,
+            err: error,
+            resource,
+          });
+          console.error(
+            `${resource} was unable to complete a transaction!\n${failedQuery}\n${message}`,
+          );
+          resolvedCallback?.(false);
+        });
     },
     store(query: string, callback?: CfxCallback) {
       callback?.(query);
@@ -195,12 +269,18 @@ export function registerCompatibilityExports(
   api.fetch = api.query!;
 
   const asyncExport = (method: ExportFunction): ExportFunction => {
-    return (...args: unknown[]) =>
+    return (query: unknown, parameters: unknown = [], explicitResource?: string) =>
       new Promise((resolve, reject) => {
-        method(...args, (result: unknown, error?: string) => {
-          if (error) reject(new Error(error));
-          else resolve(result);
-        });
+        method(
+          query,
+          parameters,
+          (result: unknown, error?: string) => {
+            if (error) reject(new Error(error));
+            else resolve(result);
+          },
+          explicitResource,
+          true,
+        );
       });
   };
 

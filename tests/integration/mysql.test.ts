@@ -43,6 +43,7 @@ describe('MySQL driver integration', () => {
       addExport: (name, callback) => directExports.set(name, callback),
       addProviderExport: (resource, name, callback) =>
         providerExports.set(`${resource}:${name}`, callback),
+      emitEvent: () => {},
       invokingResource: () => 'integration-resource',
     };
     registerCompatibilityExports(database, bindings);
