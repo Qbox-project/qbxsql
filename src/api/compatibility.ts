@@ -161,11 +161,12 @@ export function registerCompatibilityExports(
   }
 
   const api: Record<string, ExportFunction> = {
-    isReady: () => database.driver.ready,
+    isReady: () => database.state === 'ready',
     awaitConnection: async () => {
-      await database.connect();
+      await database.awaitConnection();
       return true;
     },
+    getStatus: () => database.getStatus(),
     query: queryMethod('query'),
     single: queryMethod('single'),
     scalar: queryMethod('scalar'),
@@ -288,7 +289,7 @@ export function registerCompatibilityExports(
     runtime.addExport(name, method);
     runtime.addProviderExport('oxmysql', name, method);
 
-    if (!['isReady', 'awaitConnection', 'store', 'startTransaction'].includes(name)) {
+    if (!['isReady', 'awaitConnection', 'getStatus', 'store', 'startTransaction'].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);

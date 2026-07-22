@@ -14,17 +14,27 @@ const schemas = new SchemaManager(database);
 registerCompatibilityExports(database);
 registerSchemaExports(schemas);
 
-void database
-  .connect()
-  .then(() => {
-    const driver = database.driver;
+database.onLifecycle((event, status) => {
+  if (event === 'ready' || event === 'reconnected') {
     console.log(
-      `[${resourceName}] connected to ${driver.databaseName ?? '(no database)'} on ${driver.serverVersion ?? 'unknown server'}`,
+      `[${resourceName}] ${event === 'ready' ? 'connected' : 'reconnected'} to ${status.databaseName ?? '(no database)'} on ${status.databaseVersion ?? 'unknown server'}`,
     );
-  })
-  .catch((error: unknown) => {
-    console.error(`[${resourceName}] failed to connect`, error);
-  });
+  }
+  if (typeof emit === 'function') emit(`qbxsql:${event}`, status);
+});
+
+database.start();
+
+if (typeof RegisterCommand === 'function') {
+  RegisterCommand(
+    'qbxsql_status',
+    (source: number) => {
+      if (source !== 0) return;
+      console.log(`[${resourceName}] ${JSON.stringify(database.getStatus())}`);
+    },
+    false,
+  );
+}
 
 if (typeof on === 'function') {
   on('onResourceStop', (stoppedResource: string) => {

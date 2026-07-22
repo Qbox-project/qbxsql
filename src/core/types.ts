@@ -31,6 +31,14 @@ export interface DatabaseConnection {
   commit(): Promise<void>;
   rollback(): Promise<void>;
   release(): void;
+  destroy(): void;
+}
+
+export interface PoolStatus {
+  total: number;
+  free: number;
+  acquired: number;
+  queued: number;
 }
 
 export interface DatabaseDriver {
@@ -44,10 +52,12 @@ export interface DatabaseDriver {
   query(sql: string, parameters?: readonly unknown[]): Promise<DriverResult>;
   execute(sql: string, parameters?: readonly unknown[]): Promise<DriverResult>;
   acquire(): Promise<DatabaseConnection>;
+  healthCheck?(): Promise<void>;
+  getPoolStatus?(): PoolStatus;
+  onFatalError?(listener: (error: unknown) => void): void;
 }
 
 export interface TransactionStatement {
   query: string;
   parameters?: SqlParameters;
 }
-

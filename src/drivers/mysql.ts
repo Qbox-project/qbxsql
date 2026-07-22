@@ -13,6 +13,7 @@ import type {
   DatabaseDriver,
   DriverResult,
   FieldMetadata,
+  PoolStatus,
 } from '../core/types.js';
 import { serializeForRuntime } from '../core/serialize.js';
 
@@ -209,31 +210,71 @@ async function runQuery(
   );
 }
 
+const fatalErrorCodes = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EPIPE',
+  'ETIMEDOUT',
+  'PROTOCOL_CONNECTION_LOST',
+  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR',
+  'PROTOCOL_PACKETS_OUT_OF_ORDER',
+]);
+
+export function isFatalDatabaseError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; fatal?: unknown };
+  return candidate.fatal === true ||
+    (typeof candidate.code === 'string' && fatalErrorCodes.has(candidate.code));
+}
+
 class MySqlConnection implements DatabaseConnection {
-  public constructor(private readonly connection: PoolConnection) {}
+  private destroyed = false;
+
+  public constructor(
+    private readonly connection: PoolConnection,
+    private readonly reportFatalError: (error: unknown) => void,
+  ) {}
 
   public query(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
-    return runQuery(this.connection, sql, parameters, false);
+    return this.guard(runQuery(this.connection, sql, parameters, false));
   }
 
   public execute(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
-    return runQuery(this.connection, sql, parameters, true);
+    return this.guard(runQuery(this.connection, sql, parameters, true));
   }
 
   public beginTransaction(): Promise<void> {
-    return this.connection.beginTransaction();
+    return this.guard(this.connection.beginTransaction());
   }
 
   public commit(): Promise<void> {
-    return this.connection.commit();
+    return this.guard(this.connection.commit());
   }
 
   public rollback(): Promise<void> {
-    return this.connection.rollback();
+    return this.guard(this.connection.rollback());
   }
 
   public release(): void {
-    this.connection.release();
+    if (!this.destroyed) this.connection.release();
+  }
+
+  public destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.connection.destroy();
+  }
+
+  private async guard<T>(operation: Promise<T>): Promise<T> {
+    try {
+      return await operation;
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
   }
 }
 
@@ -244,6 +285,7 @@ export class MySqlDriver implements DatabaseDriver {
   public ready = false;
 
   private pool: Pool | null = null;
+  private fatalErrorListener: ((error: unknown) => void) | null = null;
 
   public constructor(private readonly config: QbxSqlConfig) {}
 
@@ -294,19 +336,70 @@ export class MySqlDriver implements DatabaseDriver {
   }
 
   public query(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
-    return runQuery(this.requirePool(), sql, parameters, false);
+    return this.guard(runQuery(this.requirePool(), sql, parameters, false));
   }
 
   public execute(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
-    return runQuery(this.requirePool(), sql, parameters, true);
+    return this.guard(runQuery(this.requirePool(), sql, parameters, true));
   }
 
   public async acquire(): Promise<DatabaseConnection> {
-    return new MySqlConnection(await this.requirePool().getConnection());
+    try {
+      return new MySqlConnection(
+        await this.requirePool().getConnection(),
+        (error) => this.reportFatalError(error),
+      );
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
+  }
+
+  public async healthCheck(): Promise<void> {
+    await this.guard(this.requirePool().query('SELECT 1').then(() => undefined));
+  }
+
+  public getPoolStatus(): PoolStatus {
+    const internal = this.pool as unknown as {
+      pool?: {
+        _allConnections?: { length?: number; size?: number };
+        _freeConnections?: { length?: number; size?: number };
+        _connectionQueue?: { length?: number; size?: number };
+      };
+    } | null;
+    const pool = internal?.pool;
+    const size = (value: { length?: number; size?: number } | undefined): number =>
+      value?.length ?? value?.size ?? 0;
+    const total = size(pool?._allConnections);
+    const free = size(pool?._freeConnections);
+    return {
+      total,
+      free,
+      acquired: Math.max(0, total - free),
+      queued: size(pool?._connectionQueue),
+    };
+  }
+
+  public onFatalError(listener: (error: unknown) => void): void {
+    this.fatalErrorListener = listener;
   }
 
   private requirePool(): Pool {
     if (!this.pool || !this.ready) throw new Error('Database connection is not ready.');
     return this.pool;
+  }
+
+  private async guard<T>(operation: Promise<T>): Promise<T> {
+    try {
+      return await operation;
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
+  }
+
+  private reportFatalError(error: unknown): void {
+    this.ready = false;
+    this.fatalErrorListener?.(error);
   }
 }

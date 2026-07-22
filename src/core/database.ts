@@ -3,30 +3,164 @@ import type { QbxSqlConfig } from '../config.js';
 import type {
   DatabaseDriver,
   DriverResult,
+  PoolStatus,
   QueryOptions,
   SqlParameters,
   TransactionStatement,
 } from './types.js';
 import { normalizeParameters } from './parameters.js';
 
+export type ConnectionState = 'connecting' | 'ready' | 'reconnecting' | 'closing';
+export type LifecycleEvent = 'ready' | 'disconnected' | 'reconnected';
+
+export interface DatabaseStatus {
+  state: ConnectionState;
+  databaseFamily: 'MariaDB' | 'MySQL' | 'unknown';
+  databaseVersion: string | null;
+  databaseName: string | null;
+  pool: PoolStatus;
+  queuedCalls: number;
+  totals: {
+    queries: number;
+    errors: number;
+    slowQueries: number;
+    reconnects: number;
+  };
+}
+
+interface ConnectionWaiter {
+  resolve(): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+export class ConnectionUnavailableError extends Error {
+  public constructor(
+    message: string,
+    public readonly code: 'QBXSQL_CONNECTION_QUEUE_FULL' | 'QBXSQL_CONNECTION_WAIT_TIMEOUT' | 'QBXSQL_CLOSING',
+  ) {
+    super(message);
+    this.name = 'ConnectionUnavailableError';
+  }
+}
+
+const emptyPoolStatus: PoolStatus = { total: 0, free: 0, acquired: 0, queued: 0 };
+
 export class DatabaseService {
-  private connectPromise: Promise<void> | null = null;
+  private connectionState: ConnectionState = 'connecting';
+  private connectionTask: Promise<void> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private releaseRetryWait: (() => void) | null = null;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly waiters = new Set<ConnectionWaiter>();
+  private readonly lifecycleListeners = new Set<
+    (event: LifecycleEvent, status: DatabaseStatus) => void
+  >();
+  private connectedBefore = false;
+  private disconnectAnnounced = false;
+  private queryTotal = 0;
+  private errorTotal = 0;
+  private slowQueryTotal = 0;
+  private reconnectTotal = 0;
 
   public constructor(
     public readonly driver: DatabaseDriver,
     private readonly config: QbxSqlConfig,
-  ) {}
+  ) {
+    this.driver.onFatalError?.((error) => this.handleDisconnect(error));
+  }
+
+  public get state(): ConnectionState {
+    return this.connectionState;
+  }
+
+  public start(): void {
+    this.ensureConnectionLoop();
+  }
 
   public connect(): Promise<void> {
-    this.connectPromise ??= this.driver.connect().catch((error: unknown) => {
-      this.connectPromise = null;
-      throw error;
+    return this.awaitConnection();
+  }
+
+  public awaitConnection(timeout = this.config.connectionWaitTimeout): Promise<void> {
+    if (this.connectionState === 'ready' && this.driver.ready) return Promise.resolve();
+    if (this.connectionState === 'closing') {
+      return Promise.reject(
+        new ConnectionUnavailableError('Database connector is closing.', 'QBXSQL_CLOSING'),
+      );
+    }
+    if (this.waiters.size >= this.config.connectionQueueLimit) {
+      return Promise.reject(
+        new ConnectionUnavailableError(
+          `Database connection queue is full (${this.config.connectionQueueLimit} calls).`,
+          'QBXSQL_CONNECTION_QUEUE_FULL',
+        ),
+      );
+    }
+
+    this.ensureConnectionLoop();
+    return new Promise<void>((resolve, reject) => {
+      const waiter: ConnectionWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.waiters.delete(waiter);
+          reject(
+            new ConnectionUnavailableError(
+              `Database connection was unavailable for ${timeout}ms.`,
+              'QBXSQL_CONNECTION_WAIT_TIMEOUT',
+            ),
+          );
+        }, timeout),
+      };
+      this.waiters.add(waiter);
+
+      if (this.connectionState === 'ready' && this.driver.ready) this.resolveWaiters();
     });
-    return this.connectPromise;
+  }
+
+  public onLifecycle(
+    listener: (event: LifecycleEvent, status: DatabaseStatus) => void,
+  ): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
+  }
+
+  public getStatus(): DatabaseStatus {
+    const serverVersion = this.driver.serverVersion;
+    const databaseFamily = !serverVersion
+      ? 'unknown'
+      : /mariadb/i.test(serverVersion)
+        ? 'MariaDB'
+        : 'MySQL';
+    return {
+      state: this.connectionState,
+      databaseFamily,
+      databaseVersion: serverVersion,
+      databaseName: this.driver.databaseName,
+      pool: this.driver.getPoolStatus?.() ?? emptyPoolStatus,
+      queuedCalls: this.waiters.size,
+      totals: {
+        queries: this.queryTotal,
+        errors: this.errorTotal,
+        slowQueries: this.slowQueryTotal,
+        reconnects: this.reconnectTotal,
+      },
+    };
   }
 
   public async close(): Promise<void> {
-    this.connectPromise = null;
+    if (this.connectionState === 'closing') return;
+    this.connectionState = 'closing';
+    this.stopHealthCheck();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.releaseRetryWait?.();
+    this.releaseRetryWait = null;
+    this.rejectWaiters(
+      new ConnectionUnavailableError('Database connector is closing.', 'QBXSQL_CLOSING'),
+    );
+    await this.connectionTask?.catch(() => {});
     await this.driver.close();
   }
 
@@ -108,7 +242,7 @@ export class DatabaseService {
     statements: readonly TransactionStatement[],
     invokingResource = 'unknown',
   ): Promise<boolean> {
-    await this.connect();
+    await this.awaitConnection();
     const connection = await this.driver.acquire();
 
     try {
@@ -136,18 +270,18 @@ export class DatabaseService {
     invokingResource = 'unknown',
   ): Promise<boolean> {
     if (typeof work !== 'function') throw new TypeError('Transaction callback must be a function.');
-    await this.connect();
+    await this.awaitConnection();
     const connection = await this.driver.acquire();
     let closed = false;
     const timeout = setTimeout(() => {
       closed = true;
-    }, 30_000);
+    }, this.config.transactionTimeout);
     timeout.unref();
 
     try {
       await connection.beginTransaction();
       const query = async (sql: string, parameters?: SqlParameters): Promise<unknown> => {
-        if (closed) throw new Error('Transaction timed out after 30 seconds.');
+        if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = normalizeParameters(sql, parameters);
         try {
           return (await connection.query(statement, values)).rows;
@@ -157,7 +291,7 @@ export class DatabaseService {
         }
       };
       const result = await work(query);
-      if (closed) throw new Error('Transaction timed out after 30 seconds.');
+      if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
       if (result === false) {
         await connection.rollback();
         return false;
@@ -185,18 +319,23 @@ export class DatabaseService {
     parameters?: SqlParameters,
     options: QueryOptions = {},
   ): Promise<DriverResult> {
-    await this.connect();
+    await this.awaitConnection();
     const [query, values] = normalizeParameters(sql, parameters);
     const started = performance.now();
+    this.queryTotal += 1;
 
     try {
       return options.prepared
         ? await this.driver.execute(query, values)
         : await this.driver.query(query, values);
+    } catch (error) {
+      this.errorTotal += 1;
+      throw error;
     } finally {
       const duration = performance.now() - started;
       const resource = options.invokingResource ?? 'unknown';
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
+      if (slow) this.slowQueryTotal += 1;
       const debug =
         this.config.debug === true ||
         (Array.isArray(this.config.debug) && this.config.debug.includes(resource));
@@ -205,6 +344,139 @@ export class DatabaseService {
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
+  }
+
+  private ensureConnectionLoop(): void {
+    if (
+      this.connectionState === 'closing' ||
+      (this.connectionState === 'ready' && this.driver.ready) ||
+      this.connectionTask
+    ) {
+      return;
+    }
+
+    this.connectionState = this.connectedBefore ? 'reconnecting' : 'connecting';
+    if (this.connectedBefore && !this.disconnectAnnounced) {
+      this.disconnectAnnounced = true;
+      this.emitLifecycle('disconnected');
+    }
+
+    const task = this.connectionLoop();
+    this.connectionTask = task;
+    void task.finally(() => {
+      if (this.connectionTask !== task) return;
+      this.connectionTask = null;
+      if (
+        this.connectionState !== 'closing' &&
+        (this.connectionState !== 'ready' || !this.driver.ready)
+      ) {
+        this.ensureConnectionLoop();
+      }
+    });
+  }
+
+  private async connectionLoop(): Promise<void> {
+    let delay = 250;
+
+    while (!this.isClosing()) {
+      try {
+        await this.driver.close();
+        await this.driver.connect();
+        if (this.isClosing()) {
+          await this.driver.close();
+          return;
+        }
+
+        const reconnected = this.connectedBefore;
+        this.connectedBefore = true;
+        this.disconnectAnnounced = false;
+        this.connectionState = 'ready';
+        if (reconnected) this.reconnectTotal += 1;
+        this.startHealthCheck();
+        this.resolveWaiters();
+        this.emitLifecycle(reconnected ? 'reconnected' : 'ready');
+        return;
+      } catch (error) {
+        await this.driver.close().catch(() => {});
+        if (this.isClosing()) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        const wait = Math.min(
+          this.config.connectionRetryMax,
+          delay + Math.floor(Math.random() * Math.max(1, delay * 0.2)),
+        );
+        console.error(`[qbxsql] database connection failed; retrying in ${wait}ms: ${reason}`);
+        await this.waitForRetry(wait);
+        delay = Math.min(this.config.connectionRetryMax, delay * 2);
+      }
+    }
+  }
+
+  private waitForRetry(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => {
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        this.retryTimer = null;
+        this.releaseRetryWait = null;
+        resolve();
+      };
+      this.releaseRetryWait = release;
+      this.retryTimer = setTimeout(release, milliseconds);
+    });
+  }
+
+  private handleDisconnect(error: unknown): void {
+    if (this.connectionState === 'closing' || !this.connectedBefore) return;
+    this.stopHealthCheck();
+    this.connectionState = 'reconnecting';
+    if (!this.disconnectAnnounced) {
+      this.disconnectAnnounced = true;
+      this.emitLifecycle('disconnected');
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] database connection lost: ${reason}`);
+    }
+    this.ensureConnectionLoop();
+  }
+
+  private startHealthCheck(): void {
+    this.stopHealthCheck();
+    if (!this.driver.healthCheck) return;
+    this.healthTimer = setInterval(() => {
+      if (this.connectionState !== 'ready') return;
+      void this.driver.healthCheck!().catch((error: unknown) => this.handleDisconnect(error));
+    }, this.config.healthInterval);
+    this.healthTimer.unref();
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer);
+    this.healthTimer = null;
+  }
+
+  private resolveWaiters(): void {
+    for (const waiter of this.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    this.waiters.clear();
+  }
+
+  private rejectWaiters(error: Error): void {
+    for (const waiter of this.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.waiters.clear();
+  }
+
+  private emitLifecycle(event: LifecycleEvent): void {
+    const status = this.getStatus();
+    for (const listener of this.lifecycleListeners) listener(event, status);
+  }
+
+  private isClosing(): boolean {
+    return this.connectionState === 'closing';
   }
 
   private parsePreparedResult(sql: string, result: DriverResult): unknown {

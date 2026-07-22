@@ -20323,26 +20323,120 @@ function normalizeParameters(query, parameters) {
 __name(normalizeParameters, "normalizeParameters");
 
 // src/core/database.ts
+var ConnectionUnavailableError = class extends Error {
+  constructor(message2, code) {
+    super(message2);
+    this.code = code;
+    this.name = "ConnectionUnavailableError";
+  }
+  code;
+  static {
+    __name(this, "ConnectionUnavailableError");
+  }
+};
+var emptyPoolStatus = { total: 0, free: 0, acquired: 0, queued: 0 };
 var DatabaseService = class {
   constructor(driver, config2) {
     this.driver = driver;
     this.config = config2;
+    this.driver.onFatalError?.((error) => this.handleDisconnect(error));
   }
   driver;
   config;
   static {
     __name(this, "DatabaseService");
   }
-  connectPromise = null;
+  connectionState = "connecting";
+  connectionTask = null;
+  retryTimer = null;
+  releaseRetryWait = null;
+  healthTimer = null;
+  waiters = /* @__PURE__ */ new Set();
+  lifecycleListeners = /* @__PURE__ */ new Set();
+  connectedBefore = false;
+  disconnectAnnounced = false;
+  queryTotal = 0;
+  errorTotal = 0;
+  slowQueryTotal = 0;
+  reconnectTotal = 0;
+  get state() {
+    return this.connectionState;
+  }
+  start() {
+    this.ensureConnectionLoop();
+  }
   connect() {
-    this.connectPromise ??= this.driver.connect().catch((error) => {
-      this.connectPromise = null;
-      throw error;
+    return this.awaitConnection();
+  }
+  awaitConnection(timeout = this.config.connectionWaitTimeout) {
+    if (this.connectionState === "ready" && this.driver.ready) return Promise.resolve();
+    if (this.connectionState === "closing") {
+      return Promise.reject(
+        new ConnectionUnavailableError("Database connector is closing.", "QBXSQL_CLOSING")
+      );
+    }
+    if (this.waiters.size >= this.config.connectionQueueLimit) {
+      return Promise.reject(
+        new ConnectionUnavailableError(
+          `Database connection queue is full (${this.config.connectionQueueLimit} calls).`,
+          "QBXSQL_CONNECTION_QUEUE_FULL"
+        )
+      );
+    }
+    this.ensureConnectionLoop();
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.waiters.delete(waiter);
+          reject(
+            new ConnectionUnavailableError(
+              `Database connection was unavailable for ${timeout}ms.`,
+              "QBXSQL_CONNECTION_WAIT_TIMEOUT"
+            )
+          );
+        }, timeout)
+      };
+      this.waiters.add(waiter);
+      if (this.connectionState === "ready" && this.driver.ready) this.resolveWaiters();
     });
-    return this.connectPromise;
+  }
+  onLifecycle(listener) {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
+  }
+  getStatus() {
+    const serverVersion = this.driver.serverVersion;
+    const databaseFamily = !serverVersion ? "unknown" : /mariadb/i.test(serverVersion) ? "MariaDB" : "MySQL";
+    return {
+      state: this.connectionState,
+      databaseFamily,
+      databaseVersion: serverVersion,
+      databaseName: this.driver.databaseName,
+      pool: this.driver.getPoolStatus?.() ?? emptyPoolStatus,
+      queuedCalls: this.waiters.size,
+      totals: {
+        queries: this.queryTotal,
+        errors: this.errorTotal,
+        slowQueries: this.slowQueryTotal,
+        reconnects: this.reconnectTotal
+      }
+    };
   }
   async close() {
-    this.connectPromise = null;
+    if (this.connectionState === "closing") return;
+    this.connectionState = "closing";
+    this.stopHealthCheck();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.releaseRetryWait?.();
+    this.releaseRetryWait = null;
+    this.rejectWaiters(
+      new ConnectionUnavailableError("Database connector is closing.", "QBXSQL_CLOSING")
+    );
+    await this.connectionTask?.catch(() => {
+    });
     await this.driver.close();
   }
   async query(sql, parameters, options = {}) {
@@ -20383,7 +20477,7 @@ var DatabaseService = class {
     return results.length === 1 ? results[0] : results;
   }
   async transaction(statements, invokingResource = "unknown") {
-    await this.connect();
+    await this.awaitConnection();
     const connection = await this.driver.acquire();
     try {
       await connection.beginTransaction();
@@ -20406,17 +20500,17 @@ var DatabaseService = class {
   }
   async startTransaction(work, invokingResource = "unknown") {
     if (typeof work !== "function") throw new TypeError("Transaction callback must be a function.");
-    await this.connect();
+    await this.awaitConnection();
     const connection = await this.driver.acquire();
     let closed = false;
     const timeout = setTimeout(() => {
       closed = true;
-    }, 3e4);
+    }, this.config.transactionTimeout);
     timeout.unref();
     try {
       await connection.beginTransaction();
       const query = /* @__PURE__ */ __name(async (sql, parameters) => {
-        if (closed) throw new Error("Transaction timed out after 30 seconds.");
+        if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = normalizeParameters(sql, parameters);
         try {
           return (await connection.query(statement, values)).rows;
@@ -20428,7 +20522,7 @@ ${reason}`);
         }
       }, "query");
       const result = await work(query);
-      if (closed) throw new Error("Transaction timed out after 30 seconds.");
+      if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
       if (result === false) {
         await connection.rollback();
         return false;
@@ -20450,21 +20544,139 @@ ${reason}`);
     }
   }
   async run(sql, parameters, options = {}) {
-    await this.connect();
+    await this.awaitConnection();
     const [query, values] = normalizeParameters(sql, parameters);
     const started = import_node_perf_hooks.performance.now();
+    this.queryTotal += 1;
     try {
       return options.prepared ? await this.driver.execute(query, values) : await this.driver.query(query, values);
+    } catch (error) {
+      this.errorTotal += 1;
+      throw error;
     } finally {
       const duration = import_node_perf_hooks.performance.now() - started;
       const resource = options.invokingResource ?? "unknown";
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
+      if (slow) this.slowQueryTotal += 1;
       const debug = this.config.debug === true || Array.isArray(this.config.debug) && this.config.debug.includes(resource);
       if (debug || slow) {
         const level = slow ? "slow query" : "query";
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
+  }
+  ensureConnectionLoop() {
+    if (this.connectionState === "closing" || this.connectionState === "ready" && this.driver.ready || this.connectionTask) {
+      return;
+    }
+    this.connectionState = this.connectedBefore ? "reconnecting" : "connecting";
+    if (this.connectedBefore && !this.disconnectAnnounced) {
+      this.disconnectAnnounced = true;
+      this.emitLifecycle("disconnected");
+    }
+    const task = this.connectionLoop();
+    this.connectionTask = task;
+    void task.finally(() => {
+      if (this.connectionTask !== task) return;
+      this.connectionTask = null;
+      if (this.connectionState !== "closing" && (this.connectionState !== "ready" || !this.driver.ready)) {
+        this.ensureConnectionLoop();
+      }
+    });
+  }
+  async connectionLoop() {
+    let delay = 250;
+    while (!this.isClosing()) {
+      try {
+        await this.driver.close();
+        await this.driver.connect();
+        if (this.isClosing()) {
+          await this.driver.close();
+          return;
+        }
+        const reconnected = this.connectedBefore;
+        this.connectedBefore = true;
+        this.disconnectAnnounced = false;
+        this.connectionState = "ready";
+        if (reconnected) this.reconnectTotal += 1;
+        this.startHealthCheck();
+        this.resolveWaiters();
+        this.emitLifecycle(reconnected ? "reconnected" : "ready");
+        return;
+      } catch (error) {
+        await this.driver.close().catch(() => {
+        });
+        if (this.isClosing()) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        const wait = Math.min(
+          this.config.connectionRetryMax,
+          delay + Math.floor(Math.random() * Math.max(1, delay * 0.2))
+        );
+        console.error(`[qbxsql] database connection failed; retrying in ${wait}ms: ${reason}`);
+        await this.waitForRetry(wait);
+        delay = Math.min(this.config.connectionRetryMax, delay * 2);
+      }
+    }
+  }
+  waitForRetry(milliseconds) {
+    return new Promise((resolve) => {
+      let released = false;
+      const release = /* @__PURE__ */ __name(() => {
+        if (released) return;
+        released = true;
+        this.retryTimer = null;
+        this.releaseRetryWait = null;
+        resolve();
+      }, "release");
+      this.releaseRetryWait = release;
+      this.retryTimer = setTimeout(release, milliseconds);
+    });
+  }
+  handleDisconnect(error) {
+    if (this.connectionState === "closing" || !this.connectedBefore) return;
+    this.stopHealthCheck();
+    this.connectionState = "reconnecting";
+    if (!this.disconnectAnnounced) {
+      this.disconnectAnnounced = true;
+      this.emitLifecycle("disconnected");
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] database connection lost: ${reason}`);
+    }
+    this.ensureConnectionLoop();
+  }
+  startHealthCheck() {
+    this.stopHealthCheck();
+    if (!this.driver.healthCheck) return;
+    this.healthTimer = setInterval(() => {
+      if (this.connectionState !== "ready") return;
+      void this.driver.healthCheck().catch((error) => this.handleDisconnect(error));
+    }, this.config.healthInterval);
+    this.healthTimer.unref();
+  }
+  stopHealthCheck() {
+    if (this.healthTimer) clearInterval(this.healthTimer);
+    this.healthTimer = null;
+  }
+  resolveWaiters() {
+    for (const waiter of this.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    this.waiters.clear();
+  }
+  rejectWaiters(error) {
+    for (const waiter of this.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.waiters.clear();
+  }
+  emitLifecycle(event) {
+    const status = this.getStatus();
+    for (const listener of this.lifecycleListeners) listener(event, status);
+  }
+  isClosing() {
+    return this.connectionState === "closing";
   }
   parsePreparedResult(sql, result) {
     const operation = sql.trimStart().split(/\s+/, 1)[0]?.toUpperCase();
@@ -20673,31 +20885,65 @@ async function runQuery(connection, sql, parameters, prepared) {
   );
 }
 __name(runQuery, "runQuery");
+var fatalErrorCodes = /* @__PURE__ */ new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "PROTOCOL_CONNECTION_LOST",
+  "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR",
+  "PROTOCOL_PACKETS_OUT_OF_ORDER"
+]);
+function isFatalDatabaseError(error) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error;
+  return candidate.fatal === true || typeof candidate.code === "string" && fatalErrorCodes.has(candidate.code);
+}
+__name(isFatalDatabaseError, "isFatalDatabaseError");
 var MySqlConnection = class {
-  constructor(connection) {
+  constructor(connection, reportFatalError) {
     this.connection = connection;
+    this.reportFatalError = reportFatalError;
   }
   connection;
+  reportFatalError;
   static {
     __name(this, "MySqlConnection");
   }
+  destroyed = false;
   query(sql, parameters = []) {
-    return runQuery(this.connection, sql, parameters, false);
+    return this.guard(runQuery(this.connection, sql, parameters, false));
   }
   execute(sql, parameters = []) {
-    return runQuery(this.connection, sql, parameters, true);
+    return this.guard(runQuery(this.connection, sql, parameters, true));
   }
   beginTransaction() {
-    return this.connection.beginTransaction();
+    return this.guard(this.connection.beginTransaction());
   }
   commit() {
-    return this.connection.commit();
+    return this.guard(this.connection.commit());
   }
   rollback() {
-    return this.connection.rollback();
+    return this.guard(this.connection.rollback());
   }
   release() {
-    this.connection.release();
+    if (!this.destroyed) this.connection.release();
+  }
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.connection.destroy();
+  }
+  async guard(operation) {
+    try {
+      return await operation;
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
   }
 };
 var MySqlDriver = class {
@@ -20713,6 +20959,7 @@ var MySqlDriver = class {
   serverVersion = null;
   ready = false;
   pool = null;
+  fatalErrorListener = null;
   async connect() {
     if (this.ready) return;
     const parsedOptions = parseMySqlConnectionString(this.config.connectionString);
@@ -20755,17 +21002,56 @@ var MySqlDriver = class {
     if (pool) await pool.end();
   }
   query(sql, parameters = []) {
-    return runQuery(this.requirePool(), sql, parameters, false);
+    return this.guard(runQuery(this.requirePool(), sql, parameters, false));
   }
   execute(sql, parameters = []) {
-    return runQuery(this.requirePool(), sql, parameters, true);
+    return this.guard(runQuery(this.requirePool(), sql, parameters, true));
   }
   async acquire() {
-    return new MySqlConnection(await this.requirePool().getConnection());
+    try {
+      return new MySqlConnection(
+        await this.requirePool().getConnection(),
+        (error) => this.reportFatalError(error)
+      );
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
+  }
+  async healthCheck() {
+    await this.guard(this.requirePool().query("SELECT 1").then(() => void 0));
+  }
+  getPoolStatus() {
+    const internal = this.pool;
+    const pool = internal?.pool;
+    const size = /* @__PURE__ */ __name((value) => value?.length ?? value?.size ?? 0, "size");
+    const total = size(pool?._allConnections);
+    const free = size(pool?._freeConnections);
+    return {
+      total,
+      free,
+      acquired: Math.max(0, total - free),
+      queued: size(pool?._connectionQueue)
+    };
+  }
+  onFatalError(listener) {
+    this.fatalErrorListener = listener;
   }
   requirePool() {
     if (!this.pool || !this.ready) throw new Error("Database connection is not ready.");
     return this.pool;
+  }
+  async guard(operation) {
+    try {
+      return await operation;
+    } catch (error) {
+      if (isFatalDatabaseError(error)) this.reportFatalError(error);
+      throw error;
+    }
+  }
+  reportFatalError(error) {
+    this.ready = false;
+    this.fatalErrorListener?.(error);
   }
 };
 
@@ -20879,11 +21165,12 @@ ${message2}`;
   }
   __name(queryMethod, "queryMethod");
   const api = {
-    isReady: /* @__PURE__ */ __name(() => database2.driver.ready, "isReady"),
+    isReady: /* @__PURE__ */ __name(() => database2.state === "ready", "isReady"),
     awaitConnection: /* @__PURE__ */ __name(async () => {
-      await database2.connect();
+      await database2.awaitConnection();
       return true;
     }, "awaitConnection"),
+    getStatus: /* @__PURE__ */ __name(() => database2.getStatus(), "getStatus"),
     query: queryMethod("query"),
     single: queryMethod("single"),
     scalar: queryMethod("scalar"),
@@ -20975,7 +21262,7 @@ ${message2}`
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
     runtime.addProviderExport("oxmysql", name, method);
-    if (!["isReady", "awaitConnection", "store", "startTransaction"].includes(name)) {
+    if (!["isReady", "awaitConnection", "getStatus", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
@@ -22089,14 +22376,25 @@ var database = new DatabaseService(new MySqlDriver(config), config);
 var schemas = new SchemaManager(database);
 registerCompatibilityExports(database);
 registerSchemaExports(schemas);
-void database.connect().then(() => {
-  const driver = database.driver;
-  console.log(
-    `[${resourceName}] connected to ${driver.databaseName ?? "(no database)"} on ${driver.serverVersion ?? "unknown server"}`
-  );
-}).catch((error) => {
-  console.error(`[${resourceName}] failed to connect`, error);
+database.onLifecycle((event, status) => {
+  if (event === "ready" || event === "reconnected") {
+    console.log(
+      `[${resourceName}] ${event === "ready" ? "connected" : "reconnected"} to ${status.databaseName ?? "(no database)"} on ${status.databaseVersion ?? "unknown server"}`
+    );
+  }
+  if (typeof emit === "function") emit(`qbxsql:${event}`, status);
 });
+database.start();
+if (typeof RegisterCommand === "function") {
+  RegisterCommand(
+    "qbxsql_status",
+    (source) => {
+      if (source !== 0) return;
+      console.log(`[${resourceName}] ${JSON.stringify(database.getStatus())}`);
+    },
+    false
+  );
+}
 if (typeof on === "function") {
   on("onResourceStop", (stoppedResource) => {
     if (stoppedResource === resourceName) void database.close();
