@@ -220,4 +220,94 @@ describe('resource schema manager integration', () => {
     expect((await introspectDatabase(database)).has('mode_probe')).toBe(false);
   });
 
+  test('renames and removes ownership only after successful table migrations', async () => {
+    await manager.ensure('ownership_lifecycle', {
+      version: 1,
+      tables: {
+        ownership_old: { columns: { id: { type: 'int', primary: true } } },
+      },
+    });
+    await manager.ensure('ownership_lifecycle', {
+      version: 2,
+      tables: {
+        ownership_new: { columns: { id: { type: 'int', primary: true } } },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'rename owned table',
+          operations: [{ type: 'renameTable', from: 'ownership_old', to: 'ownership_new' }],
+        },
+      ],
+    });
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables
+         WHERE table_name = 'ownership_new' AND resource_name = 'ownership_lifecycle'`,
+      ),
+    ).toBe(1);
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'ownership_old'`,
+      ),
+    ).toBe(0);
+
+    await manager.ensure('ownership_lifecycle', {
+      version: 3,
+      tables: {},
+      migrations: [
+        {
+          version: 3,
+          name: 'drop owned table',
+          operations: [{ type: 'dropTable', table: 'ownership_new', allowDataLoss: true }],
+        },
+      ],
+    });
+    expect((await introspectDatabase(database)).has('ownership_new')).toBe(false);
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'ownership_new'`,
+      ),
+    ).toBe(0);
+  });
+
+  test('requires explicit ownership release when a table leaves the declaration', async () => {
+    const initial: ResourceSchema = {
+      version: 1,
+      tables: {
+        released_table: { columns: { id: { type: 'int', primary: true } } },
+      },
+    };
+    await manager.ensure('ownership_release', initial);
+    await expect(
+      manager.ensure('ownership_release', { version: 2, tables: {} }),
+    ).rejects.toThrow('was removed from the declaration but is still managed');
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables
+         WHERE table_name = 'released_table' AND resource_name = 'ownership_release'`,
+      ),
+    ).toBe(1);
+
+    await manager.ensure('ownership_release', {
+      version: 2,
+      tables: {},
+      migrations: [
+        {
+          version: 2,
+          name: 'release legacy table',
+          operations: [
+            { type: 'releaseTable', table: 'released_table', allowOwnershipTransfer: true },
+          ],
+        },
+      ],
+    });
+    expect((await introspectDatabase(database)).has('released_table')).toBe(true);
+    expect(
+      await database.scalar(
+        `SELECT COUNT(*) FROM qbxsql_schema_tables WHERE table_name = 'released_table'`,
+      ),
+    ).toBe(0);
+  });
+
 });

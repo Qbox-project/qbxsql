@@ -22444,6 +22444,12 @@ var SchemaManager = class {
     if (this.mode === "off") throw new SchemaDisabledError(resource);
     if (this.mode === "plan") throw new SchemaPendingChangesError(await this.plan(resource, schema));
     await this.initialize();
+    const preflightRegistry = await this.readRegistry(resource);
+    const preflightMigrations = preflightRegistry ? (schema.migrations ?? []).filter(
+      (migration) => migration.version > preflightRegistry.version && migration.version <= schema.version
+    ).sort((left, right) => left.version - right.version) : [];
+    this.assertOwnershipTransitions(preflightRegistry, schema, preflightMigrations);
+    this.assertBlockingPolicy(preflightMigrations);
     const lock = await this.database.driver.acquire();
     try {
       await this.acquireLock(lock);
@@ -22453,10 +22459,11 @@ var SchemaManager = class {
           `Refusing to downgrade '${resource}' from schema version ${registry.version} to ${schema.version}.`
         );
       }
-      await this.assertOwnership(resource, Object.keys(schema.tables));
       const migrationRows = await this.readMigrationRows(resource);
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
+      const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
+      await this.assertOwnership(resource, relevantTables);
       let actual = await introspectDatabase(this.database);
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       let plan = planSchema(resource, schema, actual, capabilities);
@@ -22520,11 +22527,8 @@ var SchemaManager = class {
         appliedMigrations
       };
     } finally {
-      try {
-        await lock.query(`SELECT RELEASE_LOCK('qbxsql:schema') AS released`);
-      } finally {
-        lock.release();
-      }
+      lock.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
   async plan(resource, input) {
@@ -22696,13 +22700,17 @@ var SchemaManager = class {
     );
     try {
       for (const operation of migration.operations) {
-        if (await this.operationNeeded(operation, actual)) {
+        const needed = await this.operationNeeded(resource, operation, actual);
+        if (needed) {
           if (operation.type === "releaseTable") {
             await this.releaseTable(resource, operation.table);
           } else {
             const sql = blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation);
             await this.database.query(sql, [], { invokingResource: resource });
           }
+        }
+        await this.reconcileOwnershipTransition(resource, operation);
+        if (needed && operation.type !== "releaseTable") {
           actual = await introspectDatabase(this.database);
         }
       }
@@ -22724,7 +22732,7 @@ var SchemaManager = class {
       throw error;
     }
   }
-  async operationNeeded(operation, actual) {
+  async operationNeeded(resource, operation, actual) {
     switch (operation.type) {
       case "renameTable": {
         const source = actual.has(operation.from);
@@ -22793,7 +22801,14 @@ var SchemaManager = class {
         return operation.engine !== void 0 && table.engine !== operation.engine || operation.charset !== void 0 && table.charset !== operation.charset || operation.collation !== void 0 && table.collation !== operation.collation;
       }
       case "releaseTable":
-        return true;
+        return Number(
+          await this.database.scalar(
+            `SELECT COUNT(*) FROM qbxsql_schema_tables
+               WHERE table_name = ? AND resource_name = ?`,
+            [operation.table, resource],
+            { invokingResource: "qbxsql:schema" }
+          )
+        ) === 1;
       case "sql":
         return true;
     }
@@ -22817,6 +22832,81 @@ var SchemaManager = class {
     );
     if (affected !== 1) {
       throw new Error(`Cannot release table '${tableName}' because it is not owned by '${resource}'.`);
+    }
+  }
+  relevantOwnershipTables(schema, migrations) {
+    const tables = new Set(Object.keys(schema.tables));
+    for (const migration of migrations) {
+      for (const operation of migration.operations) {
+        if (operation.type === "renameTable") {
+          tables.add(operation.from);
+          tables.add(operation.to);
+        } else if ("table" in operation && typeof operation.table === "string") {
+          tables.add(operation.table);
+        }
+      }
+    }
+    return [...tables];
+  }
+  assertOwnershipTransitions(registry, schema, migrations) {
+    if (!registry) return;
+    let previousTables;
+    try {
+      previousTables = JSON.parse(registry.tablesJson);
+    } catch {
+      throw new Error(`Stored table ownership for '${registry.resourceName}' is invalid JSON.`);
+    }
+    if (!Array.isArray(previousTables) || !previousTables.every((entry) => typeof entry === "string")) {
+      throw new Error(`Stored table ownership for '${registry.resourceName}' is invalid.`);
+    }
+    const desiredTables = new Set(Object.keys(schema.tables));
+    const operations = migrations.flatMap((migration) => migration.operations);
+    for (const table of previousTables) {
+      if (desiredTables.has(table)) continue;
+      const transition = operations.find(
+        (operation) => operation.type === "renameTable" && operation.from === table && desiredTables.has(operation.to) || (operation.type === "dropTable" || operation.type === "releaseTable") && operation.table === table
+      );
+      if (!transition) {
+        throw new Error(
+          `Table '${table}' was removed from the declaration but is still managed by '${registry.resourceName}'. Add a renameTable, dropTable, or releaseTable migration; releaseTable requires allowOwnershipTransfer=true.`
+        );
+      }
+    }
+  }
+  assertBlockingPolicy(migrations) {
+    for (const migration of migrations) {
+      const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+      if (blockedOperation && !(migration.allowBlocking === true && this.allowBlocking)) {
+        throw new Error(
+          `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`
+        );
+      }
+    }
+  }
+  async reconcileOwnershipTransition(resource, operation) {
+    if (operation.type === "renameTable") {
+      const affected = await this.database.update(
+        `UPDATE qbxsql_schema_tables SET table_name = ?
+         WHERE table_name = ? AND resource_name = ?`,
+        [operation.to, operation.from, resource],
+        { invokingResource: "qbxsql:schema" }
+      );
+      if (affected === 0) {
+        const owner = await this.database.scalar(
+          `SELECT resource_name FROM qbxsql_schema_tables WHERE table_name = ?`,
+          [operation.to],
+          { invokingResource: "qbxsql:schema" }
+        );
+        if (owner !== null && owner !== resource) {
+          throw new Error(`Renamed table '${operation.to}' is owned by '${String(owner)}'.`);
+        }
+      }
+    } else if (operation.type === "dropTable") {
+      await this.database.update(
+        `DELETE FROM qbxsql_schema_tables WHERE table_name = ? AND resource_name = ?`,
+        [operation.table, resource],
+        { invokingResource: "qbxsql:schema" }
+      );
     }
   }
   async writeRegistry(resource, version, checksum, tableNames) {
