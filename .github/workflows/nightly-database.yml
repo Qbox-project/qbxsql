@@ -1,0 +1,39 @@
+name: Rolling MariaDB nightly
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rolling-mariadb:
+    name: Current rolling MariaDB (non-blocking)
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    services:
+      database:
+        image: mariadb:latest
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd "mariadb-admin ping -h localhost -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      QBXSQL_TEST_ADMIN_URL: mysql://root:root@127.0.0.1:${{ job.services.database.ports[3306] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run test:integration
