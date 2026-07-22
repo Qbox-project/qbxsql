@@ -19,5 +19,25 @@ describe('runtime serialization', () => {
       nested: [[3]],
     });
   });
-});
 
+  test('does not clone values that are already runtime-safe', () => {
+    const row = { id: 1, name: 'Ada', active: true, nested: [2, null] };
+    const rows = [row];
+
+    expect(serializeForRuntime(rows)).toBe(rows);
+    expect(serializeForRuntime(row)).toBe(row);
+  });
+
+  test('only clones paths containing values that require conversion', () => {
+    const safe = { id: 1 };
+    const changed = { bytes: Buffer.from([4]) };
+    const rows = [safe, changed];
+    const serialized = serializeForRuntime(rows) as Array<Record<string, unknown>>;
+
+    expect(serialized).not.toBe(rows);
+    expect(serialized[0]).toBe(safe);
+    expect(serialized[1]).not.toBe(changed);
+    expect(serialized[1]).toEqual({ bytes: [4] });
+    expect(changed.bytes).toEqual(Buffer.from([4]));
+  });
+});

@@ -20789,13 +20789,32 @@ function serializeForRuntime(value) {
   if (Buffer.isBuffer(value)) return [...value];
   if (value instanceof Date) return value.getTime();
   if (typeof value === "bigint") return value.toString();
-  if (Array.isArray(value)) return value.map(serializeForRuntime);
-  if (typeof value === "object") {
-    const result = {};
-    for (const [key, entry] of Object.entries(value)) {
-      result[key] = serializeForRuntime(entry);
+  if (Array.isArray(value)) {
+    let result = null;
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = value[index];
+      const serialized = serializeForRuntime(entry);
+      if (result) {
+        result[index] = serialized;
+      } else if (serialized !== entry) {
+        result = value.slice(0, index);
+        result[index] = serialized;
+      }
     }
-    return result;
+    return result ?? value;
+  }
+  if (typeof value === "object") {
+    const source = value;
+    let result = null;
+    for (const [key, entry] of Object.entries(source)) {
+      const serialized = serializeForRuntime(entry);
+      if (result) {
+        result[key] = serialized;
+      } else if (serialized !== entry) {
+        result = { ...source, [key]: serialized };
+      }
+    }
+    return result ?? value;
   }
   return value;
 }
