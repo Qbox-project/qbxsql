@@ -192,6 +192,12 @@ export function registerCompatibilityExports(
       callback?.(query);
       return query;
     },
+    startTransaction(
+      work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
+      explicitResource?: string,
+    ) {
+      return database.startTransaction(work, queryResource(explicitResource, runtime));
+    },
   };
 
   api.execute = api.query!;
@@ -211,7 +217,7 @@ export function registerCompatibilityExports(
     runtime.addExport(name, method);
     runtime.addProviderExport('oxmysql', name, method);
 
-    if (!['isReady', 'awaitConnection', 'store'].includes(name)) {
+    if (!['isReady', 'awaitConnection', 'store', 'startTransaction'].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);

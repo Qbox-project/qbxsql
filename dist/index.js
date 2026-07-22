@@ -20284,7 +20284,10 @@ var DatabaseService = class {
   }
   connectPromise = null;
   connect() {
-    this.connectPromise ??= this.driver.connect();
+    this.connectPromise ??= this.driver.connect().catch((error) => {
+      this.connectPromise = null;
+      throw error;
+    });
     return this.connectPromise;
   }
   async close() {
@@ -20339,6 +20342,51 @@ var DatabaseService = class {
       }
       throw error;
     } finally {
+      connection.release();
+    }
+  }
+  async startTransaction(work, invokingResource = "unknown") {
+    if (typeof work !== "function") throw new TypeError("Transaction callback must be a function.");
+    await this.connect();
+    const connection = await this.driver.acquire();
+    let closed = false;
+    const timeout = setTimeout(() => {
+      closed = true;
+    }, 3e4);
+    timeout.unref();
+    try {
+      await connection.beginTransaction();
+      const query = /* @__PURE__ */ __name(async (sql, parameters) => {
+        if (closed) throw new Error("Transaction timed out after 30 seconds.");
+        const [statement, values] = normalizeParameters(sql, parameters);
+        try {
+          return (await connection.query(statement, values)).rows;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`Query: ${statement}
+${JSON.stringify(values)}
+${reason}`);
+        }
+      }, "query");
+      const result = await work(query);
+      if (closed) throw new Error("Transaction timed out after 30 seconds.");
+      if (result === false) {
+        await connection.rollback();
+        return false;
+      }
+      await connection.commit();
+      return true;
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch {
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      closed = true;
       connection.release();
     }
   }
@@ -20685,6 +20733,9 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
     store(query, callback) {
       callback?.(query);
       return query;
+    },
+    startTransaction(work, explicitResource) {
+      return database2.startTransaction(work, queryResource(explicitResource, runtime));
     }
   };
   api.execute = api.query;
@@ -20700,7 +20751,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
     runtime.addProviderExport("oxmysql", name, method);
-    if (!["isReady", "awaitConnection", "store"].includes(name)) {
+    if (!["isReady", "awaitConnection", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
@@ -21505,7 +21556,10 @@ var SchemaManager = class {
   }
   initialization = null;
   initialize() {
-    this.initialization ??= this.createMetadataTables();
+    this.initialization ??= this.createMetadataTables().catch((error) => {
+      this.initialization = null;
+      throw error;
+    });
     return this.initialization;
   }
   async ensure(resource, input, dryRun = false) {

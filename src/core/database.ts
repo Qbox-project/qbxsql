@@ -18,7 +18,10 @@ export class DatabaseService {
   ) {}
 
   public connect(): Promise<void> {
-    this.connectPromise ??= this.driver.connect();
+    this.connectPromise ??= this.driver.connect().catch((error: unknown) => {
+      this.connectPromise = null;
+      throw error;
+    });
     return this.connectPromise;
   }
 
@@ -116,6 +119,55 @@ export class DatabaseService {
       }
       throw error;
     } finally {
+      connection.release();
+    }
+  }
+
+  public async startTransaction(
+    work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
+    invokingResource = 'unknown',
+  ): Promise<boolean> {
+    if (typeof work !== 'function') throw new TypeError('Transaction callback must be a function.');
+    await this.connect();
+    const connection = await this.driver.acquire();
+    let closed = false;
+    const timeout = setTimeout(() => {
+      closed = true;
+    }, 30_000);
+    timeout.unref();
+
+    try {
+      await connection.beginTransaction();
+      const query = async (sql: string, parameters?: SqlParameters): Promise<unknown> => {
+        if (closed) throw new Error('Transaction timed out after 30 seconds.');
+        const [statement, values] = normalizeParameters(sql, parameters);
+        try {
+          return (await connection.query(statement, values)).rows;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(`Query: ${statement}\n${JSON.stringify(values)}\n${reason}`);
+        }
+      };
+      const result = await work(query);
+      if (closed) throw new Error('Transaction timed out after 30 seconds.');
+      if (result === false) {
+        await connection.rollback();
+        return false;
+      }
+      await connection.commit();
+      return true;
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch {
+        // The original transaction error is more useful than a secondary rollback failure.
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      closed = true;
       connection.release();
     }
   }

@@ -87,6 +87,14 @@ local function runTests()
     local prepared = MySQL.prepare.await('SELECT name FROM fxsql_values WHERE id = ?', { insertId })
     assertEqual(prepared, 'modern', 'prepared query')
 
+    local callbackTransaction = MySQL.startTransaction(function(query)
+        local rows = query('SELECT 48 AS value')
+        assertEqual(rows[1].value, 48, 'callback transaction query')
+        query('INSERT INTO fxsql_values (name, enabled) VALUES (?, ?)', { 'callback transaction', true })
+        return true
+    end)
+    assertEqual(callbackTransaction, true, 'callback transaction result')
+
     print('QBXSQL_RUNTIME_TEST_PASS')
 end
 

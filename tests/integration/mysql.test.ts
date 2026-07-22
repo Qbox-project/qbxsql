@@ -146,6 +146,28 @@ describe('MySQL driver integration', () => {
     ).toBe(0);
   });
 
+  test('supports callback-style transactions', async () => {
+    expect(
+      await database.startTransaction(async (query) => {
+        const rows = (await query('SELECT ? AS value', [48])) as Array<Record<string, unknown>>;
+        expect(rows[0]?.value).toBe(48);
+        await query('INSERT INTO values_test (name, enabled) VALUES (?, ?)', ['Callback', true]);
+        return true;
+      }, 'integration-test'),
+    ).toBe(true);
+    expect(await database.scalar('SELECT COUNT(*) FROM values_test WHERE name = ?', ['Callback'])).toBe(1);
+
+    expect(
+      await database.startTransaction(async (query) => {
+        await query('INSERT INTO values_test (name, enabled) VALUES (?, ?)', ['Callback rollback', true]);
+        return false;
+      }, 'integration-test'),
+    ).toBe(false);
+    expect(
+      await database.scalar('SELECT COUNT(*) FROM values_test WHERE name = ?', ['Callback rollback']),
+    ).toBe(0);
+  });
+
   test('registers oxmysql, mysql-async, and ghmattimysql compatibility exports', () => {
     expect(providerExports.has('oxmysql:query')).toBe(true);
     expect(providerExports.has('mysql-async:mysql_fetch_all')).toBe(true);

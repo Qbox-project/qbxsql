@@ -63,7 +63,10 @@ export class SchemaManager {
   public constructor(private readonly database: DatabaseService) {}
 
   public initialize(): Promise<void> {
-    this.initialization ??= this.createMetadataTables();
+    this.initialization ??= this.createMetadataTables().catch((error: unknown) => {
+      this.initialization = null;
+      throw error;
+    });
     return this.initialization;
   }
 

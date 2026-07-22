@@ -116,4 +116,9 @@ MySQL.ready = setmetatable({
     end
 })
 
+function MySQL.startTransaction(callback)
+    assert(type(callback) == 'function', 'Transaction callback must be a function')
+    return adapter:startTransaction(callback, currentResource)
+end
+
 _ENV.MySQL = MySQL
