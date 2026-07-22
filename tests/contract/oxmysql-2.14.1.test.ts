@@ -31,7 +31,7 @@ function createHarness(database: Partial<DatabaseService>): Harness {
     emitEvent() {},
     invokingResource: () => 'contract-fixture',
   };
-  registerCompatibilityExports(database as DatabaseService, bindings);
+  registerCompatibilityExports(database as DatabaseService, bindings, { legacyProviders: true });
   return { direct, providers };
 }
 

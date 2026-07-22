@@ -21262,7 +21262,7 @@ function createRuntimeBindings() {
   };
 }
 __name(createRuntimeBindings, "createRuntimeBindings");
-function registerCompatibilityExports(database2, bindings = createRuntimeBindings()) {
+function registerCompatibilityExports(database2, bindings = createRuntimeBindings(), options = {}) {
   const fallbackBindings = {
     addExport() {
     },
@@ -21273,6 +21273,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
   const runtime = bindings ?? fallbackBindings;
+  const legacyProviders = options.legacyProviders === true;
   function operationError(error, callback, returnCallbackErrors, resource, query, parameters) {
     const message = errorMessage(error);
     const output = `${resource} was unable to execute a query!${query ? `
@@ -21410,13 +21411,15 @@ ${message}`
   }, "asyncExport");
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
-    runtime.addProviderExport("oxmysql", name, method);
+    if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
     if (!["isReady", "awaitConnection", "getStatus", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
-      runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
-      runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
+      if (legacyProviders) {
+        runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
+        runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
+      }
     }
   }
   const mysqlAsyncAliases = {
@@ -21427,8 +21430,10 @@ ${message}`
     mysql_transaction: api.transaction,
     mysql_store: api.store
   };
-  for (const [name, method] of Object.entries(mysqlAsyncAliases)) {
-    runtime.addProviderExport("mysql-async", name, method);
+  if (legacyProviders) {
+    for (const [name, method] of Object.entries(mysqlAsyncAliases)) {
+      runtime.addProviderExport("mysql-async", name, method);
+    }
   }
   const ghmattiAliases = {
     execute: api.query,
@@ -21436,13 +21441,15 @@ ${message}`
     transaction: api.transaction,
     store: api.store
   };
-  for (const [name, method] of Object.entries(ghmattiAliases)) {
-    runtime.addProviderExport("ghmattimysql", name, method);
-    runtime.addProviderExport(
-      "ghmattimysql",
-      `${name}Sync`,
-      name === "store" ? (query) => api.store(query) : asyncExport(method)
-    );
+  if (legacyProviders) {
+    for (const [name, method] of Object.entries(ghmattiAliases)) {
+      runtime.addProviderExport("ghmattimysql", name, method);
+      runtime.addProviderExport(
+        "ghmattimysql",
+        `${name}Sync`,
+        name === "store" ? (query) => api.store(query) : asyncExport(method)
+      );
+    }
   }
   return api;
 }

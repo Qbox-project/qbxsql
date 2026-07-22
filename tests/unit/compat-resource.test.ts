@@ -63,6 +63,16 @@ describe('qbxsql compatibility resource', () => {
     expect(server).toContain('StopResource(currentResource)');
   });
 
+  test('owns all legacy export routing inside the compatibility resource', async () => {
+    const core = await fixture('src/index.ts');
+    const server = await fixture('qbxsql_compat/server.lua');
+
+    expect(core).toContain('registerCompatibilityExports(database)');
+    expect(server).toContain("provideExport('oxmysql', name, target, 4)");
+    expect(server).toContain("provideExport('mysql-async', name, target");
+    expect(server).toContain("provideExport('ghmattimysql', name, target");
+  });
+
   test('gates compatibility metadata, import paths, aliases, and client visibility in FXServer', async () => {
     const manifest = await fixture('tests/fxserver/qbxsql_runtime_test/fxmanifest.lua');
     const server = await fixture('tests/fxserver/qbxsql_runtime_test/server.lua');

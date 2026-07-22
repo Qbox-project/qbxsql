@@ -1,4 +1,77 @@
 local currentResource = GetCurrentResourceName()
+local adapter = exports.qbxsql
+local unpack = table.unpack
+
+local function forward(target, resourceArgument)
+    return function(...)
+        local arguments = table.pack(...)
+
+        if resourceArgument and (type(arguments[resourceArgument]) ~= 'string' or arguments[resourceArgument] == '') then
+            arguments[resourceArgument] = GetInvokingResource() or 'unknown'
+            arguments.n = math.max(arguments.n, resourceArgument)
+        end
+
+        return adapter[target](nil, unpack(arguments, 1, arguments.n))
+    end
+end
+
+local function provideExport(resource, name, target, resourceArgument)
+    AddEventHandler(('__cfx_export_%s_%s'):format(resource, name), function(setCallback)
+        setCallback(forward(target, resourceArgument))
+    end)
+end
+
+local function registerProviders()
+    local queryMethods = {
+        query = 'query',
+        single = 'single',
+        scalar = 'scalar',
+        insert = 'insert',
+        update = 'update',
+        prepare = 'prepare',
+        rawExecute = 'rawExecute',
+        transaction = 'transaction',
+        execute = 'execute',
+        fetch = 'fetch'
+    }
+
+    provideExport('oxmysql', 'isReady', 'isReady')
+    provideExport('oxmysql', 'awaitConnection', 'awaitConnection')
+    provideExport('oxmysql', 'store', 'store')
+    provideExport('oxmysql', 'startTransaction', 'startTransaction', 2)
+
+    for name, target in pairs(queryMethods) do
+        provideExport('oxmysql', name, target, 4)
+        provideExport('oxmysql', name .. '_async', target .. '_async', 3)
+        provideExport('oxmysql', name .. 'Sync', target .. 'Sync', 3)
+    end
+
+    for name, target in pairs({
+        mysql_fetch_all = 'query',
+        mysql_fetch_scalar = 'scalar',
+        mysql_execute = 'update',
+        mysql_insert = 'insert',
+        mysql_transaction = 'transaction',
+        mysql_store = 'store'
+    }) do
+        provideExport('mysql-async', name, target, target == 'store' and nil or 4)
+    end
+
+    for name, target in pairs({
+        execute = 'query',
+        scalar = 'scalar',
+        transaction = 'transaction',
+        store = 'store'
+    }) do
+        provideExport('ghmattimysql', name, target, target == 'store' and nil or 4)
+        provideExport(
+            'ghmattimysql',
+            name .. 'Sync',
+            target == 'store' and 'store' or target .. 'Sync',
+            target == 'store' and nil or 3
+        )
+    end
+end
 
 local function stopForConflict(resource)
     local state = GetResourceState(resource)
@@ -28,6 +101,7 @@ local function detectInstalledOxmysql()
 end
 
 if not detectInstalledOxmysql() then
+    registerProviders()
     AddEventHandler('onResourceStart', function(resource)
         if resource == 'oxmysql' then stopForConflict(resource) end
     end)

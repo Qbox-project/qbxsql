@@ -53,7 +53,7 @@ describe('MySQL driver integration', () => {
       emitEvent: () => {},
       invokingResource: () => 'integration-resource',
     };
-    registerCompatibilityExports(database, bindings);
+    registerCompatibilityExports(database, bindings, { legacyProviders: true });
     await database.query(`
       CREATE TABLE values_test (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,

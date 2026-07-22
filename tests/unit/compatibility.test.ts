@@ -49,6 +49,19 @@ describe('legacy transaction normalization', () => {
   });
 });
 
+describe('compatibility provider registration', () => {
+  test('keeps legacy provider listeners disabled in the core by default', () => {
+    const providers: string[] = [];
+    registerCompatibilityExports({} as DatabaseService, {
+      addExport() {},
+      addProviderExport: (resource, name) => providers.push(`${resource}:${name}`),
+      invokingResource: () => 'test-resource',
+    });
+
+    expect(providers).toEqual([]);
+  });
+});
+
 describe('oxmysql error semantics', () => {
   test('logs ordinary callback failures without invoking the callback', async () => {
     const { direct, events } = compatibilityHarness({
