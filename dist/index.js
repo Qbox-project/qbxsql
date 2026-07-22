@@ -20431,6 +20431,7 @@ var DatabaseService = class {
   }
   getStatus() {
     const serverVersion = this.driver.serverVersion;
+    const memory = process.memoryUsage();
     const databaseFamily = !serverVersion ? "unknown" : /mariadb/i.test(serverVersion) ? "MariaDB" : "MySQL";
     return {
       state: this.connectionState,
@@ -20439,6 +20440,11 @@ var DatabaseService = class {
       databaseName: this.driver.databaseName,
       pool: this.driver.getPoolStatus?.() ?? emptyPoolStatus,
       queuedCalls: this.waiters.size,
+      memory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        external: memory.external
+      },
       totals: {
         queries: this.queryTotal,
         errors: this.errorTotal,

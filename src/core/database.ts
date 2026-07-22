@@ -20,6 +20,11 @@ export interface DatabaseStatus {
   databaseName: string | null;
   pool: PoolStatus;
   queuedCalls: number;
+  memory: {
+    rss: number;
+    heapUsed: number;
+    external: number;
+  };
   totals: {
     queries: number;
     errors: number;
@@ -128,6 +133,7 @@ export class DatabaseService {
 
   public getStatus(): DatabaseStatus {
     const serverVersion = this.driver.serverVersion;
+    const memory = process.memoryUsage();
     const databaseFamily = !serverVersion
       ? 'unknown'
       : /mariadb/i.test(serverVersion)
@@ -140,6 +146,11 @@ export class DatabaseService {
       databaseName: this.driver.databaseName,
       pool: this.driver.getPoolStatus?.() ?? emptyPoolStatus,
       queuedCalls: this.waiters.size,
+      memory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        external: memory.external,
+      },
       totals: {
         queries: this.queryTotal,
         errors: this.errorTotal,

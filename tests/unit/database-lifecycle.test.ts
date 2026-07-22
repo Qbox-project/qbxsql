@@ -184,6 +184,11 @@ describe('database connection lifecycle', () => {
       databaseName: 'qbox',
       pool: { total: 2, free: 1, acquired: 1, queued: 0 },
       queuedCalls: 0,
+      memory: {
+        rss: expect.any(Number),
+        heapUsed: expect.any(Number),
+        external: expect.any(Number),
+      },
       totals: { queries: 1, errors: 0, slowQueries: 0, reconnects: 0 },
     });
     expect(JSON.stringify(database.getStatus())).not.toContain('mysql://test');
