@@ -18,10 +18,18 @@ const failures = [];
 
 for (const result of [qbxsql, oxmysql]) {
   if (result.failures !== 0) failures.push(`${result.provider} reported ${result.failures} unexplained failures`);
+  if ((result.transactionInvariantViolations ?? Number.POSITIVE_INFINITY) !== 0) {
+    failures.push(
+      `${result.provider} reported ${result.transactionInvariantViolations ?? 'unknown'} transaction invariant violations`,
+    );
+  }
 }
 if ((qbxsql.pool?.ending?.acquired ?? 0) !== 0) failures.push('qbxsql leaked acquired pool connections');
 if ((qbxsql.pool?.ending?.queued ?? 0) !== 0 || (qbxsql.pool?.queuedCalls ?? 0) !== 0) {
   failures.push('qbxsql ended with queued database calls');
+}
+if ((qbxsql.pool?.maximum?.acquired ?? 0) < 10) {
+  failures.push(`qbxsql did not saturate its 10-connection pool (maximum ${qbxsql.pool?.maximum?.acquired ?? 0})`);
 }
 if ((qbxsql.memory?.finalHalfGrowth ?? Number.POSITIVE_INFINITY) >= 0.10) {
   failures.push(

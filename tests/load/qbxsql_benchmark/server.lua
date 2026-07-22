@@ -99,11 +99,11 @@ local function operation(worker, iteration)
 
     local result = awaitCall('transaction', {
         {
-            query = 'UPDATE qbxsql_benchmark_values SET value = value + 1 WHERE id = ?',
+            query = 'UPDATE qbxsql_benchmark_values SET transaction_value = transaction_value + 1 WHERE id = ?',
             values = { worker }
         },
         {
-            query = 'UPDATE qbxsql_benchmark_values SET value = value - 1 WHERE id = ?',
+            query = 'UPDATE qbxsql_benchmark_values SET transaction_value = transaction_value - 1 WHERE id = ?',
             values = { worker }
         }
     }, {})
@@ -112,18 +112,22 @@ local function operation(worker, iteration)
 end
 
 CreateThread(function()
+    awaitCall('query', 'DROP TABLE IF EXISTS qbxsql_benchmark_values')
     awaitCall('query', [[
-        CREATE TABLE IF NOT EXISTS qbxsql_benchmark_values (
+        CREATE TABLE qbxsql_benchmark_values (
             id INT NOT NULL PRIMARY KEY,
             value BIGINT NOT NULL DEFAULT 0,
+            transaction_value BIGINT NOT NULL DEFAULT 0,
             payload VARCHAR(100) NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ]])
-    awaitCall('update', 'TRUNCATE TABLE qbxsql_benchmark_values')
     local started = GetGameTimer()
     local deadline = started + duration
     local startSnapshot = snapshot()
     local midpointSnapshot
+    local memorySamples = {
+        { elapsed = 0, memory = startSnapshot.memory }
+    }
     local completion = promise.new()
 
     CreateThread(function()
@@ -135,6 +139,10 @@ CreateThread(function()
         while activeWorkers > 0 do
             Wait(1000)
             local current = snapshot()
+            memorySamples[#memorySamples + 1] = {
+                elapsed = GetGameTimer() - started,
+                memory = current.memory
+            }
             maximumPool.acquired = math.max(maximumPool.acquired, current.pool.acquired or 0)
             maximumPool.queued = math.max(maximumPool.queued, current.pool.queued or 0)
         end
@@ -173,11 +181,54 @@ CreateThread(function()
 
     Citizen.Await(completion)
     Wait(100)
+    local transactionInvariantViolations = awaitCall(
+        'scalar',
+        'SELECT COUNT(*) FROM qbxsql_benchmark_values WHERE transaction_value <> 0'
+    )
     local ending = snapshot()
+    memorySamples[#memorySamples + 1] = {
+        elapsed = GetGameTimer() - started,
+        memory = ending.memory
+    }
     midpointSnapshot = midpointSnapshot or startSnapshot
-    local midpointHeap = midpointSnapshot.memory.heapUsed or 0
-    local finalHeap = ending.memory.heapUsed or 0
-    local memoryGrowth = midpointHeap > 0 and ((finalHeap - midpointHeap) / midpointHeap) or 0
+
+    local function averageMemory(fromElapsed, toElapsed, fallback)
+        local heapTotal = 0
+        local rssTotal = 0
+        local count = 0
+
+        for _, sample in ipairs(memorySamples) do
+            if sample.elapsed >= fromElapsed and sample.elapsed <= toElapsed then
+                heapTotal = heapTotal + (sample.memory.heapUsed or 0)
+                rssTotal = rssTotal + (sample.memory.rss or 0)
+                count = count + 1
+            end
+        end
+
+        if count == 0 then return fallback end
+        return {
+            heapUsed = heapTotal / count,
+            rss = rssTotal / count
+        }
+    end
+
+    local firstFinalHalfWindow = averageMemory(
+        duration * 0.50,
+        duration * 0.625,
+        midpointSnapshot.memory
+    )
+    local lastFinalHalfWindow = averageMemory(
+        duration * 0.875,
+        duration * 1.01,
+        ending.memory
+    )
+    local firstHeap = firstFinalHalfWindow.heapUsed or 0
+    local lastHeap = lastFinalHalfWindow.heapUsed or 0
+    local firstRss = firstFinalHalfWindow.rss or 0
+    local lastRss = lastFinalHalfWindow.rss or 0
+    local heapGrowth = firstHeap > 0 and ((lastHeap - firstHeap) / firstHeap) or 0
+    local rssGrowth = firstRss > 0 and ((lastRss - firstRss) / firstRss) or 0
+    local memoryGrowth = math.max(heapGrowth, rssGrowth)
     local result = {
         provider = provider,
         durationMs = GetGameTimer() - started,
@@ -186,6 +237,7 @@ CreateThread(function()
         operations = operations,
         failures = failures,
         expectedReconnectFailures = expectedReconnectFailures,
+        transactionInvariantViolations = transactionInvariantViolations,
         errors = errorSamples,
         latency = {
             median = percentile(0.50),
@@ -196,7 +248,11 @@ CreateThread(function()
             start = startSnapshot.memory,
             midpoint = midpointSnapshot.memory,
             ending = ending.memory,
-            finalHalfGrowth = memoryGrowth
+            firstFinalHalfWindow = firstFinalHalfWindow,
+            lastFinalHalfWindow = lastFinalHalfWindow,
+            finalHalfGrowth = memoryGrowth,
+            heapFinalHalfGrowth = heapGrowth,
+            rssFinalHalfGrowth = rssGrowth
         },
         pool = {
             maximum = maximumPool,
