@@ -1,61 +1,49 @@
 # qbxsql
 
-`qbxsql` is a server-side database adapter for Cfx.re/FiveM. It targets MySQL
-and MariaDB first, while keeping the driver boundary open for PostgreSQL.
+qbxsql is a resilient MySQL/MariaDB connector and declarative schema manager for Cfx.re/FiveM. The `qbxsql_compat` companion resource targets the oxmysql 2.14.1, mysql-async, and ghmattimysql query contracts.
 
-The resource is being built around three layers:
-
-- a database-driver-neutral query service;
-- compatibility adapters for oxmysql, mysql-async, and ghmattimysql;
-- declarative, resource-owned schemas with safe reconciliation and versioned
-  migrations.
-
-## Development
-
-```sh
-bun install
-bun run typecheck
-bun test
-bun run build
-```
-
-Built output is written to `dist/index.js`, which FXServer loads through
-`fxmanifest.lua`.
+This is a `0.x` prerelease. Do not treat it as `1.0.0` until the documented database, FXServer, Qbox, failure, and soak gates have passed.
 
 ## Installation
 
-Create the database, configure the connection string before resources start,
-and start `qbxsql` before database consumers:
+Use the generated release artifact, which contains two resource directories:
+
+```text
+resources/
+├── qbxsql/
+└── qbxsql_compat/
+```
+
+Remove the real `oxmysql` resource, configure the connection before either resource starts, then start both in this order:
 
 ```cfg
 set mysql_connection_string "mysql://user:password@127.0.0.1/qbox"
 ensure qbxsql
+ensure qbxsql_compat
 ```
 
-The resource also declares itself as a provider for `oxmysql`, `mysql-async`,
-and `ghmattimysql`. Existing dependencies and the common callback, await,
-`Async`, and `Sync` query APIs are forwarded into the qbxsql core.
+The honestly versioned core does not claim legacy resource names. `qbxsql_compat` reports version `2.14.1`, remains client-visible, and provides `oxmysql`, `mysql-async`, and `ghmattimysql`. It refuses to run alongside a real resource named `oxmysql`.
 
-For modern Lua resources, load the compatibility library:
+Existing resources can keep their normal imports:
+
+```lua
+server_script '@oxmysql/lib/MySQL.lua'
+-- or @mysql-async/lib/MySQL.lua
+```
+
+Modern qbxsql-native resources may instead load:
 
 ```lua
 server_script '@qbxsql/lib/MySQL.lua'
 ```
 
-Then use the familiar API:
+Callback, `.await`, `_async`, `Sync`, `Async`, stored-query, prepared batch, raw execute, and transaction APIs are supported. Positional `?`/`??` and named `:name`/`@name` parameters are normalized before reaching the driver.
 
-```lua
-local user = MySQL.single.await('SELECT * FROM users WHERE id = ?', { userId })
-```
-
-Positional `?`/`??` parameters and named `:name`/`@name` parameters are
-supported. Values are normalized before reaching the driver; missing values
-become SQL `NULL`, and binary buffers become Lua byte arrays.
+NUI profiling, oxmysql UI commands, and external logger plugins are intentionally not included. See [the migration guide](docs/MIGRATION.md) and [compatibility matrix](docs/COMPATIBILITY.md) before replacing a production connector.
 
 ## Resource-owned schemas
 
-A resource can declare the schema it needs by loading the schema façade before
-its own schema bootstrap:
+Load the schema facade before the declaring resource's bootstrap:
 
 ```lua
 server_scripts {
@@ -65,7 +53,7 @@ server_scripts {
 }
 ```
 
-`schema.lua` can block initialization until its storage is ready:
+Then declare and await the required schema:
 
 ```lua
 QBXSQL.Schema.ensure.await({
@@ -86,38 +74,34 @@ QBXSQL.Schema.ensure.await({
 })
 ```
 
-qbxsql records the invoking resource as the table owner, serializes schema
-changes with a database lock, and keeps schema and migration checksums in its
-metadata tables. Removing a table or column from the declaration never deletes
-it automatically.
+The default `auto` mode applies only changes that are data-safe and enforced online by the database. qbxsql never falls back from `INSTANT` or `INPLACE/LOCK=NONE` to blocking DDL. Destructive, blocking, or data-dependent work requires explicit versioned migrations and operator approval where applicable.
 
-Safe desired-state changes are reconciled automatically, including:
+Use `QBXSQL.Schema.plan.await(schema)` for a no-DDL plan. Existing unmanaged tables require explicit `planAdoption` and `adopt` calls with a baseline version. Removing a table from a declaration never deletes or releases it implicitly. See [schema operations](docs/SCHEMAS.md) and [the complete example](examples/properties-schema.lua).
 
-- creating missing tables;
-- adding nullable columns or columns with defaults;
-- widening string columns;
-- relaxing a column to allow `NULL`;
-- adding ordinary indexes.
+## Health and operations
 
-Potentially destructive or data-dependent changes require a versioned
-migration. This includes narrowing or changing column types, required-column
-backfills, primary-key changes, unique constraints, foreign keys on existing
-data, and deletion. Operations that can discard data require
-`allowDataLoss = true`.
+```lua
+local status = exports.qbxsql:getStatus()
+```
 
-Use `QBXSQL.Schema.plan.await(schema)` to inspect generated SQL without making
-changes. See `examples/properties-schema.lua` for a complete declaration and
-migration.
+The sanitized result includes lifecycle state, database family/version/name, pool counts, queue depth, process-memory counters, query/error/slow-query totals, and reconnect count. The same information is available through the server-console command `qbxsql_status`. Lifecycle events are `qbxsql:ready`, `qbxsql:disconnected`, and `qbxsql:reconnected`.
 
-Schema DDL is journaled rather than treated as transactionally rollbackable,
-because MySQL and MariaDB implicitly commit many `CREATE` and `ALTER`
-statements. Failed migration state is retained for diagnosis and idempotent
-operations can be retried.
+See the [operations runbook](docs/OPERATIONS.md) for convars, outage behavior, monitoring, shutdown, and recovery.
 
-## Driver boundary
+## Development and releases
 
-All Lua and compatibility APIs call a driver-neutral database service. The
-current implementation supplies the MySQL/MariaDB driver; PostgreSQL can be
-added as another driver without changing resource-facing APIs. SQL syntax and
-schema compilation are currently MySQL-specific and will receive a PostgreSQL
-dialect alongside that future driver.
+```sh
+bun install
+bun run typecheck
+bun test
+bun run release
+bun run release:validate
+```
+
+The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through guarded junctions:
+
+```sh
+bun run install:dev -- --resources C:\path\to\server\resources
+```
+
+CI definitions cover quality, the LTS database matrix, security scanning, stock/enhanced FXServer gates, and the manually dispatched release-candidate soak. See [release policy](docs/RELEASE.md) and [benchmark gates](docs/BENCHMARKS.md).
