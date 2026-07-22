@@ -14,6 +14,8 @@ import {
 import type { ResourceSchema } from '../../src/schema/types.js';
 
 const databaseName = 'qbxsql_schema_test';
+const schemaUser = 'qbxsql_schema_agent';
+const schemaPassword = 'qbxsql-schema-password';
 const adminConnection = process.env.QBXSQL_TEST_ADMIN_URL ?? 'mysql://root@127.0.0.1';
 const connectionString = `${adminConnection}/${databaseName}`;
 const config: QbxSqlConfig = {
@@ -84,6 +86,9 @@ describe('resource schema manager integration', () => {
     await admin.query(
       `CREATE DATABASE \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
     );
+    await admin.query(`DROP USER IF EXISTS '${schemaUser}'@'%'`);
+    await admin.query(`CREATE USER '${schemaUser}'@'%' IDENTIFIED BY '${schemaPassword}'`);
+    await admin.query(`GRANT ALL PRIVILEGES ON \`${databaseName}\`.* TO '${schemaUser}'@'%'`);
     await admin.end();
     database = new DatabaseService(new MySqlDriver(config), config);
     manager = new SchemaManager(database);
@@ -94,6 +99,7 @@ describe('resource schema manager integration', () => {
     if (database) await database.close();
     const admin = await createConnection(adminConnection);
     await admin.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
+    await admin.query(`DROP USER IF EXISTS '${schemaUser}'@'%'`);
     await admin.end();
   });
 
@@ -651,7 +657,11 @@ describe('resource schema manager integration', () => {
   });
 
   test('allows verified separate schema credentials for the same server and database', async () => {
-    const schemaDatabase = new DatabaseService(new MySqlDriver(config), config);
+    const schemaUrl = new URL(connectionString);
+    schemaUrl.username = schemaUser;
+    schemaUrl.password = schemaPassword;
+    const schemaConfig = { ...config, connectionString: schemaUrl.toString() };
+    const schemaDatabase = new DatabaseService(new MySqlDriver(schemaConfig), schemaConfig);
     auxiliaryDatabases.push(schemaDatabase);
     const separateManager = new SchemaManager(schemaDatabase, { applicationDatabase: database });
     const result = await separateManager.ensure('separate_credentials', {
