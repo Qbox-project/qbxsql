@@ -20821,6 +20821,11 @@ function serializeForRuntime(value) {
 __name(serializeForRuntime, "serializeForRuntime");
 
 // src/drivers/mysql.ts
+var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
+function scheduleResourceTick() {
+  if (typeof ScheduleResourceTick === "function") ScheduleResourceTick(resourceName);
+}
+__name(scheduleResourceTick, "scheduleResourceTick");
 function booleanOption(value, key) {
   const normalized = value.trim().toLowerCase();
   if (["true", "1", "yes"].includes(normalized)) return true;
@@ -21019,6 +21024,7 @@ function normalizeDriverResult(rows) {
 __name(normalizeDriverResult, "normalizeDriverResult");
 async function runQuery(connection, sql, parameters, prepared) {
   const executor = connection;
+  scheduleResourceTick();
   const [rows] = prepared ? await executor.execute(sql, parameters) : await executor.query(sql, parameters);
   return normalizeDriverResult(
     rows
@@ -21452,12 +21458,12 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
     },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
-  function resourceName2(explicit) {
+  function resourceName3(explicit) {
     return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
   }
-  __name(resourceName2, "resourceName");
+  __name(resourceName3, "resourceName");
   function operation(schema, dryRun, callback, explicitResource) {
-    const resource = resourceName2(explicitResource);
+    const resource = resourceName3(explicitResource);
     void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
       const errorMessage2 = message(error);
       console.error(`[qbxsql] schema operation failed [${resource}]: ${errorMessage2}`);
@@ -21466,7 +21472,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   }
   __name(operation, "operation");
   function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
-    const resource = resourceName2(explicitResource);
+    const resource = resourceName3(explicitResource);
     void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
       const errorMessage2 = message(error);
       console.error(`[qbxsql] schema adoption failed [${resource}]: ${errorMessage2}`);
@@ -23450,7 +23456,7 @@ var SchemaManager = class {
 };
 
 // src/index.ts
-var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
+var resourceName2 = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
 var config = loadConfig();
 var database = new DatabaseService(new MySqlDriver(config), config);
 var schemaDatabase = config.schemaConnectionString ? new DatabaseService(
@@ -23467,7 +23473,7 @@ registerSchemaExports(schemas);
 database.onLifecycle((event, status) => {
   if (event === "ready" || event === "reconnected") {
     console.log(
-      `[${resourceName}] ${event === "ready" ? "connected" : "reconnected"} to ${status.databaseName ?? "(no database)"} on ${status.databaseVersion ?? "unknown server"}`
+      `[${resourceName2}] ${event === "ready" ? "connected" : "reconnected"} to ${status.databaseName ?? "(no database)"} on ${status.databaseVersion ?? "unknown server"}`
     );
   }
   if (typeof emit === "function") emit(`qbxsql:${event}`, status);
@@ -23478,14 +23484,14 @@ if (typeof RegisterCommand === "function") {
     "qbxsql_status",
     (source) => {
       if (source !== 0) return;
-      console.log(`[${resourceName}] ${JSON.stringify(database.getStatus())}`);
+      console.log(`[${resourceName2}] ${JSON.stringify(database.getStatus())}`);
     },
     false
   );
 }
 if (typeof on === "function") {
   on("onResourceStop", (stoppedResource) => {
-    if (stoppedResource === resourceName) {
+    if (stoppedResource === resourceName2) {
       void Promise.all([
         database.close(),
         ...schemaDatabase === database ? [] : [schemaDatabase.close()]

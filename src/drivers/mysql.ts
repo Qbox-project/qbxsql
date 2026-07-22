@@ -16,6 +16,13 @@ import type {
 } from '../core/types.js';
 import { serializeForRuntime } from '../core/serialize.js';
 
+const resourceName =
+  typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
+
+function scheduleResourceTick(): void {
+  if (typeof ScheduleResourceTick === 'function') ScheduleResourceTick(resourceName);
+}
+
 function booleanOption(value: string, key: string): boolean {
   const normalized = value.trim().toLowerCase();
   if (['true', '1', 'yes'].includes(normalized)) return true;
@@ -237,6 +244,7 @@ async function runQuery(
     query(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
     execute(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
   };
+  scheduleResourceTick();
   const [rows] = prepared
     ? await executor.execute(sql, parameters)
     : await executor.query(sql, parameters);
