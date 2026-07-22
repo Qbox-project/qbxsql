@@ -35,6 +35,19 @@ describe('qbxsql compatibility resource', () => {
     expect(loader).toContain("load(source, '@@qbxsql/lib/MySQL.lua', 't', _ENV)");
   });
 
+  test('implements the oxmysql Lua wrapper contract', async () => {
+    const wrapper = await fixture('lib/MySQL.lua');
+
+    expect(wrapper).toContain("GetNumResourceMetadata(resourceName, 'mysql_option')");
+    expect(wrapper).toContain('value.__cfx_functionReference');
+    expect(wrapper).toContain('options.return_callback_errors');
+    expect(wrapper).toContain("'rawExecute'");
+    expect(wrapper).toContain('MySQL.Sync = setmetatable');
+    expect(wrapper).toContain('MySQL.Async = setmetatable');
+    expect(wrapper).toContain('local MySQL = setmetatable');
+    expect(wrapper).toContain('qbxsql.awaitConnection()');
+  });
+
   test('rejects a concurrently active real oxmysql resource', async () => {
     const server = await fixture('qbxsql_compat/server.lua');
 

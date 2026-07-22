@@ -1,124 +1,189 @@
-local currentResource = GetCurrentResourceName()
-local adapter = exports.qbxsql
-local storedQueries = {}
+local Await = Citizen.Await
+local resourceName = GetCurrentResourceName()
+local queryStore = {}
+local options = {
+    return_callback_errors = false
+}
 
-local function resolveQuery(query)
-    if type(query) == 'number' then
-        local stored = storedQueries[query]
-        assert(stored, ('Unknown stored query id %s'):format(query))
-        return stored
-    end
+for index = 1, GetNumResourceMetadata(resourceName, 'mysql_option') do
+    local option = GetResourceMetadata(resourceName, 'mysql_option', index - 1)
 
-    assert(type(query) == 'string', ('Expected query to be a string, received %s'):format(type(query)))
-    return query
+    if option then options[option] = true end
 end
 
-local function arguments(method, query, parameters, callback)
-    if method == 'transaction' then
-        assert(type(query) == 'table', 'Transaction queries must be a table')
-    else
-        query = resolveQuery(query)
+local function isCallback(value)
+    local valueType = type(value)
+
+    return valueType == 'function'
+        or (valueType == 'table' and value.__cfx_functionReference ~= nil)
+end
+
+local function resolveStoredQuery(query)
+    if type(query) ~= 'number' then return query end
+
+    local stored = queryStore[query]
+    assert(stored, 'First argument received invalid query store reference')
+
+    return stored
+end
+
+local function safeArgs(query, parameters, callback, transaction)
+    query = resolveStoredQuery(query)
+
+    local queryType = type(query)
+
+    if transaction then
+        if queryType ~= 'table' then
+            error(("First argument expected table, received '%s'"):format(queryType))
+        end
+    elseif queryType ~= 'string' then
+        error(("First argument expected string, received '%s'"):format(queryType))
     end
 
-    if type(parameters) == 'function' then
-        callback = parameters
-        parameters = nil
+    if parameters then
+        local parametersType = type(parameters)
+
+        if parametersType ~= 'table' and parametersType ~= 'function' then
+            error(("Second argument expected table or function, received '%s'"):format(parametersType))
+        end
+
+        if isCallback(parameters) then
+            callback = parameters
+            parameters = nil
+        end
+    end
+
+    if callback and not isCallback(callback) then
+        error(("Third argument expected function, received '%s'"):format(type(callback)))
     end
 
     return query, parameters, callback
 end
 
-local function call(method, query, parameters, callback)
-    query, parameters, callback = arguments(method, query, parameters, callback)
-    return adapter[method](nil, query, parameters, callback, currentResource)
-end
+local qbxsql = exports.qbxsql
 
 local function await(method, query, parameters)
-    query, parameters = arguments(method, query, parameters)
     local response = promise.new()
 
-    adapter[method](nil, query, parameters, function(result, err)
-        if err then
-            response:reject(err)
-        else
-            response:resolve(result)
-        end
-    end, currentResource, true)
+    qbxsql[method](nil, query, parameters, function(result, error)
+        if error then return response:reject(error) end
 
-    return Citizen.Await(response)
+        response:resolve(result)
+    end, resourceName, true)
+
+    return Await(response)
 end
 
-local MySQL = MySQL or {}
+local methodMetatable = {
+    __call = function(self, query, parameters, callback)
+        query, parameters, callback = safeArgs(
+            query,
+            parameters,
+            callback,
+            self.method == 'transaction'
+        )
 
-for _, method in ipairs({
-    'query',
-    'single',
+        return qbxsql[self.method](
+            nil,
+            query,
+            parameters,
+            callback,
+            resourceName,
+            options.return_callback_errors
+        )
+    end
+}
+
+local MySQL = setmetatable(MySQL or {}, {
+    __index = function(_, method)
+        return function(...)
+            return qbxsql[method](nil, ...)
+        end
+    end
+})
+
+for _, method in pairs({
     'scalar',
+    'single',
+    'query',
     'insert',
     'update',
     'prepare',
-    'rawExecute',
-    'transaction'
+    'transaction',
+    'rawExecute'
 }) do
     local methodName = method
+
     MySQL[methodName] = setmetatable({
+        method = methodName,
         await = function(query, parameters)
+            query, parameters = safeArgs(
+                query,
+                parameters,
+                nil,
+                methodName == 'transaction'
+            )
+
             return await(methodName, query, parameters)
         end
-    }, {
-        __call = function(_, query, parameters, callback)
-            return call(methodName, query, parameters, callback)
-        end
-    })
+    }, methodMetatable)
 end
+
+local aliases = {
+    fetchAll = 'query',
+    fetchScalar = 'scalar',
+    fetchSingle = 'single',
+    insert = 'insert',
+    execute = 'update',
+    transaction = 'transaction',
+    prepare = 'prepare'
+}
+
+local aliasMetatable = {
+    __index = function(self, key)
+        local alias = aliases[key]
+
+        if alias then
+            local method = MySQL[alias]
+            MySQL.Async[key] = method
+            MySQL.Sync[key] = method.await
+            aliases[key] = nil
+        end
+
+        return rawget(self, key)
+    end
+}
 
 local function store(query, callback)
-    assert(type(query) == 'string', 'Stored query must be a string')
-    local id = #storedQueries + 1
-    storedQueries[id] = query
-    if callback then callback(id) end
-    return id
+    assert(type(query) == 'string', 'The SQL Query must be a string')
+
+    local id = #queryStore + 1
+    queryStore[id] = query
+
+    return callback and callback(id) or id
 end
 
-MySQL.Async = {
-    fetchAll = MySQL.query,
-    fetchScalar = MySQL.scalar,
-    fetchSingle = MySQL.single,
-    execute = MySQL.update,
-    insert = MySQL.insert,
-    transaction = MySQL.transaction,
-    prepare = MySQL.prepare,
-    store = store
-}
+MySQL.Sync = setmetatable({ store = store }, aliasMetatable)
+MySQL.Async = setmetatable({ store = store }, aliasMetatable)
 
-MySQL.Sync = {
-    fetchAll = MySQL.query.await,
-    fetchScalar = MySQL.scalar.await,
-    fetchSingle = MySQL.single.await,
-    execute = MySQL.update.await,
-    insert = MySQL.insert.await,
-    transaction = MySQL.transaction.await,
-    prepare = MySQL.prepare.await,
-    store = store
-}
+local function onReady(callback)
+    qbxsql.awaitConnection()
 
-MySQL.ready = setmetatable({
-    await = function()
-        while not adapter:isReady() do Wait(0) end
-        return adapter:awaitConnection()
-    end
-}, {
+    return callback and callback() or true
+end
+
+MySQL.ready = setmetatable({ await = onReady }, {
     __call = function(_, callback)
-        CreateThread(function()
-            MySQL.ready.await()
-            if callback then callback() end
+        Citizen.CreateThreadNow(function()
+            onReady(callback)
         end)
     end
 })
 
 function MySQL.startTransaction(callback)
-    assert(type(callback) == 'function', 'Transaction callback must be a function')
-    return adapter:startTransaction(callback, currentResource)
+    assert(isCallback(callback), 'Transaction callback must be a function')
+
+    return qbxsql:startTransaction(callback, resourceName)
 end
 
 _ENV.MySQL = MySQL
