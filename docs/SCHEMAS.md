@@ -8,6 +8,8 @@
 
 Plans preserve the original fields and add `dataSafe`, `onlineSafe`, `automatic`, `risk`, and selected `algorithm` on every action.
 
+In `plan` mode, callback callers receive `nil, { code = 'QBXSQL_SCHEMA_PENDING_CHANGES', message = ..., result = plan }`; `.await` rejects with the same structured table. DDL that requires an explicit migration similarly returns `QBXSQL_SCHEMA_MIGRATION_REQUIRED` with its plan. Call the explicit planning APIs when normal control flow should return a plan instead of rejecting.
+
 qbxsql requests `ALGORITHM=INSTANT` or `ALGORITHM=INPLACE, LOCK=NONE` based on database/version capability. A server rejection becomes a migration-required plan. There is no automatic fallback to blocking DDL.
 
 ## Migrations
