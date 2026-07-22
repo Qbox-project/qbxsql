@@ -8,6 +8,18 @@ interface ScanResult {
 
 const identifierStart = /[A-Za-z0-9_]/;
 const identifierPart = /[A-Za-z0-9_]/;
+const scanCacheLimit = 4_096;
+const positionalScans = new Map<string, ScanResult>();
+const namedScans = new Map<string, ScanResult>();
+
+function cacheScan(cache: Map<string, ScanResult>, input: string, result: ScanResult): ScanResult {
+  if (cache.size >= scanCacheLimit) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(input, result);
+  return result;
+}
 
 function parameterRecord(parameters: Record<string, SqlParameter>): Record<string, SqlParameter> {
   const normalized: Record<string, SqlParameter> = {};
@@ -20,7 +32,7 @@ function parameterRecord(parameters: Record<string, SqlParameter>): Record<strin
   return normalized;
 }
 
-function scanSql(input: string, replaceNamed: boolean): ScanResult {
+function scanSqlUncached(input: string, replaceNamed: boolean): ScanResult {
   let sql = '';
   let positionalCount = 0;
   const names: string[] = [];
@@ -112,6 +124,11 @@ function scanSql(input: string, replaceNamed: boolean): ScanResult {
   return { sql, names, positionalCount };
 }
 
+function scanSql(input: string, replaceNamed: boolean): ScanResult {
+  const cache = replaceNamed ? namedScans : positionalScans;
+  return cache.get(input) ?? cacheScan(cache, input, scanSqlUncached(input, replaceNamed));
+}
+
 export function countPlaceholders(sql: string): number {
   return scanSql(sql, false).positionalCount;
 }
@@ -162,4 +179,3 @@ export function normalizeParameters(
   while (values.length < expected) values.push(null);
   return [query, values.map((value) => value ?? null)];
 }
-

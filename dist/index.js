@@ -20223,6 +20223,18 @@ var import_node_perf_hooks = require("node:perf_hooks");
 // src/core/parameters.ts
 var identifierStart = /[A-Za-z0-9_]/;
 var identifierPart = /[A-Za-z0-9_]/;
+var scanCacheLimit = 4096;
+var positionalScans = /* @__PURE__ */ new Map();
+var namedScans = /* @__PURE__ */ new Map();
+function cacheScan(cache, input, result) {
+  if (cache.size >= scanCacheLimit) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== void 0) cache.delete(oldest);
+  }
+  cache.set(input, result);
+  return result;
+}
+__name(cacheScan, "cacheScan");
 function parameterRecord(parameters) {
   const normalized = {};
   for (const [key, value] of Object.entries(parameters)) {
@@ -20232,7 +20244,7 @@ function parameterRecord(parameters) {
   return normalized;
 }
 __name(parameterRecord, "parameterRecord");
-function scanSql(input, replaceNamed) {
+function scanSqlUncached(input, replaceNamed) {
   let sql = "";
   let positionalCount = 0;
   const names = [];
@@ -20302,6 +20314,11 @@ function scanSql(input, replaceNamed) {
     sql += char;
   }
   return { sql, names, positionalCount };
+}
+__name(scanSqlUncached, "scanSqlUncached");
+function scanSql(input, replaceNamed) {
+  const cache = replaceNamed ? namedScans : positionalScans;
+  return cache.get(input) ?? cacheScan(cache, input, scanSqlUncached(input, replaceNamed));
 }
 __name(scanSql, "scanSql");
 function countPlaceholders(sql) {
