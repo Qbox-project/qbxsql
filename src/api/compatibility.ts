@@ -157,16 +157,7 @@ export function registerCompatibilityExports(
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       callbackOperation(
-        database.run(query, values, { invokingResource: resource, prepared: true }).then((result) =>
-          Array.isArray(result.rows)
-            ? result.rows
-            : {
-                affectedRows: result.affectedRows,
-                changedRows: result.changedRows,
-                insertId: result.insertId,
-                warningStatus: result.warningStatus,
-              },
-        ),
+        database.rawExecute(query, values, { invokingResource: resource }),
         resolvedCallback,
         resource,
       );

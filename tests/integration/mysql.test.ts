@@ -168,6 +168,20 @@ describe('MySQL driver integration', () => {
     ).toBe(0);
   });
 
+  test('supports batch prepare and raw execute operations', async () => {
+    expect(await database.prepare('SELECT ? AS value', [[1], [2]])).toEqual([1, 2]);
+    expect(await database.rawExecute('SELECT ? AS value', [[3], [4]])).toEqual([
+      [{ value: 3 }],
+      [{ value: 4 }],
+    ]);
+    const id = (await database.prepare(
+      'INSERT INTO values_test (name, enabled, payload) VALUES (?, ?, ?)',
+      ['Prepared buffer', true, Buffer.from([8, 9])],
+    )) as number;
+    expect(id).not.toBeNull();
+    expect(await database.scalar('SELECT COUNT(*) FROM values_test WHERE id = ?', [id])).toBe(1);
+  });
+
   test('registers oxmysql, mysql-async, and ghmattimysql compatibility exports', () => {
     expect(providerExports.has('oxmysql:query')).toBe(true);
     expect(providerExports.has('mysql-async:mysql_fetch_all')).toBe(true);

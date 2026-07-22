@@ -20315,11 +20315,19 @@ var DatabaseService = class {
     return (await this.run(sql, parameters, options)).affectedRows;
   }
   async prepare(sql, parameters, options = {}) {
-    const parameterSets = Array.isArray(parameters) && parameters.length > 0 && parameters.every((entry) => Array.isArray(entry) || entry !== null && typeof entry === "object") ? parameters : [parameters];
+    const parameterSets = this.parameterSets(parameters);
     const results = [];
     for (const values of parameterSets) {
       const result = await this.run(sql, values, { ...options, prepared: true });
       results.push(this.parsePreparedResult(sql, result));
+    }
+    return results.length === 1 ? results[0] : results;
+  }
+  async rawExecute(sql, parameters, options = {}) {
+    const results = [];
+    for (const values of this.parameterSets(parameters)) {
+      const result = await this.run(sql, values, { ...options, prepared: true });
+      results.push(result.rows);
     }
     return results.length === 1 ? results[0] : results;
   }
@@ -20399,8 +20407,9 @@ ${reason}`);
     } finally {
       const duration = import_node_perf_hooks.performance.now() - started;
       const resource = options.invokingResource ?? "unknown";
-      if (this.config.debug || duration >= this.config.slowQueryWarning) {
-        const level = duration >= this.config.slowQueryWarning ? "slow query" : "query";
+      const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
+      if (this.config.debug || slow) {
+        const level = slow ? "slow query" : "query";
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
@@ -20414,6 +20423,12 @@ ${reason}`);
     if (!first || typeof first !== "object") return first ?? null;
     const values = Object.values(first);
     return values.length === 1 ? values[0] ?? null : first;
+  }
+  parameterSets(parameters) {
+    const batch = Array.isArray(parameters) && parameters.length > 0 && parameters.every(
+      (entry) => Array.isArray(entry) || entry !== null && typeof entry === "object" && !Buffer.isBuffer(entry) && !(entry instanceof Date)
+    );
+    return batch ? parameters : [parameters];
   }
 };
 
@@ -20439,6 +20454,45 @@ function serializeForRuntime(value) {
 __name(serializeForRuntime, "serializeForRuntime");
 
 // src/drivers/mysql.ts
+function booleanOption(value) {
+  return value.toLowerCase() === "true" || value === "1";
+}
+__name(booleanOption, "booleanOption");
+function parseMySqlConnectionString(connectionString) {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) return { uri: connectionString };
+  const options = {};
+  for (const segment of connectionString.split(";")) {
+    if (!segment.trim()) continue;
+    const separator = segment.indexOf("=");
+    if (separator === -1) throw new Error(`Invalid connection-string segment '${segment}'.`);
+    const sourceKey = segment.slice(0, separator).trim().toLowerCase().replace(/[ _-]/g, "");
+    const value = segment.slice(separator + 1).trim();
+    if (["host", "hostname", "ip", "server", "datasource", "addr", "address"].includes(sourceKey)) {
+      options.host = value;
+    } else if (["user", "userid", "username", "uid"].includes(sourceKey)) {
+      options.user = value;
+    } else if (["password", "pwd", "pass"].includes(sourceKey)) {
+      options.password = value;
+    } else if (["database", "db", "initialcatalog"].includes(sourceKey)) {
+      options.database = value;
+    } else if (sourceKey === "port" || sourceKey === "connectionlimit" || sourceKey === "connecttimeout") {
+      options[sourceKey === "connectionlimit" ? "connectionLimit" : sourceKey === "connecttimeout" ? "connectTimeout" : "port"] = Number.parseInt(value, 10);
+    } else if (["multiplestatements", "decimalnumbers", "bignumberstrings", "waitforconnections"].includes(sourceKey)) {
+      const key = sourceKey === "multiplestatements" ? "multipleStatements" : sourceKey === "decimalnumbers" ? "decimalNumbers" : sourceKey === "bignumberstrings" ? "bigNumberStrings" : "waitForConnections";
+      options[key] = booleanOption(value);
+    } else if (sourceKey === "charset" || sourceKey === "timezone" || sourceKey === "socketpath") {
+      options[sourceKey === "socketpath" ? "socketPath" : sourceKey] = value;
+    } else if (sourceKey === "ssl") {
+      try {
+        options.ssl = JSON.parse(value);
+      } catch {
+        options.ssl = value;
+      }
+    }
+  }
+  return options;
+}
+__name(parseMySqlConnectionString, "parseMySqlConnectionString");
 function typeCast(field, next) {
   switch (field.type) {
     case "DATETIME":
@@ -20548,7 +20602,7 @@ var MySqlDriver = class {
   async connect() {
     if (this.ready) return;
     const options = {
-      uri: this.config.connectionString,
+      ...parseMySqlConnectionString(this.config.connectionString),
       connectionLimit: this.config.connectionLimit,
       connectTimeout: this.config.connectTimeout,
       supportBigNumbers: true,
@@ -20706,14 +20760,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       callbackOperation(
-        database2.run(query, values, { invokingResource: resource, prepared: true }).then(
-          (result) => Array.isArray(result.rows) ? result.rows : {
-            affectedRows: result.affectedRows,
-            changedRows: result.changedRows,
-            insertId: result.insertId,
-            warningStatus: result.warningStatus
-          }
-        ),
+        database2.rawExecute(query, values, { invokingResource: resource }),
         resolvedCallback,
         resource
       );

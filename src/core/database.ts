@@ -80,12 +80,7 @@ export class DatabaseService {
     parameters?: SqlParameters,
     options: QueryOptions = {},
   ): Promise<unknown> {
-    const parameterSets =
-      Array.isArray(parameters) &&
-      parameters.length > 0 &&
-      parameters.every((entry) => Array.isArray(entry) || (entry !== null && typeof entry === 'object'))
-        ? parameters
-        : [parameters];
+    const parameterSets = this.parameterSets(parameters);
     const results: unknown[] = [];
 
     for (const values of parameterSets) {
@@ -93,6 +88,19 @@ export class DatabaseService {
       results.push(this.parsePreparedResult(sql, result));
     }
 
+    return results.length === 1 ? results[0] : results;
+  }
+
+  public async rawExecute(
+    sql: string,
+    parameters?: SqlParameters,
+    options: QueryOptions = {},
+  ): Promise<unknown> {
+    const results: unknown[] = [];
+    for (const values of this.parameterSets(parameters)) {
+      const result = await this.run(sql, values as SqlParameters, { ...options, prepared: true });
+      results.push(result.rows);
+    }
     return results.length === 1 ? results[0] : results;
   }
 
@@ -188,8 +196,9 @@ export class DatabaseService {
     } finally {
       const duration = performance.now() - started;
       const resource = options.invokingResource ?? 'unknown';
-      if (this.config.debug || duration >= this.config.slowQueryWarning) {
-        const level = duration >= this.config.slowQueryWarning ? 'slow query' : 'query';
+      const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
+      if (this.config.debug || slow) {
+        const level = slow ? 'slow query' : 'query';
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
@@ -205,5 +214,20 @@ export class DatabaseService {
     if (!first || typeof first !== 'object') return first ?? null;
     const values = Object.values(first);
     return values.length === 1 ? (values[0] ?? null) : first;
+  }
+
+  private parameterSets(parameters?: SqlParameters): Array<SqlParameters | undefined> {
+    const batch =
+      Array.isArray(parameters) &&
+      parameters.length > 0 &&
+      parameters.every(
+        (entry) =>
+          Array.isArray(entry) ||
+          (entry !== null &&
+            typeof entry === 'object' &&
+            !Buffer.isBuffer(entry) &&
+            !(entry instanceof Date)),
+      );
+    return batch ? (parameters as Array<SqlParameters>) : [parameters];
   }
 }

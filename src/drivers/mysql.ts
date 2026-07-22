@@ -16,6 +16,57 @@ import type {
 } from '../core/types.js';
 import { serializeForRuntime } from '../core/serialize.js';
 
+function booleanOption(value: string): boolean {
+  return value.toLowerCase() === 'true' || value === '1';
+}
+
+export function parseMySqlConnectionString(connectionString: string): ConnectionOptions {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) return { uri: connectionString };
+
+  const options: Record<string, unknown> = {};
+  for (const segment of connectionString.split(';')) {
+    if (!segment.trim()) continue;
+    const separator = segment.indexOf('=');
+    if (separator === -1) throw new Error(`Invalid connection-string segment '${segment}'.`);
+    const sourceKey = segment.slice(0, separator).trim().toLowerCase().replace(/[ _-]/g, '');
+    const value = segment.slice(separator + 1).trim();
+
+    if (['host', 'hostname', 'ip', 'server', 'datasource', 'addr', 'address'].includes(sourceKey)) {
+      options.host = value;
+    } else if (['user', 'userid', 'username', 'uid'].includes(sourceKey)) {
+      options.user = value;
+    } else if (['password', 'pwd', 'pass'].includes(sourceKey)) {
+      options.password = value;
+    } else if (['database', 'db', 'initialcatalog'].includes(sourceKey)) {
+      options.database = value;
+    } else if (sourceKey === 'port' || sourceKey === 'connectionlimit' || sourceKey === 'connecttimeout') {
+      options[sourceKey === 'connectionlimit' ? 'connectionLimit' : sourceKey === 'connecttimeout' ? 'connectTimeout' : 'port'] =
+        Number.parseInt(value, 10);
+    } else if (
+      ['multiplestatements', 'decimalnumbers', 'bignumberstrings', 'waitforconnections'].includes(sourceKey)
+    ) {
+      const key =
+        sourceKey === 'multiplestatements'
+          ? 'multipleStatements'
+          : sourceKey === 'decimalnumbers'
+            ? 'decimalNumbers'
+            : sourceKey === 'bignumberstrings'
+              ? 'bigNumberStrings'
+              : 'waitForConnections';
+      options[key] = booleanOption(value);
+    } else if (sourceKey === 'charset' || sourceKey === 'timezone' || sourceKey === 'socketpath') {
+      options[sourceKey === 'socketpath' ? 'socketPath' : sourceKey] = value;
+    } else if (sourceKey === 'ssl') {
+      try {
+        options.ssl = JSON.parse(value);
+      } catch {
+        options.ssl = value;
+      }
+    }
+  }
+  return options as ConnectionOptions;
+}
+
 function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
   switch (field.type) {
     case 'DATETIME':
@@ -138,7 +189,7 @@ export class MySqlDriver implements DatabaseDriver {
     if (this.ready) return;
 
     const options: ConnectionOptions = {
-      uri: this.config.connectionString,
+      ...parseMySqlConnectionString(this.config.connectionString),
       connectionLimit: this.config.connectionLimit,
       connectTimeout: this.config.connectTimeout,
       supportBigNumbers: true,
