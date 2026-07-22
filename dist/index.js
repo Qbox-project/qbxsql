@@ -21290,10 +21290,11 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
-  function operationError(error, callback, returnCallbackErrors, resource, query, parameters) {
+  function operationError(error, callback, returnCallbackErrors, resource, query, parameters, includeParameters = false) {
     const message = errorMessage(error);
     const output = `${resource} was unable to execute a query!${query ? `
-Query: ${query}` : ""}
+Query: ${query}` : ""}${includeParameters ? `
+${JSON.stringify(parameters)}` : ""}
 ${message}`;
     runtime.emitEvent?.("oxmysql:error", {
       query,
@@ -21309,9 +21310,17 @@ ${message}`;
     console.error(output);
   }
   __name(operationError, "operationError");
-  function callbackOperation(operation, callback, resource, returnCallbackErrors, query, parameters) {
+  function callbackOperation(operation, callback, resource, returnCallbackErrors, query, parameters, includeParameters = false) {
     void operation.then((result) => callback?.(result)).catch(
-      (error) => operationError(error, callback, returnCallbackErrors, resource, query, parameters)
+      (error) => operationError(
+        error,
+        callback,
+        returnCallbackErrors,
+        resource,
+        query,
+        parameters,
+        includeParameters
+      )
     );
   }
   __name(callbackOperation, "callbackOperation");
@@ -21325,7 +21334,8 @@ ${message}`;
         resource,
         returnCallbackErrors,
         query,
-        values
+        values,
+        true
       );
     };
   }

@@ -110,9 +110,10 @@ export function registerCompatibilityExports(
     resource: string,
     query?: string,
     parameters?: SqlParameters,
+    includeParameters = false,
   ): void {
     const message = errorMessage(error);
-    const output = `${resource} was unable to execute a query!${query ? `\nQuery: ${query}` : ''}\n${message}`;
+    const output = `${resource} was unable to execute a query!${query ? `\nQuery: ${query}` : ''}${includeParameters ? `\n${JSON.stringify(parameters)}` : ''}\n${message}`;
 
     runtime.emitEvent?.('oxmysql:error', {
       query,
@@ -137,11 +138,20 @@ export function registerCompatibilityExports(
     returnCallbackErrors: boolean,
     query?: string,
     parameters?: SqlParameters,
+    includeParameters = false,
   ): void {
     void operation
       .then((result) => callback?.(result))
       .catch((error: unknown) =>
-        operationError(error, callback, returnCallbackErrors, resource, query, parameters),
+        operationError(
+          error,
+          callback,
+          returnCallbackErrors,
+          resource,
+          query,
+          parameters,
+          includeParameters,
+        ),
       );
   }
 
@@ -162,6 +172,7 @@ export function registerCompatibilityExports(
         returnCallbackErrors,
         query,
         values,
+        true,
       );
     };
   }

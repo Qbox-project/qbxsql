@@ -102,7 +102,7 @@ describe('oxmysql error semantics', () => {
     const result = await new Promise<[unknown, string | undefined]>((resolve) => {
       direct.get('query')!(
         'SELECT broken',
-        [],
+        ['private-probe-value'],
         (value: unknown, error?: string) => resolve([value, error]),
         'opt-in-resource',
         true,
@@ -111,6 +111,29 @@ describe('oxmysql error semantics', () => {
 
     expect(result[0]).toBeNull();
     expect(result[1]).toContain('requested error');
+    expect(result[1]).toContain('["private-probe-value"]');
+  });
+
+  test('omits parameters from prepared execution callback errors like oxmysql', async () => {
+    const { direct } = compatibilityHarness({
+      prepare: async () => {
+        throw new Error('prepared failure');
+      },
+    });
+
+    const result = await new Promise<[unknown, string | undefined]>((resolve) => {
+      direct.get('prepare')!(
+        'SELECT ?',
+        ['private-probe-value'],
+        (value: unknown, error?: string) => resolve([value, error]),
+        'opt-in-resource',
+        true,
+      );
+    });
+
+    expect(result[0]).toBeNull();
+    expect(result[1]).toContain('prepared failure');
+    expect(result[1]).not.toContain('private-probe-value');
   });
 
   test('rejects promise exports with the database error', async () => {

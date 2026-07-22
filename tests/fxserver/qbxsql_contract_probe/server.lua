@@ -16,7 +16,8 @@ local function normalizedError(method, query, parameters)
     local success, err = pcall(awaitCall, method, query, parameters)
     return {
         rejected = not success,
-        mentionsProbe = not success and tostring(err):find('qbxsql_contract_missing', 1, true) ~= nil
+        mentionsProbe = not success and tostring(err):find('qbxsql_contract_missing', 1, true) ~= nil,
+        mentionsParameter = not success and tostring(err):find('contract-parameter', 1, true) ~= nil
     }
 end
 
@@ -94,7 +95,13 @@ CreateThread(function()
             ),
             failedQuery = normalizedError(
                 'query',
-                'SELECT * FROM qbxsql_contract_missing'
+                'SELECT * FROM qbxsql_contract_missing WHERE marker = ?',
+                { 'contract-parameter' }
+            ),
+            failedPrepare = normalizedError(
+                'prepare',
+                'SELECT * FROM qbxsql_contract_missing WHERE marker = ?',
+                { 'contract-parameter' }
             ),
             failedTransaction = awaitCall('transaction', {
                 { query = 'UPDATE qbxsql_contract_values SET value = value + 1 WHERE id = ?', values = { firstId } },

@@ -28,6 +28,7 @@ async function probe(name, expectedProvider) {
     'rawMany',
     'rawBatch',
     'failedQuery',
+    'failedPrepare',
     'failedTransaction',
   ]) {
     if (!(required in result.result)) throw new Error(`${name} probe omitted '${required}'.`);
