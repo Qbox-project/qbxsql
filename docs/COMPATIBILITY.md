@@ -15,15 +15,16 @@ The compatibility contract is pinned to [oxmysql 2.14.1](https://github.com/over
 
 ## Database release target
 
-Required stable-release gates are MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. The rolling MariaDB job is informative and non-blocking. A matrix definition is not evidence of a pass: release notes must link the completed workflow before `1.0.0`.
+Required stable-release gates are MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. The rolling MariaDB job is informative and non-blocking. A matrix definition or local run is not final release evidence: release notes must link the completed workflow before `1.0.0`.
 
-Local development on 2026-07-22 passed the complete integration suite against MariaDB 12.0.2. That rolling version is not a guaranteed support line.
+Local development on 2026-07-22 passed the complete 33-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
 
 ## FXServer target
 
 - Minimum stock artifact: server build `12913`, matching the oxmysql 2.14.1 dependency floor.
 - Release certification artifact: the explicitly recorded current Windows/Linux artifact in the release evidence.
 - Local stock Windows evidence: build `32561` passed the packaged compatibility/runtime gate on 2026-07-22.
+- The same build passed core/shim stop-and-restart recovery while a query was active.
 - Linux evidence is required from the self-hosted release workflow.
 - Enhanced CFX on Windows is covered separately because it is not a stock artifact.
 
