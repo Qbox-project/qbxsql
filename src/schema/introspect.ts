@@ -75,6 +75,8 @@ export async function introspectDatabase(database: DatabaseService): Promise<Map
     tables.set(name, {
       name,
       engine: text(row.engine),
+      charset:
+        row.collation === null ? null : text(row.collation).split('_', 1)[0]?.toLowerCase() ?? null,
       collation: row.collation === null ? null : text(row.collation),
       columns: new Map(),
       indexes: new Map(),
@@ -140,4 +142,3 @@ export async function introspectDatabase(database: DatabaseService): Promise<Map
 
   return tables;
 }
-

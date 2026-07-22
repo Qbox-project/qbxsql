@@ -20,6 +20,7 @@ function actual(length: number): ActualTable {
   return {
     name: 'properties',
     engine: 'InnoDB',
+    charset: 'utf8mb4',
     collation: 'utf8mb4_unicode_ci',
     columns: new Map([
       [
@@ -131,5 +132,69 @@ describe('declarative schema planner', () => {
     const plan = planSchema('housing', schema(100), new Map([['properties', current]]));
     expect(plan.actions).toHaveLength(0);
     expect(plan.warnings[0]).toContain('will not drop it automatically');
+  });
+
+  test('detects enum and ON UPDATE drift', () => {
+    const current = actual(50);
+    current.columns.set('status', {
+      name: 'status',
+      type: 'enum',
+      columnType: "enum('draft','published')",
+      nullable: false,
+      defaultValue: 'draft',
+      extra: '',
+      maximumLength: 9,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    current.columns.set('updated_at', {
+      name: 'updated_at',
+      type: 'timestamp',
+      columnType: 'timestamp',
+      nullable: false,
+      defaultValue: 'current_timestamp()',
+      extra: '',
+      maximumLength: null,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.columns.status = {
+      type: 'enum',
+      values: ['draft', 'published', 'archived'],
+      default: 'draft',
+    };
+    desired.tables.properties!.columns.updated_at = {
+      type: 'timestamp',
+      defaultExpression: 'CURRENT_TIMESTAMP',
+      onUpdateCurrentTimestamp: true,
+    };
+
+    const plan = planSchema('housing', desired, new Map([['properties', current]]));
+    expect(plan.actions).toHaveLength(2);
+    expect(plan.actions.map((entry) => entry.reason).join(' ')).toContain('enum');
+    expect(plan.actions.map((entry) => entry.reason).join(' ')).toContain(
+      'ON UPDATE CURRENT_TIMESTAMP',
+    );
+  });
+
+  test('detects engine, charset, and collation drift', () => {
+    const current = actual(50);
+    current.engine = 'MyISAM';
+    current.charset = 'latin1';
+    current.collation = 'latin1_swedish_ci';
+    const desired = schema(50);
+    desired.tables.properties!.collation = 'utf8mb4_unicode_ci';
+
+    const plan = planSchema('housing', desired, new Map([['properties', current]]));
+    expect(plan.actions).toHaveLength(2);
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'alterTableEngine', automatic: false }),
+        expect.objectContaining({ kind: 'alterTableCharset', automatic: false }),
+      ]),
+    );
   });
 });

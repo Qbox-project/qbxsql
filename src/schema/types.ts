@@ -143,6 +143,7 @@ export interface ActualForeignKey {
 export interface ActualTable {
   name: string;
   engine: string;
+  charset: string | null;
   collation: string | null;
   columns: Map<string, ActualColumn>;
   indexes: Map<string, ActualIndex>;

@@ -21448,6 +21448,7 @@ async function introspectDatabase(database2) {
     tables.set(name, {
       name,
       engine: text(row.engine),
+      charset: row.collation === null ? null : text(row.collation).split("_", 1)[0]?.toLowerCase() ?? null,
       collation: row.collation === null ? null : text(row.collation),
       columns: /* @__PURE__ */ new Map(),
       indexes: /* @__PURE__ */ new Map(),
@@ -21881,6 +21882,35 @@ function normalizedDefault(value) {
   return normalized === "null" ? null : normalized;
 }
 __name(normalizedDefault, "normalizedDefault");
+function parseEnumValues(columnType) {
+  if (!columnType.toLowerCase().startsWith("enum(") || !columnType.endsWith(")")) return [];
+  const source = columnType.slice(columnType.indexOf("(") + 1, -1);
+  const values = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (!quoted) {
+      if (character === "'") quoted = true;
+      continue;
+    }
+    if (character === "\\") {
+      index += 1;
+      value += source[index] ?? "";
+    } else if (character === "'" && source[index + 1] === "'") {
+      value += "'";
+      index += 1;
+    } else if (character === "'") {
+      values.push(value);
+      value = "";
+      quoted = false;
+    } else {
+      value += character;
+    }
+  }
+  return values;
+}
+__name(parseEnumValues, "parseEnumValues");
 function compareColumn(name, desired, actual) {
   let changed = false;
   let safe = true;
@@ -21912,6 +21942,18 @@ function compareColumn(name, desired, actual) {
       );
     }
   }
+  if (targetType === "enum") {
+    const desiredValues = desired.values ?? [];
+    const actualValues = parseEnumValues(actual.columnType);
+    if (!sameColumns(desiredValues, actualValues)) {
+      changed = true;
+      const preservesExistingValues = actualValues.every(
+        (value, index) => desiredValues[index] === value
+      );
+      if (!preservesExistingValues) safe = false;
+      reasons.push(`enum (${actualValues.join(", ")}) -> (${desiredValues.join(", ")})`);
+    }
+  }
   const actualUnsigned = actual.columnType.includes("unsigned");
   if (Boolean(desired.unsigned) !== actualUnsigned) {
     changed = true;
@@ -21929,6 +21971,12 @@ function compareColumn(name, desired, actual) {
     changed = true;
     safe = false;
     reasons.push(desiredAutoIncrement ? "add auto increment" : "remove auto increment");
+  }
+  const desiredOnUpdate = Boolean(desired.onUpdateCurrentTimestamp);
+  const actualOnUpdate = /on update current_timestamp(?:\([0-6]\))?/i.test(actual.extra);
+  if (desiredOnUpdate !== actualOnUpdate) {
+    changed = true;
+    reasons.push(desiredOnUpdate ? "add ON UPDATE CURRENT_TIMESTAMP" : "remove ON UPDATE CURRENT_TIMESTAMP");
   }
   const expectedDefault = desired.defaultExpression !== void 0 ? normalizedDefault(desired.defaultExpression) : desired.default !== void 0 ? normalizedDefault(typeof desired.default === "boolean" ? Number(desired.default) : desired.default) : null;
   if (expectedDefault !== normalizedDefault(actual.defaultValue)) {
@@ -22138,6 +22186,51 @@ function planSchema(resource, schema, actualTables, capabilities = currentCapabi
           reason: `changing foreign key '${foreignKey.name}' requires an explicit migration`
         });
       }
+    }
+    const desiredIndexNames = new Set((table.indexes ?? []).map((index) => index.name));
+    for (const [indexName, index] of actual.indexes) {
+      if (!index.primary && !desiredIndexNames.has(indexName)) {
+        warnings.push(
+          `Table '${tableName}' contains unmanaged index '${indexName}'; qbxsql will not drop it automatically.`
+        );
+      }
+    }
+    const desiredForeignKeyNames = new Set(
+      (table.foreignKeys ?? []).map((foreignKey) => foreignKey.name)
+    );
+    for (const foreignKeyName of actual.foreignKeys.keys()) {
+      if (!desiredForeignKeyNames.has(foreignKeyName)) {
+        warnings.push(
+          `Table '${tableName}' contains unmanaged foreign key '${foreignKeyName}'; qbxsql will not drop it automatically.`
+        );
+      }
+    }
+    const desiredEngine = table.engine ?? "InnoDB";
+    if (actual.engine.toLowerCase() !== desiredEngine.toLowerCase()) {
+      action(actions, {
+        kind: "alterTableEngine",
+        table: tableName,
+        sql: `ALTER TABLE ${quoteIdentifier(tableName)} ENGINE=${desiredEngine}`,
+        safe: false,
+        onlineSafe: false,
+        algorithm: "MANUAL",
+        reason: `table engine ${actual.engine || "?"} -> ${desiredEngine}`
+      });
+    }
+    const desiredCharset = table.charset ?? "utf8mb4";
+    const charsetChanged = actual.charset?.toLowerCase() !== desiredCharset.toLowerCase();
+    const collationChanged = table.collation !== void 0 && actual.collation?.toLowerCase() !== table.collation.toLowerCase();
+    if (charsetChanged || collationChanged) {
+      const collation = table.collation ? ` COLLATE ${table.collation}` : "";
+      action(actions, {
+        kind: "alterTableCharset",
+        table: tableName,
+        sql: `ALTER TABLE ${quoteIdentifier(tableName)} CONVERT TO CHARACTER SET ${desiredCharset}${collation}`,
+        safe: false,
+        onlineSafe: false,
+        algorithm: "MANUAL",
+        reason: `table charset/collation ${actual.charset ?? "?"}/${actual.collation ?? "?"} -> ${desiredCharset}/${table.collation ?? "database default"}`
+      });
     }
   }
   for (const tableName of createdTables) {
