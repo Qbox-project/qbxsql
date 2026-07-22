@@ -81,6 +81,7 @@ describe('qbxsql compatibility resource', () => {
     expect(server).toContain('exports.oxmysql:scalar');
     expect(server).toContain("exports['mysql-async']:mysql_fetch_scalar");
     expect(server).toContain('exports.ghmattimysql:execute');
+    expect(server).toContain('QBXSQL_SCHEMA_MIGRATION_REQUIRED');
     expect(client).toContain('QBXSQL_CLIENT_VISIBILITY_PASS');
     expect(mysqlAsyncManifest).toContain("'@mysql-async/lib/MySQL.lua'");
   });

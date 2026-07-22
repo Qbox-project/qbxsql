@@ -46,6 +46,26 @@ local function runTests()
     assert(status.totals and type(status.totals.queries) == 'number', 'native health totals are invalid')
 
     QBXSQL.Schema.ensure.await(schema)
+
+    local narrowingSchema = json.decode(json.encode(schema))
+    narrowingSchema.tables.fxsql_values.columns.name.length = 50
+    local schemaFailure = promise.new()
+    QBXSQL.Schema.ensure(narrowingSchema, function(result, err)
+        schemaFailure:resolve({ result = result, err = err })
+    end)
+    local blockedSchema = Citizen.Await(schemaFailure)
+    assertEqual(blockedSchema.result, nil, 'blocked schema result')
+    assert(type(blockedSchema.err) == 'table', 'blocked schema error was not structured')
+    assertEqual(
+        blockedSchema.err.code,
+        'QBXSQL_SCHEMA_MIGRATION_REQUIRED',
+        'blocked schema error code'
+    )
+    assert(
+        blockedSchema.err.plan and #blockedSchema.err.plan.actions > 0,
+        'blocked schema error omitted its migration plan'
+    )
+
     MySQL.update.await('DELETE FROM fxsql_values')
 
     local insertId = MySQL.insert.await(
