@@ -71,7 +71,7 @@ try {
     `endpoint_add_udp "127.0.0.1:${port}"`,
     'sv_master1 ""',
     `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
-    'set mysql_slow_query_warning 0',
+    `set mysql_slow_query_warning ${provider === 'oxmysql' ? 2_147_483_647 : 0}`,
     'set qbxsql_slow_query_warning 0',
     'set qbxsql_schema_mode off',
     `set qbxsql_benchmark_provider "${provider}"`,
