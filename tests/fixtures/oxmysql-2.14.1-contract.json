@@ -1,0 +1,35 @@
+{
+  "target": "oxmysql 2.14.1",
+  "tag": "v2.14.1",
+  "sources": {
+    "exports": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/index.ts",
+    "lua": "https://github.com/overextended/oxmysql/blob/v2.14.1/lib/MySQL.lua",
+    "ghmattimysql": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/compatibility/ghmattimysql.ts",
+    "mysqlAsync": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/compatibility/mysql-async.ts"
+  },
+  "queryMethods": [
+    "query",
+    "single",
+    "scalar",
+    "insert",
+    "update",
+    "prepare",
+    "rawExecute",
+    "transaction"
+  ],
+  "deprecatedMethods": ["execute", "fetch"],
+  "mysqlAsyncAliases": {
+    "mysql_fetch_all": "query",
+    "mysql_fetch_scalar": "scalar",
+    "mysql_execute": "update",
+    "mysql_insert": "insert",
+    "mysql_transaction": "transaction",
+    "mysql_store": "store"
+  },
+  "ghmattimysqlAliases": {
+    "execute": "query",
+    "scalar": "scalar",
+    "transaction": "transaction",
+    "store": "store"
+  }
+}

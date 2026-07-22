@@ -318,7 +318,13 @@ export function registerCompatibilityExports(
   };
   for (const [name, method] of Object.entries(ghmattiAliases)) {
     runtime.addProviderExport('ghmattimysql', name, method);
-    if (name !== 'store') runtime.addProviderExport('ghmattimysql', `${name}Sync`, asyncExport(method));
+    runtime.addProviderExport(
+      'ghmattimysql',
+      `${name}Sync`,
+      name === 'store'
+        ? (query: string) => api.store!(query)
+        : asyncExport(method),
+    );
   }
 
   return api;

@@ -9,8 +9,9 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "bun test tests/unit tests/integration",
+    "test": "bun test tests/unit tests/contract tests/integration",
     "test:unit": "bun test tests/unit",
+    "test:contract": "bun test tests/contract",
     "test:integration": "bun test tests/integration"
   },
   "dependencies": {
