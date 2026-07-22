@@ -17,7 +17,8 @@
     "release:validate": "node scripts/validate-release.mjs",
     "install:dev": "node scripts/install-development.mjs",
     "benchmark:run": "node scripts/run-benchmark.mjs",
-    "benchmark:compare": "node scripts/compare-benchmarks.mjs"
+    "benchmark:compare": "node scripts/compare-benchmarks.mjs",
+    "soak:validate": "node scripts/validate-soak.mjs"
   },
   "dependencies": {
     "mysql2": "3.23.1"
