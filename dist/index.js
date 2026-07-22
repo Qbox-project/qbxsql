@@ -20098,6 +20098,7 @@ var require_mysql2 = __commonJS({
 var index_exports = {};
 __export(index_exports, {
   database: () => database,
+  schemaDatabase: () => schemaDatabase,
   schemas: () => schemas
 });
 module.exports = __toCommonJS(index_exports);
@@ -20189,6 +20190,7 @@ __name(isolationOption, "isolationOption");
 function loadConfig() {
   const connectionLimit = integerOption("qbxsql_connection_limit", 10, 1);
   const connectTimeout = integerOption("qbxsql_connect_timeout", 6e4, 1e3);
+  const schemaConnectionString = readOptionalConvar("qbxsql_schema_connection_string");
   return {
     connectionString: preferredConvar("qbxsql_connection_string", "mysql_connection_string") ?? process.env.DB_CONNECTION ?? "mysql://root@127.0.0.1/qbxsql",
     connectionLimit: connectionLimit.value,
@@ -20209,7 +20211,8 @@ function loadConfig() {
     connectionRetryMax: integerOption("qbxsql_connection_retry_max", 3e4, 250).value,
     transactionTimeout: integerOption("qbxsql_transaction_timeout", 3e4, 1).value,
     schemaMode: schemaMode(),
-    schemaAllowBlocking: booleanConvar("qbxsql_schema_allow_blocking", false)
+    schemaAllowBlocking: booleanConvar("qbxsql_schema_allow_blocking", false),
+    ...schemaConnectionString ? { schemaConnectionString } : {}
   };
 }
 __name(loadConfig, "loadConfig");
@@ -22473,6 +22476,7 @@ var SchemaManager = class {
     this.database = database2;
     this.mode = options.mode ?? "auto";
     this.allowBlocking = options.allowBlocking ?? false;
+    this.applicationDatabase = options.applicationDatabase ?? database2;
   }
   database;
   static {
@@ -22481,8 +22485,10 @@ var SchemaManager = class {
   initialization = null;
   mode;
   allowBlocking;
+  applicationDatabase;
+  targetVerification = null;
   initialize() {
-    this.initialization ??= this.createMetadataTables().catch((error) => {
+    this.initialization ??= this.verifySchemaTarget().then(() => this.createMetadataTables()).catch((error) => {
       this.initialization = null;
       throw error;
     });
@@ -22593,6 +22599,7 @@ var SchemaManager = class {
   async plan(resource, input) {
     validateResourceName(resource);
     const schema = validateSchema(input);
+    await this.verifySchemaTarget();
     const checksum = schemaChecksum(schema);
     const actual = await introspectDatabase(this.database);
     let plan = planSchema(
@@ -22621,6 +22628,7 @@ var SchemaManager = class {
   async planAdoption(resource, input, baselineVersion) {
     validateResourceName(resource);
     const schema = validateSchema(input);
+    await this.verifySchemaTarget();
     this.validateAdoptionBaseline(schema, baselineVersion);
     const checksum = schemaChecksum(schema);
     const migrations = (schema.migrations ?? []).filter(
@@ -22806,6 +22814,31 @@ var SchemaManager = class {
       [],
       { invokingResource: "qbxsql:schema" }
     );
+  }
+  verifySchemaTarget() {
+    if (this.database === this.applicationDatabase) return Promise.resolve();
+    this.targetVerification ??= this.compareSchemaTargets().catch((error) => {
+      this.targetVerification = null;
+      throw error;
+    });
+    return this.targetVerification;
+  }
+  async compareSchemaTargets() {
+    await Promise.all([this.applicationDatabase.connect(), this.database.connect()]);
+    const identitySql = `SELECT DATABASE() AS databaseName, @@hostname AS hostname,
+                                @@port AS port, @@server_id AS serverId, VERSION() AS version`;
+    const [application, schema] = await Promise.all([
+      this.applicationDatabase.single(identitySql, [], { invokingResource: "qbxsql:schema" }),
+      this.database.single(identitySql, [], { invokingResource: "qbxsql:schema" })
+    ]);
+    if (!application || !schema) throw new Error("Unable to verify the schema database target.");
+    const fields = ["databaseName", "hostname", "port", "serverId", "version"];
+    const mismatch = fields.find((field) => String(application[field]) !== String(schema[field]));
+    if (mismatch) {
+      throw new Error(
+        `qbxsql_schema_connection_string points to a different server or database (${mismatch} mismatch).`
+      );
+    }
   }
   async metadataTablesExist() {
     await this.database.connect();
@@ -23221,9 +23254,14 @@ var SchemaManager = class {
 var resourceName = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
 var config = loadConfig();
 var database = new DatabaseService(new MySqlDriver(config), config);
-var schemas = new SchemaManager(database, {
+var schemaDatabase = config.schemaConnectionString ? new DatabaseService(
+  new MySqlDriver({ ...config, connectionString: config.schemaConnectionString }),
+  { ...config, connectionString: config.schemaConnectionString }
+) : database;
+var schemas = new SchemaManager(schemaDatabase, {
   mode: config.schemaMode,
-  allowBlocking: config.schemaAllowBlocking
+  allowBlocking: config.schemaAllowBlocking,
+  applicationDatabase: database
 });
 registerCompatibilityExports(database);
 registerSchemaExports(schemas);
@@ -23248,12 +23286,18 @@ if (typeof RegisterCommand === "function") {
 }
 if (typeof on === "function") {
   on("onResourceStop", (stoppedResource) => {
-    if (stoppedResource === resourceName) void database.close();
+    if (stoppedResource === resourceName) {
+      void Promise.all([
+        database.close(),
+        ...schemaDatabase === database ? [] : [schemaDatabase.close()]
+      ]);
+    }
   });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   database,
+  schemaDatabase,
   schemas
 });
 /*! Bundled license information:

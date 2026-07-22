@@ -9,9 +9,16 @@ const resourceName =
   typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
 const config = loadConfig();
 const database = new DatabaseService(new MySqlDriver(config), config);
-const schemas = new SchemaManager(database, {
+const schemaDatabase = config.schemaConnectionString
+  ? new DatabaseService(
+      new MySqlDriver({ ...config, connectionString: config.schemaConnectionString }),
+      { ...config, connectionString: config.schemaConnectionString },
+    )
+  : database;
+const schemas = new SchemaManager(schemaDatabase, {
   mode: config.schemaMode,
   allowBlocking: config.schemaAllowBlocking,
+  applicationDatabase: database,
 });
 
 registerCompatibilityExports(database);
@@ -41,8 +48,13 @@ if (typeof RegisterCommand === 'function') {
 
 if (typeof on === 'function') {
   on('onResourceStop', (stoppedResource: string) => {
-    if (stoppedResource === resourceName) void database.close();
+    if (stoppedResource === resourceName) {
+      void Promise.all([
+        database.close(),
+        ...(schemaDatabase === database ? [] : [schemaDatabase.close()]),
+      ]);
+    }
   });
 }
 
-export { database, schemas };
+export { database, schemaDatabase, schemas };

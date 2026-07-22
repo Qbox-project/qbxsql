@@ -18,6 +18,7 @@ export interface QbxSqlConfig {
   transactionTimeout: number;
   schemaMode: 'auto' | 'plan' | 'off';
   schemaAllowBlocking: boolean;
+  schemaConnectionString?: string;
   connectionLimitExplicit?: boolean;
   connectTimeoutExplicit?: boolean;
 }
@@ -128,6 +129,7 @@ export function loadConfig(): QbxSqlConfig {
   const connectionLimit = integerOption('qbxsql_connection_limit', 10, 1);
   const connectTimeout = integerOption('qbxsql_connect_timeout', 60_000, 1_000);
 
+  const schemaConnectionString = readOptionalConvar('qbxsql_schema_connection_string');
   return {
     connectionString:
       preferredConvar('qbxsql_connection_string', 'mysql_connection_string') ??
@@ -152,5 +154,6 @@ export function loadConfig(): QbxSqlConfig {
     transactionTimeout: integerOption('qbxsql_transaction_timeout', 30_000, 1).value,
     schemaMode: schemaMode(),
     schemaAllowBlocking: booleanConvar('qbxsql_schema_allow_blocking', false),
+    ...(schemaConnectionString ? { schemaConnectionString } : {}),
   };
 }

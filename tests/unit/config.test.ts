@@ -46,4 +46,15 @@ describe('connector configuration', () => {
 
     expect(loadConfig().debug).toEqual(['qbx_core', 'ox_inventory']);
   });
+
+  test('loads optional schema credentials without replacing the application connection', () => {
+    convars({
+      mysql_connection_string: 'mysql://application/qbox',
+      qbxsql_schema_connection_string: 'mysql://schema/qbox',
+    });
+    const config = loadConfig();
+
+    expect(config.connectionString).toBe('mysql://application/qbox');
+    expect(config.schemaConnectionString).toBe('mysql://schema/qbox');
+  });
 });

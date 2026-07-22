@@ -78,6 +78,7 @@ export class SchemaAdoptionConflictError extends Error {
 export interface SchemaManagerOptions {
   mode?: 'auto' | 'plan' | 'off';
   allowBlocking?: boolean;
+  applicationDatabase?: DatabaseService;
 }
 
 function validateResourceName(resource: string): void {
@@ -146,6 +147,8 @@ export class SchemaManager {
 
   private readonly mode: 'auto' | 'plan' | 'off';
   private readonly allowBlocking: boolean;
+  private readonly applicationDatabase: DatabaseService;
+  private targetVerification: Promise<void> | null = null;
 
   public constructor(
     private readonly database: DatabaseService,
@@ -153,13 +156,16 @@ export class SchemaManager {
   ) {
     this.mode = options.mode ?? 'auto';
     this.allowBlocking = options.allowBlocking ?? false;
+    this.applicationDatabase = options.applicationDatabase ?? database;
   }
 
   public initialize(): Promise<void> {
-    this.initialization ??= this.createMetadataTables().catch((error: unknown) => {
+    this.initialization ??= this.verifySchemaTarget()
+      .then(() => this.createMetadataTables())
+      .catch((error: unknown) => {
       this.initialization = null;
       throw error;
-    });
+      });
     return this.initialization;
   }
 
@@ -296,6 +302,7 @@ export class SchemaManager {
   public async plan(resource: string, input: ResourceSchema): Promise<SchemaEnsureResult> {
     validateResourceName(resource);
     const schema = validateSchema(input);
+    await this.verifySchemaTarget();
     const checksum = schemaChecksum(schema);
     const actual = await introspectDatabase(this.database);
     let plan = planSchema(
@@ -333,6 +340,7 @@ export class SchemaManager {
   ): Promise<SchemaAdoptionResult> {
     validateResourceName(resource);
     const schema = validateSchema(input);
+    await this.verifySchemaTarget();
     this.validateAdoptionBaseline(schema, baselineVersion);
     const checksum = schemaChecksum(schema);
     const migrations = (schema.migrations ?? [])
@@ -537,6 +545,33 @@ export class SchemaManager {
       [],
       { invokingResource: 'qbxsql:schema' },
     );
+  }
+
+  private verifySchemaTarget(): Promise<void> {
+    if (this.database === this.applicationDatabase) return Promise.resolve();
+    this.targetVerification ??= this.compareSchemaTargets().catch((error: unknown) => {
+      this.targetVerification = null;
+      throw error;
+    });
+    return this.targetVerification;
+  }
+
+  private async compareSchemaTargets(): Promise<void> {
+    await Promise.all([this.applicationDatabase.connect(), this.database.connect()]);
+    const identitySql = `SELECT DATABASE() AS databaseName, @@hostname AS hostname,
+                                @@port AS port, @@server_id AS serverId, VERSION() AS version`;
+    const [application, schema] = (await Promise.all([
+      this.applicationDatabase.single(identitySql, [], { invokingResource: 'qbxsql:schema' }),
+      this.database.single(identitySql, [], { invokingResource: 'qbxsql:schema' }),
+    ])) as [Row | null, Row | null];
+    if (!application || !schema) throw new Error('Unable to verify the schema database target.');
+    const fields = ['databaseName', 'hostname', 'port', 'serverId', 'version'] as const;
+    const mismatch = fields.find((field) => String(application[field]) !== String(schema[field]));
+    if (mismatch) {
+      throw new Error(
+        `qbxsql_schema_connection_string points to a different server or database (${mismatch} mismatch).`,
+      );
+    }
   }
 
   private async metadataTablesExist(): Promise<boolean> {

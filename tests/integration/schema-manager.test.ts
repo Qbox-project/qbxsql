@@ -34,6 +34,7 @@ const config: QbxSqlConfig = {
 
 let database: DatabaseService;
 let manager: SchemaManager;
+const auxiliaryDatabases: DatabaseService[] = [];
 
 function propertiesSchema(length: number, version = 1): ResourceSchema {
   return {
@@ -89,6 +90,7 @@ describe('resource schema manager integration', () => {
   });
 
   afterAll(async () => {
+    await Promise.all(auxiliaryDatabases.map((entry) => entry.close()));
     if (database) await database.close();
     const admin = await createConnection(adminConnection);
     await admin.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
@@ -446,6 +448,43 @@ describe('resource schema manager integration', () => {
         .get('adoption_migration_source')
         ?.columns.has('note'),
     ).toBe(true);
+  });
+
+  test('allows verified separate schema credentials for the same server and database', async () => {
+    const schemaDatabase = new DatabaseService(new MySqlDriver(config), config);
+    auxiliaryDatabases.push(schemaDatabase);
+    const separateManager = new SchemaManager(schemaDatabase, { applicationDatabase: database });
+    const result = await separateManager.ensure('separate_credentials', {
+      version: 1,
+      tables: {
+        separate_credentials_table: {
+          columns: { id: { type: 'int', primary: true } },
+        },
+      },
+    });
+
+    expect(result.appliedActions[0]).toContain('CREATE TABLE `separate_credentials_table`');
+    expect((await introspectDatabase(database)).has('separate_credentials_table')).toBe(true);
+  });
+
+  test('rejects schema credentials for a different database', async () => {
+    const wrongDatabaseName = 'qbxsql_schema_wrong_target';
+    const admin = await createConnection(adminConnection);
+    await admin.query(`DROP DATABASE IF EXISTS \`${wrongDatabaseName}\``);
+    await admin.query(`CREATE DATABASE \`${wrongDatabaseName}\``);
+    await admin.end();
+    const wrongConfig = { ...config, connectionString: `${adminConnection}/${wrongDatabaseName}` };
+    const schemaDatabase = new DatabaseService(new MySqlDriver(wrongConfig), wrongConfig);
+    auxiliaryDatabases.push(schemaDatabase);
+    const separateManager = new SchemaManager(schemaDatabase, { applicationDatabase: database });
+
+    await expect(
+      separateManager.plan('wrong_credentials', { version: 1, tables: {} }),
+    ).rejects.toThrow('different server or database');
+
+    const cleanup = await createConnection(adminConnection);
+    await cleanup.query(`DROP DATABASE IF EXISTS \`${wrongDatabaseName}\``);
+    await cleanup.end();
   });
 
 });
