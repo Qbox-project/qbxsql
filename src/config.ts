@@ -1,55 +1,134 @@
+export type TransactionIsolationLevel =
+  | 'READ COMMITTED'
+  | 'READ UNCOMMITTED'
+  | 'REPEATABLE READ'
+  | 'SERIALIZABLE';
+
 export interface QbxSqlConfig {
   connectionString: string;
   connectionLimit: number;
   connectTimeout: number;
   slowQueryWarning: number;
-  debug: boolean;
-  transactionIsolationLevel:
-    | 'READ COMMITTED'
-    | 'READ UNCOMMITTED'
-    | 'REPEATABLE READ'
-    | 'SERIALIZABLE';
+  debug: boolean | readonly string[];
+  transactionIsolationLevel: TransactionIsolationLevel;
+  connectionWaitTimeout: number;
+  connectionQueueLimit: number;
+  healthInterval: number;
+  connectionRetryMax: number;
+  transactionTimeout: number;
+  connectionLimitExplicit?: boolean;
+  connectTimeoutExplicit?: boolean;
 }
 
-function readConvar(name: string, fallback: string): string {
-  if (typeof GetConvar !== 'function') return process.env[name] ?? fallback;
-  return GetConvar(name, fallback);
+const unsetConvar = '__qbxsql_convar_not_set__';
+
+function readOptionalConvar(name: string): string | undefined {
+  const value =
+    typeof GetConvar === 'function'
+      ? GetConvar(name, unsetConvar)
+      : process.env[name] ?? unsetConvar;
+
+  if (value === unsetConvar || value.trim() === '') return undefined;
+  return value;
 }
 
-function readInteger(name: string, fallback: number): number {
-  const value = Number.parseInt(readConvar(name, String(fallback)), 10);
-  return Number.isFinite(value) ? value : fallback;
+function preferredConvar(nativeName: string, legacyName?: string): string | undefined {
+  return readOptionalConvar(nativeName) ?? (legacyName ? readOptionalConvar(legacyName) : undefined);
 }
 
-function readBoolean(name: string, fallback: boolean): boolean {
-  const value = readConvar(name, String(fallback)).toLowerCase();
-  return value === 'true' || value === '1' || value === 'yes';
-}
+function integerOption(
+  nativeName: string,
+  fallback: number,
+  minimum: number,
+  legacyName?: string,
+): { value: number; explicit: boolean } {
+  const raw = preferredConvar(nativeName, legacyName);
+  if (raw === undefined) return { value: fallback, explicit: false };
 
-function readIsolationLevel(): QbxSqlConfig['transactionIsolationLevel'] {
-  switch (readInteger('mysql_transaction_isolation_level', 2)) {
-    case 1:
-      return 'REPEATABLE READ';
-    case 3:
-      return 'READ UNCOMMITTED';
-    case 4:
-      return 'SERIALIZABLE';
-    default:
-      return 'READ COMMITTED';
+  if (!/^-?\d+$/.test(raw.trim())) {
+    console.warn(`[qbxsql] Ignoring invalid integer convar ${nativeName}.`);
+    return { value: fallback, explicit: false };
   }
+
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    console.warn(`[qbxsql] Ignoring out-of-range convar ${nativeName}; minimum is ${minimum}.`);
+    return { value: fallback, explicit: false };
+  }
+
+  return { value, explicit: true };
+}
+
+function debugOption(): boolean | readonly string[] {
+  const raw = preferredConvar('qbxsql_debug', 'mysql_debug');
+  if (raw === undefined) return false;
+
+  const normalized = raw.trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+
+  try {
+    const resources = JSON.parse(raw) as unknown;
+    if (Array.isArray(resources) && resources.every((entry) => typeof entry === 'string')) {
+      return [...new Set(resources)];
+    }
+  } catch {
+    // The warning below explains the accepted format.
+  }
+
+  console.warn('[qbxsql] mysql_debug/qbxsql_debug must be a boolean or a JSON array of resource names.');
+  return false;
+}
+
+function isolationOption(): TransactionIsolationLevel {
+  const raw = preferredConvar(
+    'qbxsql_transaction_isolation_level',
+    'mysql_transaction_isolation_level',
+  );
+  if (raw === undefined) return 'READ COMMITTED';
+
+  const normalized = raw.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+  const levels: Record<string, TransactionIsolationLevel> = {
+    '1': 'REPEATABLE READ',
+    '2': 'READ COMMITTED',
+    '3': 'READ UNCOMMITTED',
+    '4': 'SERIALIZABLE',
+    'READ COMMITTED': 'READ COMMITTED',
+    'READ UNCOMMITTED': 'READ UNCOMMITTED',
+    'REPEATABLE READ': 'REPEATABLE READ',
+    SERIALIZABLE: 'SERIALIZABLE',
+  };
+
+  if (levels[normalized]) return levels[normalized];
+  console.warn('[qbxsql] Ignoring invalid transaction isolation level.');
+  return 'READ COMMITTED';
 }
 
 export function loadConfig(): QbxSqlConfig {
+  const connectionLimit = integerOption('qbxsql_connection_limit', 10, 1);
+  const connectTimeout = integerOption('qbxsql_connect_timeout', 60_000, 1_000);
+
   return {
     connectionString:
-      readConvar('mysql_connection_string', '') ||
-      process.env.DB_CONNECTION ||
+      preferredConvar('qbxsql_connection_string', 'mysql_connection_string') ??
+      process.env.DB_CONNECTION ??
       'mysql://root@127.0.0.1/qbxsql',
-    connectionLimit: Math.max(1, readInteger('qbxsql_connection_limit', 10)),
-    connectTimeout: Math.max(1_000, readInteger('qbxsql_connect_timeout', 60_000)),
-    slowQueryWarning: Math.max(0, readInteger('qbxsql_slow_query_warning', 200)),
-    debug: readBoolean('qbxsql_debug', false),
-    transactionIsolationLevel: readIsolationLevel(),
+    connectionLimit: connectionLimit.value,
+    connectionLimitExplicit: connectionLimit.explicit,
+    connectTimeout: connectTimeout.value,
+    connectTimeoutExplicit: connectTimeout.explicit,
+    slowQueryWarning: integerOption(
+      'qbxsql_slow_query_warning',
+      200,
+      0,
+      'mysql_slow_query_warning',
+    ).value,
+    debug: debugOption(),
+    transactionIsolationLevel: isolationOption(),
+    connectionWaitTimeout: integerOption('qbxsql_connection_wait_timeout', 30_000, 1).value,
+    connectionQueueLimit: integerOption('qbxsql_connection_queue_limit', 1_000, 1).value,
+    healthInterval: integerOption('qbxsql_health_interval', 10_000, 1_000).value,
+    connectionRetryMax: integerOption('qbxsql_connection_retry_max', 30_000, 250).value,
+    transactionTimeout: integerOption('qbxsql_transaction_timeout', 30_000, 1).value,
   };
 }
-

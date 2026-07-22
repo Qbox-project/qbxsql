@@ -17032,7 +17032,7 @@ var require_ssl_profiles = __commonJS({
 var require_connection_config = __commonJS({
   "node_modules/mysql2/lib/connection_config.js"(exports2, module2) {
     "use strict";
-    var { URL } = require("url");
+    var { URL: URL2 } = require("url");
     var ClientConstants = require_client();
     var Charsets = require_charsets();
     var { version } = require_package();
@@ -17260,7 +17260,7 @@ var require_connection_config = __commonJS({
         return ssl;
       }
       static parseUrl(url) {
-        const parsedUrl = new URL(url);
+        const parsedUrl = new URL2(url);
         const options = {
           host: decodeURIComponent(parsedUrl.hostname),
           port: parseInt(parsedUrl.port, 10),
@@ -20103,42 +20103,93 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 
 // src/config.ts
-function readConvar(name, fallback) {
-  if (typeof GetConvar !== "function") return process.env[name] ?? fallback;
-  return GetConvar(name, fallback);
+var unsetConvar = "__qbxsql_convar_not_set__";
+function readOptionalConvar(name) {
+  const value = typeof GetConvar === "function" ? GetConvar(name, unsetConvar) : process.env[name] ?? unsetConvar;
+  if (value === unsetConvar || value.trim() === "") return void 0;
+  return value;
 }
-__name(readConvar, "readConvar");
-function readInteger(name, fallback) {
-  const value = Number.parseInt(readConvar(name, String(fallback)), 10);
-  return Number.isFinite(value) ? value : fallback;
+__name(readOptionalConvar, "readOptionalConvar");
+function preferredConvar(nativeName, legacyName) {
+  return readOptionalConvar(nativeName) ?? (legacyName ? readOptionalConvar(legacyName) : void 0);
 }
-__name(readInteger, "readInteger");
-function readBoolean(name, fallback) {
-  const value = readConvar(name, String(fallback)).toLowerCase();
-  return value === "true" || value === "1" || value === "yes";
-}
-__name(readBoolean, "readBoolean");
-function readIsolationLevel() {
-  switch (readInteger("mysql_transaction_isolation_level", 2)) {
-    case 1:
-      return "REPEATABLE READ";
-    case 3:
-      return "READ UNCOMMITTED";
-    case 4:
-      return "SERIALIZABLE";
-    default:
-      return "READ COMMITTED";
+__name(preferredConvar, "preferredConvar");
+function integerOption(nativeName, fallback, minimum, legacyName) {
+  const raw = preferredConvar(nativeName, legacyName);
+  if (raw === void 0) return { value: fallback, explicit: false };
+  if (!/^-?\d+$/.test(raw.trim())) {
+    console.warn(`[qbxsql] Ignoring invalid integer convar ${nativeName}.`);
+    return { value: fallback, explicit: false };
   }
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    console.warn(`[qbxsql] Ignoring out-of-range convar ${nativeName}; minimum is ${minimum}.`);
+    return { value: fallback, explicit: false };
+  }
+  return { value, explicit: true };
 }
-__name(readIsolationLevel, "readIsolationLevel");
+__name(integerOption, "integerOption");
+function debugOption() {
+  const raw = preferredConvar("qbxsql_debug", "mysql_debug");
+  if (raw === void 0) return false;
+  const normalized = raw.trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+  try {
+    const resources = JSON.parse(raw);
+    if (Array.isArray(resources) && resources.every((entry) => typeof entry === "string")) {
+      return [...new Set(resources)];
+    }
+  } catch {
+  }
+  console.warn("[qbxsql] mysql_debug/qbxsql_debug must be a boolean or a JSON array of resource names.");
+  return false;
+}
+__name(debugOption, "debugOption");
+function isolationOption() {
+  const raw = preferredConvar(
+    "qbxsql_transaction_isolation_level",
+    "mysql_transaction_isolation_level"
+  );
+  if (raw === void 0) return "READ COMMITTED";
+  const normalized = raw.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toUpperCase();
+  const levels = {
+    "1": "REPEATABLE READ",
+    "2": "READ COMMITTED",
+    "3": "READ UNCOMMITTED",
+    "4": "SERIALIZABLE",
+    "READ COMMITTED": "READ COMMITTED",
+    "READ UNCOMMITTED": "READ UNCOMMITTED",
+    "REPEATABLE READ": "REPEATABLE READ",
+    SERIALIZABLE: "SERIALIZABLE"
+  };
+  if (levels[normalized]) return levels[normalized];
+  console.warn("[qbxsql] Ignoring invalid transaction isolation level.");
+  return "READ COMMITTED";
+}
+__name(isolationOption, "isolationOption");
 function loadConfig() {
+  const connectionLimit = integerOption("qbxsql_connection_limit", 10, 1);
+  const connectTimeout = integerOption("qbxsql_connect_timeout", 6e4, 1e3);
   return {
-    connectionString: readConvar("mysql_connection_string", "") || process.env.DB_CONNECTION || "mysql://root@127.0.0.1/qbxsql",
-    connectionLimit: Math.max(1, readInteger("qbxsql_connection_limit", 10)),
-    connectTimeout: Math.max(1e3, readInteger("qbxsql_connect_timeout", 6e4)),
-    slowQueryWarning: Math.max(0, readInteger("qbxsql_slow_query_warning", 200)),
-    debug: readBoolean("qbxsql_debug", false),
-    transactionIsolationLevel: readIsolationLevel()
+    connectionString: preferredConvar("qbxsql_connection_string", "mysql_connection_string") ?? process.env.DB_CONNECTION ?? "mysql://root@127.0.0.1/qbxsql",
+    connectionLimit: connectionLimit.value,
+    connectionLimitExplicit: connectionLimit.explicit,
+    connectTimeout: connectTimeout.value,
+    connectTimeoutExplicit: connectTimeout.explicit,
+    slowQueryWarning: integerOption(
+      "qbxsql_slow_query_warning",
+      200,
+      0,
+      "mysql_slow_query_warning"
+    ).value,
+    debug: debugOption(),
+    transactionIsolationLevel: isolationOption(),
+    connectionWaitTimeout: integerOption("qbxsql_connection_wait_timeout", 3e4, 1).value,
+    connectionQueueLimit: integerOption("qbxsql_connection_queue_limit", 1e3, 1).value,
+    healthInterval: integerOption("qbxsql_health_interval", 1e4, 1e3).value,
+    connectionRetryMax: integerOption("qbxsql_connection_retry_max", 3e4, 250).value,
+    transactionTimeout: integerOption("qbxsql_transaction_timeout", 3e4, 1).value
   };
 }
 __name(loadConfig, "loadConfig");
@@ -20408,7 +20459,8 @@ ${reason}`);
       const duration = import_node_perf_hooks.performance.now() - started;
       const resource = options.invokingResource ?? "unknown";
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
-      if (this.config.debug || slow) {
+      const debug = this.config.debug === true || Array.isArray(this.config.debug) && this.config.debug.includes(resource);
+      if (debug || slow) {
         const level = slow ? "slow query" : "query";
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
@@ -20454,12 +20506,51 @@ function serializeForRuntime(value) {
 __name(serializeForRuntime, "serializeForRuntime");
 
 // src/drivers/mysql.ts
-function booleanOption(value) {
-  return value.toLowerCase() === "true" || value === "1";
+function booleanOption(value, key) {
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+  throw new Error(`Connection-string option '${key}' must be a boolean.`);
 }
 __name(booleanOption, "booleanOption");
-function parseMySqlConnectionString(connectionString) {
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) return { uri: connectionString };
+function integerOption2(value, key, minimum) {
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`Connection-string option '${key}' must be an integer.`);
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+    throw new Error(`Connection-string option '${key}' must be at least ${minimum}.`);
+  }
+  return parsed;
+}
+__name(integerOption2, "integerOption");
+function warnMultipleStatements(enabled, warn) {
+  if (enabled) {
+    warn(
+      "[qbxsql] WARNING: multipleStatements is enabled. This increases SQL injection impact and should only be used when absolutely required."
+    );
+  }
+}
+__name(warnMultipleStatements, "warnMultipleStatements");
+function parseMySqlConnectionString(connectionString, warn = console.warn) {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) {
+    const options2 = { uri: connectionString };
+    const url = new URL(connectionString);
+    const connectionLimit = url.searchParams.get("connectionLimit");
+    const connectTimeout = url.searchParams.get("connectTimeout");
+    const multipleStatements = url.searchParams.get("multipleStatements");
+    if (connectionLimit !== null) {
+      options2.connectionLimit = integerOption2(connectionLimit, "connectionLimit", 1);
+    }
+    if (connectTimeout !== null) {
+      options2.connectTimeout = integerOption2(connectTimeout, "connectTimeout", 1);
+    }
+    if (multipleStatements !== null) {
+      options2.multipleStatements = booleanOption(multipleStatements, "multipleStatements");
+      warnMultipleStatements(options2.multipleStatements, warn);
+    }
+    return options2;
+  }
   const options = {};
   for (const segment of connectionString.split(";")) {
     if (!segment.trim()) continue;
@@ -20476,10 +20567,31 @@ function parseMySqlConnectionString(connectionString) {
     } else if (["database", "db", "initialcatalog"].includes(sourceKey)) {
       options.database = value;
     } else if (sourceKey === "port" || sourceKey === "connectionlimit" || sourceKey === "connecttimeout") {
-      options[sourceKey === "connectionlimit" ? "connectionLimit" : sourceKey === "connecttimeout" ? "connectTimeout" : "port"] = Number.parseInt(value, 10);
-    } else if (["multiplestatements", "decimalnumbers", "bignumberstrings", "waitforconnections"].includes(sourceKey)) {
-      const key = sourceKey === "multiplestatements" ? "multipleStatements" : sourceKey === "decimalnumbers" ? "decimalNumbers" : sourceKey === "bignumberstrings" ? "bigNumberStrings" : "waitForConnections";
-      options[key] = booleanOption(value);
+      const target = sourceKey === "connectionlimit" ? "connectionLimit" : sourceKey === "connecttimeout" ? "connectTimeout" : "port";
+      options[target] = integerOption2(value, target, 1);
+    } else if ([
+      "multiplestatements",
+      "decimalnumbers",
+      "bignumberstrings",
+      "supportbignumbers",
+      "waitforconnections",
+      "jsonstrings",
+      "namedplaceholders",
+      "trace"
+    ].includes(sourceKey)) {
+      const booleanKeys = {
+        multiplestatements: "multipleStatements",
+        decimalnumbers: "decimalNumbers",
+        bignumberstrings: "bigNumberStrings",
+        supportbignumbers: "supportBigNumbers",
+        waitforconnections: "waitForConnections",
+        jsonstrings: "jsonStrings",
+        namedplaceholders: "namedPlaceholders",
+        trace: "trace"
+      };
+      const key = booleanKeys[sourceKey];
+      options[key] = booleanOption(value, key);
+      if (key === "multipleStatements") warnMultipleStatements(options[key], warn);
     } else if (sourceKey === "charset" || sourceKey === "timezone" || sourceKey === "socketpath") {
       options[sourceKey === "socketpath" ? "socketPath" : sourceKey] = value;
     } else if (sourceKey === "ssl") {
@@ -20488,6 +20600,8 @@ function parseMySqlConnectionString(connectionString) {
       } catch {
         options.ssl = value;
       }
+    } else {
+      warn(`[qbxsql] Ignoring unknown connection-string option '${segment.slice(0, separator).trim()}'.`);
     }
   }
   return options;
@@ -20601,16 +20715,19 @@ var MySqlDriver = class {
   pool = null;
   async connect() {
     if (this.ready) return;
+    const parsedOptions = parseMySqlConnectionString(this.config.connectionString);
     const options = {
-      ...parseMySqlConnectionString(this.config.connectionString),
-      connectionLimit: this.config.connectionLimit,
-      connectTimeout: this.config.connectTimeout,
       supportBigNumbers: true,
       jsonStrings: true,
       namedPlaceholders: false,
       trace: false,
+      ...parsedOptions,
+      connectionLimit: parsedOptions.connectionLimit ?? this.config.connectionLimit,
+      connectTimeout: parsedOptions.connectTimeout ?? this.config.connectTimeout,
       typeCast
     };
+    if (this.config.connectionLimitExplicit) options.connectionLimit = this.config.connectionLimit;
+    if (this.config.connectTimeoutExplicit) options.connectTimeout = this.config.connectTimeout;
     const pool = (0, import_promise.createPool)(options);
     pool.on("connection", (connection) => {
       connection.query(
@@ -20700,6 +20817,9 @@ function createRuntimeBindings() {
         setCallback(callback);
       });
     },
+    emitEvent(name, payload) {
+      if (typeof emit === "function") emit(name, payload);
+    },
     invokingResource() {
       if (typeof GetInvokingResource !== "function") return "unknown";
       return GetInvokingResource() ?? "unknown";
@@ -20713,25 +20833,47 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
     },
     addProviderExport() {
     },
+    emitEvent() {
+    },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
   const runtime = bindings ?? fallbackBindings;
-  function callbackOperation(operation, callback, resource) {
-    void operation.then((result) => callback?.(result)).catch((error) => {
-      const message2 = errorMessage(error);
-      console.error(`[qbxsql] query failed [${resource}]: ${message2}`);
-      callback?.(null, message2);
+  function operationError(error, callback, returnCallbackErrors, resource, query, parameters) {
+    const message2 = errorMessage(error);
+    const output = `${resource} was unable to execute a query!${query ? `
+Query: ${query}` : ""}
+${message2}`;
+    runtime.emitEvent?.("oxmysql:error", {
+      query,
+      parameters,
+      message: message2,
+      err: error,
+      resource
     });
+    if (callback && returnCallbackErrors) {
+      callback(null, output);
+      return;
+    }
+    console.error(output);
+  }
+  __name(operationError, "operationError");
+  function callbackOperation(operation, callback, resource, returnCallbackErrors, query, parameters) {
+    void operation.then((result) => callback?.(result)).catch(
+      (error) => operationError(error, callback, returnCallbackErrors, resource, query, parameters)
+    );
   }
   __name(callbackOperation, "callbackOperation");
   function queryMethod(method) {
-    return (query, parameters = [], callback, explicitResource) => {
+    return (query, parameters = [], callback, explicitResource, returnCallbackErrors = false) => {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       callbackOperation(
         database2[method](query, values, { invokingResource: resource }),
         resolvedCallback,
-        resource
+        resource,
+        returnCallbackErrors,
+        query,
+        values
       );
     };
   }
@@ -20747,35 +20889,64 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
     scalar: queryMethod("scalar"),
     insert: queryMethod("insert"),
     update: queryMethod("update"),
-    prepare(query, parameters = [], callback, explicitResource) {
+    prepare(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       callbackOperation(
         database2.prepare(query, values, { invokingResource: resource }),
         resolvedCallback,
-        resource
+        resource,
+        returnCallbackErrors,
+        query,
+        values
       );
     },
-    rawExecute(query, parameters = [], callback, explicitResource) {
+    rawExecute(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       callbackOperation(
         database2.rawExecute(query, values, { invokingResource: resource }),
         resolvedCallback,
-        resource
+        resource,
+        returnCallbackErrors,
+        query,
+        values
       );
     },
-    transaction(queries, parameters = [], callback, explicitResource) {
+    transaction(queries, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [sharedParameters, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
       let statements;
       try {
         statements = normalizeTransactionStatements(queries, sharedParameters);
       } catch (error) {
-        resolvedCallback?.(false, errorMessage(error));
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          void 0,
+          sharedParameters
+        );
         return;
       }
-      callbackOperation(database2.transaction(statements, resource), resolvedCallback, resource);
+      void database2.transaction(statements, resource).then((result) => resolvedCallback?.(result)).catch((error) => {
+        const message2 = errorMessage(error);
+        const failedQuery = typeof error === "object" && error && "sql" in error ? String(error.sql ?? "") : statements.map((statement) => statement.query).join("; ");
+        runtime.emitEvent?.("oxmysql:transaction-error", {
+          query: failedQuery,
+          parameters: sharedParameters,
+          message: message2,
+          err: error,
+          resource
+        });
+        console.error(
+          `${resource} was unable to complete a transaction!
+${failedQuery}
+${message2}`
+        );
+        resolvedCallback?.(false);
+      });
     },
     store(query, callback) {
       callback?.(query);
@@ -20788,11 +20959,17 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   api.execute = api.query;
   api.fetch = api.query;
   const asyncExport = /* @__PURE__ */ __name((method) => {
-    return (...args) => new Promise((resolve, reject) => {
-      method(...args, (result, error) => {
-        if (error) reject(new Error(error));
-        else resolve(result);
-      });
+    return (query, parameters = [], explicitResource) => new Promise((resolve, reject) => {
+      method(
+        query,
+        parameters,
+        (result, error) => {
+          if (error) reject(new Error(error));
+          else resolve(result);
+        },
+        explicitResource,
+        true
+      );
     });
   }, "asyncExport");
   for (const [name, method] of Object.entries(api)) {

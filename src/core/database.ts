@@ -197,7 +197,10 @@ export class DatabaseService {
       const duration = performance.now() - started;
       const resource = options.invokingResource ?? 'unknown';
       const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
-      if (this.config.debug || slow) {
+      const debug =
+        this.config.debug === true ||
+        (Array.isArray(this.config.debug) && this.config.debug.includes(resource));
+      if (debug || slow) {
         const level = slow ? 'slow query' : 'query';
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }

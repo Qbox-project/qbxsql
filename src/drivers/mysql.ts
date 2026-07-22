@@ -16,12 +16,54 @@ import type {
 } from '../core/types.js';
 import { serializeForRuntime } from '../core/serialize.js';
 
-function booleanOption(value: string): boolean {
-  return value.toLowerCase() === 'true' || value === '1';
+function booleanOption(value: string, key: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  throw new Error(`Connection-string option '${key}' must be a boolean.`);
 }
 
-export function parseMySqlConnectionString(connectionString: string): ConnectionOptions {
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) return { uri: connectionString };
+function integerOption(value: string, key: string, minimum: number): number {
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`Connection-string option '${key}' must be an integer.`);
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+    throw new Error(`Connection-string option '${key}' must be at least ${minimum}.`);
+  }
+  return parsed;
+}
+
+function warnMultipleStatements(enabled: boolean, warn: (message: string) => void): void {
+  if (enabled) {
+    warn(
+      '[qbxsql] WARNING: multipleStatements is enabled. This increases SQL injection impact and should only be used when absolutely required.',
+    );
+  }
+}
+
+export function parseMySqlConnectionString(
+  connectionString: string,
+  warn: (message: string) => void = console.warn,
+): ConnectionOptions {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(connectionString)) {
+    const options: ConnectionOptions = { uri: connectionString };
+    const url = new URL(connectionString);
+    const connectionLimit = url.searchParams.get('connectionLimit');
+    const connectTimeout = url.searchParams.get('connectTimeout');
+    const multipleStatements = url.searchParams.get('multipleStatements');
+    if (connectionLimit !== null) {
+      options.connectionLimit = integerOption(connectionLimit, 'connectionLimit', 1);
+    }
+    if (connectTimeout !== null) {
+      options.connectTimeout = integerOption(connectTimeout, 'connectTimeout', 1);
+    }
+    if (multipleStatements !== null) {
+      options.multipleStatements = booleanOption(multipleStatements, 'multipleStatements');
+      warnMultipleStatements(options.multipleStatements, warn);
+    }
+    return options;
+  }
 
   const options: Record<string, unknown> = {};
   for (const segment of connectionString.split(';')) {
@@ -40,20 +82,38 @@ export function parseMySqlConnectionString(connectionString: string): Connection
     } else if (['database', 'db', 'initialcatalog'].includes(sourceKey)) {
       options.database = value;
     } else if (sourceKey === 'port' || sourceKey === 'connectionlimit' || sourceKey === 'connecttimeout') {
-      options[sourceKey === 'connectionlimit' ? 'connectionLimit' : sourceKey === 'connecttimeout' ? 'connectTimeout' : 'port'] =
-        Number.parseInt(value, 10);
+      const target =
+        sourceKey === 'connectionlimit'
+          ? 'connectionLimit'
+          : sourceKey === 'connecttimeout'
+            ? 'connectTimeout'
+            : 'port';
+      options[target] = integerOption(value, target, 1);
     } else if (
-      ['multiplestatements', 'decimalnumbers', 'bignumberstrings', 'waitforconnections'].includes(sourceKey)
+      [
+        'multiplestatements',
+        'decimalnumbers',
+        'bignumberstrings',
+        'supportbignumbers',
+        'waitforconnections',
+        'jsonstrings',
+        'namedplaceholders',
+        'trace',
+      ].includes(sourceKey)
     ) {
-      const key =
-        sourceKey === 'multiplestatements'
-          ? 'multipleStatements'
-          : sourceKey === 'decimalnumbers'
-            ? 'decimalNumbers'
-            : sourceKey === 'bignumberstrings'
-              ? 'bigNumberStrings'
-              : 'waitForConnections';
-      options[key] = booleanOption(value);
+      const booleanKeys: Record<string, string> = {
+        multiplestatements: 'multipleStatements',
+        decimalnumbers: 'decimalNumbers',
+        bignumberstrings: 'bigNumberStrings',
+        supportbignumbers: 'supportBigNumbers',
+        waitforconnections: 'waitForConnections',
+        jsonstrings: 'jsonStrings',
+        namedplaceholders: 'namedPlaceholders',
+        trace: 'trace',
+      };
+      const key = booleanKeys[sourceKey]!;
+      options[key] = booleanOption(value, key);
+      if (key === 'multipleStatements') warnMultipleStatements(options[key] as boolean, warn);
     } else if (sourceKey === 'charset' || sourceKey === 'timezone' || sourceKey === 'socketpath') {
       options[sourceKey === 'socketpath' ? 'socketPath' : sourceKey] = value;
     } else if (sourceKey === 'ssl') {
@@ -62,6 +122,8 @@ export function parseMySqlConnectionString(connectionString: string): Connection
       } catch {
         options.ssl = value;
       }
+    } else {
+      warn(`[qbxsql] Ignoring unknown connection-string option '${segment.slice(0, separator).trim()}'.`);
     }
   }
   return options as ConnectionOptions;
@@ -188,16 +250,19 @@ export class MySqlDriver implements DatabaseDriver {
   public async connect(): Promise<void> {
     if (this.ready) return;
 
+    const parsedOptions = parseMySqlConnectionString(this.config.connectionString);
     const options: ConnectionOptions = {
-      ...parseMySqlConnectionString(this.config.connectionString),
-      connectionLimit: this.config.connectionLimit,
-      connectTimeout: this.config.connectTimeout,
       supportBigNumbers: true,
       jsonStrings: true,
       namedPlaceholders: false,
       trace: false,
+      ...parsedOptions,
+      connectionLimit: parsedOptions.connectionLimit ?? this.config.connectionLimit,
+      connectTimeout: parsedOptions.connectTimeout ?? this.config.connectTimeout,
       typeCast,
     };
+    if (this.config.connectionLimitExplicit) options.connectionLimit = this.config.connectionLimit;
+    if (this.config.connectTimeoutExplicit) options.connectTimeout = this.config.connectTimeout;
 
     const pool = createPool(options);
     pool.on('connection', (connection) => {

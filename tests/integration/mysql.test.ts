@@ -20,6 +20,11 @@ const config: QbxSqlConfig = {
   slowQueryWarning: 10_000,
   debug: false,
   transactionIsolationLevel: 'READ COMMITTED',
+  connectionWaitTimeout: 30_000,
+  connectionQueueLimit: 1_000,
+  healthInterval: 10_000,
+  connectionRetryMax: 30_000,
+  transactionTimeout: 30_000,
 };
 
 let database: DatabaseService;
