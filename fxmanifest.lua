@@ -14,7 +14,3 @@ server_script 'dist/index.js'
 files {
     'lib/*.lua'
 }
-
-provide 'oxmysql'
-provide 'mysql-async'
-provide 'ghmattimysql'
