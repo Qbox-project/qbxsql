@@ -43,7 +43,11 @@ try {
     await cp(path.join(releaseRoot, resource), path.join(resources, resource), { recursive: true });
   }
   const installFixtures = async () => {
-    for (const fixture of ['qbxsql_runtime_test', 'mysql_async_import_test']) {
+    for (const fixture of [
+      'qbxsql_runtime_test',
+      'mysql_async_import_test',
+      'qbxsql_restart_probe',
+    ]) {
       await cp(
         path.join(repositoryRoot, 'tests', 'fxserver', fixture),
         path.join(resources, fixture),
@@ -66,7 +70,11 @@ try {
     'ensure qbxsql_compat',
     ...(flavor === 'enhanced'
       ? []
-      : ['ensure mysql_async_import_test', 'ensure qbxsql_runtime_test']),
+      : [
+          'ensure mysql_async_import_test',
+          'ensure qbxsql_runtime_test',
+          'ensure qbxsql_restart_probe',
+        ]),
   ].join('\n');
   await writeFile(path.join(temporaryRoot, 'server.cfg'), `${config}\n`, { mode: 0o600 });
 
@@ -83,6 +91,8 @@ try {
   const finished = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`FXServer gate timed out after ${timeout}ms.`)), timeout);
     let enhancedFixturesStarted = false;
+    let restartProbeStarted = false;
+    let restartCommandsSent = false;
     const consume = (chunk) => {
       const text = chunk.toString();
       output += text;
@@ -95,7 +105,9 @@ try {
         enhancedFixturesStarted = true;
         void installFixtures()
           .then(() => {
-            server.stdin.write('refresh\nensure mysql_async_import_test\nensure qbxsql_runtime_test\n');
+            server.stdin.write(
+              'refresh\nensure mysql_async_import_test\nensure qbxsql_runtime_test\nensure qbxsql_restart_probe\n',
+            );
           })
           .catch(reject);
       }
@@ -103,9 +115,26 @@ try {
         clearTimeout(timer);
         reject(new Error('The qbxsql runtime fixture reported a failure.'));
       }
+      if (output.includes('QBXSQL_RESOURCE_RESTART_FAIL')) {
+        clearTimeout(timer);
+        reject(new Error('The qbxsql resource restart probe reported a failure.'));
+      }
       if (
         output.includes('QBXSQL_RUNTIME_TEST_PASS') &&
-        output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS')
+        output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS') &&
+        !restartProbeStarted
+      ) {
+        restartProbeStarted = true;
+        server.stdin.write('qbxsql_restart_probe_begin\n');
+      }
+      if (output.includes('QBXSQL_INFLIGHT_QUERY_STARTED') && !restartCommandsSent) {
+        restartCommandsSent = true;
+        server.stdin.write('stop qbxsql_compat\nstop qbxsql\nensure qbxsql\nensure qbxsql_compat\n');
+      }
+      if (
+        output.includes('QBXSQL_RUNTIME_TEST_PASS') &&
+        output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS') &&
+        output.includes('QBXSQL_RESOURCE_RESTART_PASS')
       ) {
         clearTimeout(timer);
         resolve();
@@ -120,7 +149,8 @@ try {
     server.on('exit', (code) => {
       if (
         !output.includes('QBXSQL_RUNTIME_TEST_PASS') ||
-        !output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS')
+        !output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS') ||
+        !output.includes('QBXSQL_RESOURCE_RESTART_PASS')
       ) {
         clearTimeout(timer);
         reject(new Error(`FXServer exited with code ${code} before all fixtures passed.`));

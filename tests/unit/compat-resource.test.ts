@@ -84,4 +84,14 @@ describe('qbxsql compatibility resource', () => {
     expect(client).toContain('QBXSQL_CLIENT_VISIBILITY_PASS');
     expect(mysqlAsyncManifest).toContain("'@mysql-async/lib/MySQL.lua'");
   });
+
+  test('gates a core and shim restart while a query is active', async () => {
+    const probe = await fixture('tests/fxserver/qbxsql_restart_probe/server.lua');
+    const runner = await fixture('scripts/run-fxserver-gate.mjs');
+
+    expect(probe).toContain("exports.qbxsql:query('SELECT SLEEP(1) AS waited'");
+    expect(probe).toContain('QBXSQL_RESOURCE_RESTART_PASS');
+    expect(runner).toContain("'stop qbxsql_compat\\nstop qbxsql\\nensure qbxsql\\nensure qbxsql_compat\\n'");
+    expect(runner).toContain("output.includes('QBXSQL_RESOURCE_RESTART_PASS')");
+  });
 });
