@@ -17,7 +17,7 @@ This file is the release traceability index for the production-readiness program
 
 | Gate | Result |
 | --- | --- |
-| Unit, contract, and local integration suite | Pass; final exact count is recorded by the release run |
+| Unit, contract, and local integration suite | Pass; 111 tests and 389 assertions across 14 files |
 | Required database matrix | Pass; 35 integration tests each on MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 |
 | Rolling MariaDB smoke | Pass on MariaDB 12.0.2; informative only |
 | Packaged stock Windows FXServer | Pass on build 32561, including compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, and core/shim restart during an active query |
