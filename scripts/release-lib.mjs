@@ -287,6 +287,27 @@ export async function validateBuiltRelease() {
     throw new Error('Release ZIP contents do not match the resource file allowlist.');
   }
 
+  for (const sourcePath of expected.core) {
+    const source = await readFile(path.join(repositoryRoot, sourcePath));
+    if (!source.equals(entries.get(`qbxsql/${sourcePath}`))) {
+      throw new Error(`Release ZIP is stale for source file: ${sourcePath}`);
+    }
+  }
+  for (const sourcePath of expected.compat) {
+    const entryName = `qbxsql_compat/${path.relative('qbxsql_compat', sourcePath).replaceAll('\\', '/')}`;
+    const source = await readFile(path.join(repositoryRoot, sourcePath));
+    if (!source.equals(entries.get(entryName))) {
+      throw new Error(`Release ZIP is stale for source file: ${sourcePath}`);
+    }
+  }
+
+  for (const [entryName, entryData] of entries) {
+    const unpacked = await readFile(path.join(releaseRoot, entryName));
+    if (!unpacked.equals(entryData)) {
+      throw new Error(`Unpacked release file does not match the ZIP: ${entryName}`);
+    }
+  }
+
   const packagedPackage = JSON.parse(entries.get('qbxsql/package.json').toString('utf8'));
   const packagedCoreManifest = entries.get('qbxsql/fxmanifest.lua').toString('utf8');
   const packagedCompatManifest = entries.get('qbxsql_compat/fxmanifest.lua').toString('utf8');
