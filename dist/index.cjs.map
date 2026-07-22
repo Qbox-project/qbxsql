@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/index.ts"],
+  "sourcesContent": ["const resourceName =\n  typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';\n\nconsole.log(`[${resourceName}] build loaded`);\n\n"],
+  "mappings": ";;;AAAA,IAAM,eACJ,OAAO,2BAA2B,aAAa,uBAAuB,IAAI;AAE5E,QAAQ,IAAI,IAAI,YAAY,gBAAgB;",
+  "names": []
+}
