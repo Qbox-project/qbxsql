@@ -62,4 +62,26 @@ describe('qbxsql compatibility resource', () => {
     expect(server).toContain("resource == 'oxmysql'");
     expect(server).toContain('StopResource(currentResource)');
   });
+
+  test('gates compatibility metadata, import paths, aliases, and client visibility in FXServer', async () => {
+    const manifest = await fixture('tests/fxserver/qbxsql_runtime_test/fxmanifest.lua');
+    const server = await fixture('tests/fxserver/qbxsql_runtime_test/server.lua');
+    const client = await fixture('tests/fxserver/qbxsql_runtime_test/client.lua');
+    const mysqlAsyncManifest = await fixture(
+      'tests/fxserver/mysql_async_import_test/fxmanifest.lua',
+    );
+
+    expect(manifest).toContain("dependency 'oxmysql'");
+    expect(manifest).toContain("dependency 'mysql-async'");
+    expect(manifest).toContain("dependency 'ghmattimysql'");
+    expect(manifest).toContain("client_script 'client.lua'");
+    expect(server).toContain("GetResourceMetadata('oxmysql', 'version', 0)");
+    expect(server).toContain("LoadResourceFile('oxmysql', 'lib/MySQL.lua')");
+    expect(server).toContain("LoadResourceFile('mysql-async', 'lib/MySQL.lua')");
+    expect(server).toContain('exports.oxmysql:scalar');
+    expect(server).toContain("exports['mysql-async']:mysql_fetch_scalar");
+    expect(server).toContain('exports.ghmattimysql:execute');
+    expect(client).toContain('QBXSQL_CLIENT_VISIBILITY_PASS');
+    expect(mysqlAsyncManifest).toContain("'@mysql-async/lib/MySQL.lua'");
+  });
 });

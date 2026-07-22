@@ -34,6 +34,17 @@ local function assertEqual(actual, expected, label)
 end
 
 local function runTests()
+    assertEqual(GetResourceState('qbxsql'), 'started', 'qbxsql resource state')
+    assertEqual(GetResourceState('qbxsql_compat'), 'started', 'qbxsql_compat resource state')
+    assertEqual(GetResourceMetadata('oxmysql', 'version', 0), '2.14.1', 'oxmysql compatibility version')
+    assert(LoadResourceFile('oxmysql', 'lib/MySQL.lua'), '@oxmysql/lib/MySQL.lua did not resolve')
+    assert(LoadResourceFile('mysql-async', 'lib/MySQL.lua'), '@mysql-async/lib/MySQL.lua did not resolve')
+
+    local status = exports.qbxsql:getStatus()
+    assertEqual(status.state, 'ready', 'native health state')
+    assert(status.databaseVersion, 'native health status omitted database version')
+    assert(status.totals and type(status.totals.queries) == 'number', 'native health totals are invalid')
+
     QBXSQL.Schema.ensure.await(schema)
     MySQL.update.await('DELETE FROM fxsql_values')
 

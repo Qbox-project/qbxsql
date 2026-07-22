@@ -1,0 +1,5 @@
+CreateThread(function()
+    MySQL.ready.await()
+    assert(MySQL.Sync.fetchScalar('SELECT 49 AS value') == 49, 'mysql-async import returned the wrong value')
+    print('QBXSQL_MYSQL_ASYNC_IMPORT_PASS')
+end)
