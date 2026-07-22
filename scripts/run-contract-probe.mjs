@@ -56,6 +56,9 @@ try {
   await mkdir(resources, { recursive: true });
   if (provider === 'qbxsql') {
     await cp(path.join(releaseRoot, 'qbxsql'), path.join(resources, 'qbxsql'), { recursive: true });
+    await cp(path.join(releaseRoot, 'qbxsql_compat'), path.join(resources, 'qbxsql_compat'), {
+      recursive: true,
+    });
   } else {
     await cp(path.resolve(oxmysqlPath), path.join(resources, 'oxmysql'), { recursive: true });
   }
@@ -73,8 +76,11 @@ try {
     `endpoint_add_udp "127.0.0.1:${port}"`,
     `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
     'set qbxsql_schema_mode off',
-    `set qbxsql_contract_provider "${provider}"`,
-    `ensure ${provider}`,
+    'set qbxsql_contract_provider "oxmysql"',
+    `set qbxsql_contract_result_provider "${provider}"`,
+    ...(provider === 'qbxsql'
+      ? ['ensure qbxsql', 'ensure qbxsql_compat']
+      : ['ensure oxmysql']),
     'ensure qbxsql_contract_probe',
   ].join('\n');
   await writeFile(path.join(temporaryRoot, 'server.cfg'), `${config}\n`, { mode: 0o600 });

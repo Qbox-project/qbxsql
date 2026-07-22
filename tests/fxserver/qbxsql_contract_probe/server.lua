@@ -1,4 +1,5 @@
 local provider = GetConvar('qbxsql_contract_provider', 'qbxsql')
+local resultProvider = GetConvar('qbxsql_contract_result_provider', provider)
 local connector = exports[provider]
 local resourceName = GetCurrentResourceName()
 
@@ -111,7 +112,7 @@ CreateThread(function()
     end)
 
     local envelope = {
-        provider = provider,
+        provider = resultProvider,
         success = success,
         result = success and result or nil
     }
