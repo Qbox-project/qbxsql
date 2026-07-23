@@ -56,9 +56,6 @@ try {
   await mkdir(resources, { recursive: true });
   if (provider === 'qbxsql') {
     await cp(path.join(releaseRoot, 'qbxsql'), path.join(resources, 'qbxsql'), { recursive: true });
-    await cp(path.join(releaseRoot, 'qbxsql_compat'), path.join(resources, 'qbxsql_compat'), {
-      recursive: true,
-    });
   } else {
     await cp(path.resolve(oxmysqlPath), path.join(resources, 'oxmysql'), { recursive: true });
   }
@@ -78,9 +75,7 @@ try {
     'set qbxsql_schema_mode off',
     'set qbxsql_contract_provider "oxmysql"',
     `set qbxsql_contract_result_provider "${provider}"`,
-    ...(provider === 'qbxsql'
-      ? ['ensure qbxsql', 'ensure qbxsql_compat']
-      : ['ensure oxmysql']),
+    ...(provider === 'qbxsql' ? ['ensure qbxsql'] : ['ensure oxmysql']),
     'ensure qbxsql_contract_probe',
   ].join('\n');
   await writeFile(path.join(temporaryRoot, 'server.cfg'), `${config}\n`, { mode: 0o600 });

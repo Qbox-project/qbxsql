@@ -6,8 +6,8 @@ This file is the release traceability index for the production-readiness program
 
 | Program area | Evidence |
 | --- | --- |
-| Split core and compatibility resources | Manifest, release-validator, unit, packaged stock/enhanced-FXServer, import-path, provider-resolution, concrete-oxmysql conflict, restart, and live differential gates |
-| oxmysql 2.14.1 behavior | Static tagged contract plus exact live differential through packaged `qbxsql_compat`, covering results, errors, prepared batches, raw execution, zero insert IDs, serialization, and failed transactions |
+| Single-resource compatibility providers | Dual manifest metadata, release-validator, unit, packaged stock/enhanced-FXServer, import-path, provider-resolution, concrete-oxmysql conflict, restart, and live differential gates |
+| oxmysql 2.14.1 behavior | Static tagged contract plus exact live differential through qbxsql's packaged `oxmysql` provider, covering results, errors, prepared batches, raw execution, zero insert IDs, serialization, and failed transactions |
 | mysql-async and ghmattimysql | Contract aliases plus packaged FXServer callback/synchronous/import fixtures |
 | Lifecycle and health | Unit failure matrix, live active-resource restart, database-restart rehearsal, and one-hour reconnect soak |
 | Declarative schemas | Planner/unit coverage plus 26 schema-manager integration cases for modes, drift, ownership, adoption, online refusal, blocking approval, recovery, scoped introspection, and separate credentials |
@@ -22,8 +22,8 @@ This file is the release traceability index for the production-readiness program
 | Unit, contract, and local integration suite | Pass; 123 tests and 462 assertions across 19 files |
 | Required database matrix | Pass; 35 integration tests each on MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 |
 | Rolling MariaDB smoke | Pass on MariaDB 12.0.2; informative only |
-| Packaged FXServer | Pass on stock Windows build 32561, stock Linux build 25770 in the pinned container gate, and enhanced CFX; coverage includes compatibility metadata/imports/aliases, structured schema callback and await errors, callback transactions, core/shim restart during an active query, and loud/inert refusal when concrete oxmysql is active |
-| Exact oxmysql live differential | Pass against local oxmysql 2.14.1 through packaged `qbxsql_compat` |
+| Packaged FXServer | Current single-resource package passed stock Linux build 25770 on 2026-07-23; coverage includes provider metadata/imports/aliases, structured schema callback and await errors, callback transactions, qbxsql restart during an active query, and loud/inert refusal when concrete oxmysql is active. Stock Windows and enhanced-CFX results predate the merge and remain historical only. |
+| Exact oxmysql live differential | Historical pass against local oxmysql 2.14.1 through the former separate provider; rerun the differential probe against the merged provider before stable release. |
 | Workflow syntax | Pass with actionlint 1.7.12 |
 | Dependency audit | Pass at high severity threshold |
 | One-hour reconnect soak | Pass; 12,388,297 operations, 100 workers, five MariaDB 11.4.12 restarts, zero unexplained failures, zero transaction violations, no ending leak/queue, full pool saturation, -0.22% final-half memory growth |

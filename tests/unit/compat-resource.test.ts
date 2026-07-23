@@ -8,31 +8,16 @@ async function fixture(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), 'utf8');
 }
 
-describe('qbxsql compatibility resource', () => {
-  test('keeps legacy provider declarations out of the honestly versioned core', async () => {
+describe('qbxsql compatibility metadata and providers', () => {
+  test('publishes legacy aliases and both version identities from one resource', async () => {
     const manifest = await fixture('fxmanifest.lua');
 
-    expect(manifest).not.toContain("provide 'oxmysql'");
-    expect(manifest).not.toContain("provide 'mysql-async'");
-    expect(manifest).not.toContain("provide 'ghmattimysql'");
-  });
-
-  test('publishes the supported legacy aliases at the oxmysql compatibility version', async () => {
-    const manifest = await fixture('qbxsql_compat/fxmanifest.lua');
-
     expect(manifest).toContain("version '2.14.1'");
-    expect(manifest).toContain("dependency 'qbxsql'");
+    expect(manifest).toContain("qbxsql_version '0.3.0'");
     expect(manifest).toContain("provide 'oxmysql'");
     expect(manifest).toContain("provide 'mysql-async'");
     expect(manifest).toContain("provide 'ghmattimysql'");
     expect(manifest).not.toContain('server_only');
-  });
-
-  test('loads the canonical qbxsql wrapper instead of maintaining a second implementation', async () => {
-    const loader = await fixture('qbxsql_compat/lib/MySQL.lua');
-
-    expect(loader).toContain("LoadResourceFile('qbxsql', 'lib/MySQL.lua')");
-    expect(loader).toContain("load(source, '@@qbxsql/lib/MySQL.lua', 't', _ENV)");
   });
 
   test('implements the oxmysql Lua wrapper contract', async () => {
@@ -57,28 +42,29 @@ describe('qbxsql compatibility resource', () => {
   });
 
   test('rejects a concurrently active real oxmysql resource', async () => {
-    const server = await fixture('qbxsql_compat/server.lua');
+    const core = await fixture('src/index.ts');
     const probe = await fixture('tests/fxserver/oxmysql_conflict/server.lua');
     const runner = await fixture('scripts/run-fxserver-gate.mjs');
 
-    expect(server).toContain("resource == 'oxmysql'");
-    expect(server).toContain('StopResource(currentResource)');
-    expect(server).toContain("AddEventHandler('onResourceStop'");
-    expect(server).toContain("isInstalled('oxmysql')");
+    expect(core).toContain('isConcreteOxmysqlActive()');
+    expect(core).toContain('reportOxmysqlConflict()');
+    expect(core).toContain('StopResource(resourceName)');
     expect(probe).toContain('QBXSQL_COMPAT_CONFLICT_PASS');
     expect(runner).toContain('async function runConflictGate()');
-    expect(runner).toContain("conflictServer.stdin.write('refresh\\nensure qbxsql_compat\\n')");
+    expect(runner).toContain("conflictServer.stdin.write('refresh\\nensure qbxsql\\n')");
     expect(runner).toContain("conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS')");
   });
 
-  test('owns all legacy export routing inside the compatibility resource', async () => {
+  test('registers all legacy export routing directly from qbxsql', async () => {
     const core = await fixture('src/index.ts');
-    const server = await fixture('qbxsql_compat/server.lua');
+    const compatibility = await fixture('src/api/compatibility.ts');
 
-    expect(core).toContain('registerCompatibilityExports(database)');
-    expect(server).toContain("provideExport('oxmysql', name, target, 4)");
-    expect(server).toContain("provideExport('mysql-async', name, target");
-    expect(server).toContain("provideExport('ghmattimysql', name, target");
+    expect(core).toContain(
+      'registerCompatibilityExports(database, undefined, { legacyProviders: true })',
+    );
+    expect(compatibility).toContain("runtime.addProviderExport('oxmysql'");
+    expect(compatibility).toContain("runtime.addProviderExport('mysql-async'");
+    expect(compatibility).toContain("runtime.addProviderExport('ghmattimysql'");
   });
 
   test('gates compatibility metadata, import paths, aliases, and client visibility in FXServer', async () => {
@@ -94,6 +80,7 @@ describe('qbxsql compatibility resource', () => {
     expect(manifest).toContain("dependency 'ghmattimysql'");
     expect(manifest).toContain("client_script 'client.lua'");
     expect(server).toContain("GetResourceMetadata('oxmysql', 'version', 0)");
+    expect(server).toContain("GetResourceMetadata('qbxsql', 'qbxsql_version', 0)");
     expect(server).toContain("LoadResourceFile('oxmysql', 'lib/MySQL.lua')");
     expect(server).toContain("LoadResourceFile('mysql-async', 'lib/MySQL.lua')");
     expect(server).toContain('exports.oxmysql:scalar');
@@ -104,13 +91,13 @@ describe('qbxsql compatibility resource', () => {
     expect(mysqlAsyncManifest).toContain("'@mysql-async/lib/MySQL.lua'");
   });
 
-  test('gates a core and shim restart while a query is active', async () => {
+  test('gates a qbxsql restart while a query is active', async () => {
     const probe = await fixture('tests/fxserver/qbxsql_restart_probe/server.lua');
     const runner = await fixture('scripts/run-fxserver-gate.mjs');
 
     expect(probe).toContain("exports.qbxsql:query('SELECT SLEEP(1) AS waited'");
     expect(probe).toContain('QBXSQL_RESOURCE_RESTART_PASS');
-    expect(runner).toContain("'stop qbxsql_compat\\nstop qbxsql\\nensure qbxsql\\nensure qbxsql_compat\\n'");
+    expect(runner).toContain("'stop qbxsql\\nensure qbxsql\\n'");
     expect(runner).toContain("output.includes('QBXSQL_RESOURCE_RESTART_PASS')");
   });
 });

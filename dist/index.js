@@ -23520,34 +23520,77 @@ var schemas = new SchemaManager(schemaDatabase, {
   allowBlocking: config.schemaAllowBlocking,
   applicationDatabase: database
 });
-registerCompatibilityExports(database);
-registerSchemaExports(schemas);
-database.onLifecycle((event, status) => {
-  if (event === "ready" || event === "reconnected") {
-    console.log(
-      `[${resourceName2}] ${event === "ready" ? "connected" : "reconnected"} to ${status.databaseName ?? "(no database)"} on ${status.databaseVersion ?? "unknown server"}`
-    );
+function isConcreteOxmysqlInstalled() {
+  if (typeof GetNumResources !== "function" || typeof GetResourceByFindIndex !== "function") {
+    return false;
   }
-  if (typeof emit === "function") emit(`qbxsql:${event}`, status);
-});
-database.start();
-if (typeof RegisterCommand === "function") {
-  RegisterCommand(
-    "qbxsql_status",
-    (source) => {
-      if (source !== 0) return;
-      console.log(`[${resourceName2}] ${JSON.stringify(database.getStatus())}`);
-    },
-    false
+  for (let index = 0; index < GetNumResources(); index += 1) {
+    if (GetResourceByFindIndex(index) === "oxmysql") return true;
+  }
+  return false;
+}
+__name(isConcreteOxmysqlInstalled, "isConcreteOxmysqlInstalled");
+function isConcreteOxmysqlActive() {
+  if (!isConcreteOxmysqlInstalled() || typeof GetResourceState !== "function") return false;
+  const state = GetResourceState("oxmysql");
+  return state === "started" || state === "starting";
+}
+__name(isConcreteOxmysqlActive, "isConcreteOxmysqlActive");
+function reportOxmysqlConflict() {
+  console.error(
+    "^1[qbxsql] Refusing to run while the real oxmysql resource is active. Stop and remove oxmysql before starting qbxsql.^0"
   );
 }
+__name(reportOxmysqlConflict, "reportOxmysqlConflict");
+var connectorStarted = false;
+if (isConcreteOxmysqlActive()) {
+  reportOxmysqlConflict();
+  if (typeof StopResource === "function") {
+    setImmediate(() => {
+      if (typeof GetResourceState !== "function" || ["started", "starting"].includes(GetResourceState(resourceName2))) {
+        StopResource(resourceName2);
+      }
+    });
+  }
+} else {
+  registerCompatibilityExports(database, void 0, { legacyProviders: true });
+  registerSchemaExports(schemas);
+  database.onLifecycle((event, status) => {
+    if (event === "ready" || event === "reconnected") {
+      console.log(
+        `[${resourceName2}] ${event === "ready" ? "connected" : "reconnected"} to ${status.databaseName ?? "(no database)"} on ${status.databaseVersion ?? "unknown server"}`
+      );
+    }
+    if (typeof emit === "function") emit(`qbxsql:${event}`, status);
+  });
+  database.start();
+  connectorStarted = true;
+  if (typeof RegisterCommand === "function") {
+    RegisterCommand(
+      "qbxsql_status",
+      (source) => {
+        if (source !== 0) return;
+        console.log(`[${resourceName2}] ${JSON.stringify(database.getStatus())}`);
+      },
+      false
+    );
+  }
+}
 if (typeof on === "function") {
+  on("onResourceStart", (startedResource) => {
+    if (startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
+    reportOxmysqlConflict();
+    if (typeof StopResource === "function") StopResource(resourceName2);
+  });
   on("onResourceStop", (stoppedResource) => {
     if (stoppedResource === resourceName2) {
-      void Promise.all([
-        database.close(),
-        ...schemaDatabase === database ? [] : [schemaDatabase.close()]
-      ]);
+      if (connectorStarted) {
+        void Promise.all([
+          database.close(),
+          ...schemaDatabase === database ? [] : [schemaDatabase.close()]
+        ]);
+      }
+      if (isConcreteOxmysqlInstalled()) reportOxmysqlConflict();
     }
   });
 }

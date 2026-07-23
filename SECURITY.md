@@ -4,7 +4,7 @@
 
 Report suspected vulnerabilities privately to the repository maintainer or through the repository's private security-advisory channel. Do not include credentials, production connection strings, player data, or an exploitable proof in a public issue.
 
-Include the affected qbxsql core version, `qbxsql_compat` version, FXServer artifact, database family/version, a minimal reproduction, and the security impact. The maintainer should acknowledge the report, reproduce it on a supported matrix entry, prepare a coordinated fix, and publish remediation guidance before public disclosure.
+Include the affected `qbxsql_version`, oxmysql compatibility-facing manifest version, FXServer artifact, database family/version, a minimal reproduction, and the security impact. The maintainer should acknowledge the report, reproduce it on a supported matrix entry, prepare a coordinated fix, and publish remediation guidance before public disclosure.
 
 ## Supported versions
 

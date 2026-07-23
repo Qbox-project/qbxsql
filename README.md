@@ -1,28 +1,26 @@
 # qbxsql
 
-qbxsql is a resilient MySQL/MariaDB connector and declarative schema manager for Cfx.re/FiveM. The `qbxsql_compat` companion resource targets the oxmysql 2.14.1, mysql-async, and ghmattimysql query contracts.
+qbxsql is a resilient MySQL/MariaDB connector and declarative schema manager for Cfx.re/FiveM. The single resource targets the oxmysql 2.14.1, mysql-async, and ghmattimysql query contracts.
 
 This is a `0.x` prerelease. Promote it only after the lean automated checks, a stock-FXServer smoke test, and the relevant real-Qbox checks pass.
 
 ## Installation
 
-Use the generated release artifact, which contains two resource directories:
+Use the generated release artifact, which contains one resource directory:
 
 ```text
 resources/
-├── qbxsql/
-└── qbxsql_compat/
+└── qbxsql/
 ```
 
-Remove the real `oxmysql` resource, configure the connection before either resource starts, then start both in this order:
+Remove any real `oxmysql`, `mysql-async`, or `ghmattimysql` connector resources, configure the connection before qbxsql starts, then start it before database consumers:
 
 ```cfg
 set mysql_connection_string "mysql://user:password@127.0.0.1/qbox"
 ensure qbxsql
-ensure qbxsql_compat
 ```
 
-The honestly versioned core does not claim legacy resource names. `qbxsql_compat` reports version `2.14.1`, remains client-visible, and provides `oxmysql`, `mysql-async`, and `ghmattimysql`. It refuses to run alongside a real resource named `oxmysql`.
+The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.3.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
 
 Existing resources can keep their normal imports:
 
@@ -109,7 +107,7 @@ bun run test:fxserver
 
 GitHub Actions intentionally contains only `CI`: one hosted job for typechecking, unit/contract tests, the build, and MariaDB 11.4 integration tests on pushes to `main` and pull requests. FXServer execution is deliberately local because it requires each tester's own CFX key.
 
-The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through guarded junctions:
+The deterministic builder produces `release/qbxsql/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through a guarded junction:
 
 ```sh
 bun run install:dev -- --resources C:\path\to\server\resources

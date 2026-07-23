@@ -5,14 +5,13 @@ The canary is an operated Qbox deployment, not a synthetic test. The optional mo
 ## Start
 
 1. Complete and archive the backup rehearsal and schema-plan review.
-2. Install the verified `qbxsql` and `qbxsql_compat` release resources.
+2. Install the verified `qbxsql` release resource.
 3. Copy `tools/qbxsql_canary` into the canary server's resources directory.
 4. Add the monitor after the release resources:
 
    ```cfg
    set qbxsql_canary_interval 600000
    ensure qbxsql
-   ensure qbxsql_compat
    ensure qbxsql_canary
    ```
 

@@ -60,7 +60,7 @@ async function prepareTarget(target, source) {
   return true;
 }
 
-for (const resource of ['qbxsql', 'qbxsql_compat']) {
+for (const resource of ['qbxsql']) {
   const source = path.join(releaseRoot, resource);
   const target = path.join(resourcesRoot, resource);
   if (!(await prepareTarget(target, source))) continue;

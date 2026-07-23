@@ -35,8 +35,8 @@ end
 
 local function runTests()
     assertEqual(GetResourceState('qbxsql'), 'started', 'qbxsql resource state')
-    assertEqual(GetResourceState('qbxsql_compat'), 'started', 'qbxsql_compat resource state')
     assertEqual(GetResourceMetadata('oxmysql', 'version', 0), '2.14.1', 'oxmysql compatibility version')
+    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.3.0', 'qbxsql version')
     assert(LoadResourceFile('oxmysql', 'lib/MySQL.lua'), '@oxmysql/lib/MySQL.lua did not resolve')
     assert(LoadResourceFile('mysql-async', 'lib/MySQL.lua'), '@mysql-async/lib/MySQL.lua did not resolve')
 

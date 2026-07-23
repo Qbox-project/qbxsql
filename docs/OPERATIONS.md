@@ -42,7 +42,7 @@ Status never contains connection strings, credentials, or query parameter values
 3. If the database is intentionally unavailable, watch queue depth against the 1,000-call default and restore service within 30 seconds or expect normal timeout errors.
 4. For a stuck callback transaction, confirm the 30-second timeout destroyed the pinned connection and the pool's acquired count returned to baseline.
 5. For deadlocks or lock timeouts, inspect transaction order/indexes and retry at the resource/business layer where idempotency is known.
-6. Before scheduled shutdown, stop write-producing resources, allow queries to drain, stop `qbxsql_compat`, then stop qbxsql. Confirm the next startup emits `qbxsql:ready` and persistence checks pass.
+6. Before scheduled shutdown, stop write-producing resources, allow queries to drain, then stop qbxsql. Confirm the next startup emits `qbxsql:ready` and persistence checks pass.
 
 ## Schema incidents
 

@@ -17,7 +17,7 @@ The validator rejects unchecked or unknown items, missing evidence references, c
 
 - [ ] A verified database backup exists and a restore was rehearsed.
 - [ ] The real oxmysql resource is absent.
-- [ ] `qbxsql` and `qbxsql_compat` came from the same verified release ZIP.
+- [ ] `qbxsql` came from the verified release ZIP and exposes both expected version metadata values.
 - [ ] No dependency, import, or ox_lib version check fails on server or client.
 - [ ] `qbxsql_status` is ready with no queued calls or acquired-connection leak.
 
@@ -32,7 +32,7 @@ The validator rejects unchecked or unknown items, missing evidence references, c
 ## Lifecycle and failure
 
 - [ ] Restart representative Qbox resources during idle and active database use.
-- [ ] Restart `qbxsql_compat` and confirm legacy consumers recover without a server restart.
+- [ ] Restart qbxsql and confirm legacy consumers recover without a server restart.
 - [ ] Interrupt the database during idle traffic, restore it, and observe disconnected/reconnected events.
 - [ ] Interrupt the database during active writes; distinguish expected failed in-flight work and verify no partial transaction.
 - [ ] Confirm queue timeout/overflow errors are ordinary compatibility errors and credentials never appear.

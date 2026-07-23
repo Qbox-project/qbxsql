@@ -71,9 +71,6 @@ async function runConflictGate() {
   const conflictRoot = path.join(temporaryRoot, 'conflict');
   const conflictResources = path.join(conflictRoot, 'resources');
   await mkdir(conflictResources, { recursive: true });
-  await cp(path.join(releaseRoot, 'qbxsql'), path.join(conflictResources, 'qbxsql'), {
-    recursive: true,
-  });
   await cp(
     path.join(repositoryRoot, 'tests', 'fxserver', 'oxmysql_conflict'),
     path.join(conflictResources, 'oxmysql'),
@@ -87,7 +84,6 @@ async function runConflictGate() {
     `endpoint_add_tcp "127.0.0.1:${port + 1}"`,
     `endpoint_add_udp "127.0.0.1:${port + 1}"`,
     `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
-    'ensure qbxsql',
     'ensure oxmysql',
   ].join('\n');
   await writeFile(path.join(conflictRoot, 'server.cfg'), `${conflictConfig}\n`, { mode: 0o600 });
@@ -105,7 +101,7 @@ async function runConflictGate() {
   const safeConflictStdout = createSecretSafeWriter(process.stdout, sensitiveValues);
   const safeConflictStderr = createSecretSafeWriter(process.stderr, sensitiveValues);
   let conflictOutput = '';
-  let compatibilityInstalled = false;
+  let qbxsqlInstalled = false;
   const conflictFinished = new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`FXServer conflict gate timed out after ${timeout}ms.`)),
@@ -119,18 +115,18 @@ async function runConflictGate() {
         clearTimeout(timer);
         reject(new Error('The qbxsql compatibility conflict probe reported a failure.'));
       }
-      if (conflictOutput.includes('QBXSQL_REAL_OXMYSQL_STUB_STARTED') && !compatibilityInstalled) {
-        compatibilityInstalled = true;
-        void cp(path.join(releaseRoot, 'qbxsql_compat'), path.join(conflictResources, 'qbxsql_compat'), {
+      if (conflictOutput.includes('QBXSQL_REAL_OXMYSQL_STUB_STARTED') && !qbxsqlInstalled) {
+        qbxsqlInstalled = true;
+        void cp(path.join(releaseRoot, 'qbxsql'), path.join(conflictResources, 'qbxsql'), {
           recursive: true,
         })
-          .then(() => conflictServer.stdin.write('refresh\nensure qbxsql_compat\n'))
+          .then(() => conflictServer.stdin.write('refresh\nensure qbxsql\n'))
           .catch(reject);
       }
       if (
         conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS') &&
         conflictOutput.includes(
-          '[qbxsql_compat] Refusing to run while the real oxmysql resource is active',
+          '[qbxsql] Refusing to run while the real oxmysql resource is active',
         )
       ) {
         clearTimeout(timer);
@@ -168,9 +164,9 @@ async function runConflictGate() {
 
 try {
   await mkdir(resources, { recursive: true });
-  for (const resource of ['qbxsql', 'qbxsql_compat']) {
-    await cp(path.join(releaseRoot, resource), path.join(resources, resource), { recursive: true });
-  }
+  await cp(path.join(releaseRoot, 'qbxsql'), path.join(resources, 'qbxsql'), {
+    recursive: true,
+  });
   const installFixtures = async () => {
     for (const fixture of [
       'qbxsql_runtime_test',
@@ -196,7 +192,6 @@ try {
     'set qbxsql_connection_wait_timeout 30000',
     'set qbxsql_schema_mode auto',
     'ensure qbxsql',
-    'ensure qbxsql_compat',
     ...(flavor === 'enhanced'
       ? []
       : [
@@ -231,7 +226,7 @@ try {
       if (
         flavor === 'enhanced' &&
         !enhancedFixturesStarted &&
-        /Started resource qbxsql_compat/i.test(output)
+        /Started resource qbxsql/i.test(output)
       ) {
         enhancedFixturesStarted = true;
         void installFixtures()
@@ -260,7 +255,7 @@ try {
       }
       if (output.includes('QBXSQL_INFLIGHT_QUERY_STARTED') && !restartCommandsSent) {
         restartCommandsSent = true;
-        server.stdin.write('stop qbxsql_compat\nstop qbxsql\nensure qbxsql\nensure qbxsql_compat\n');
+        server.stdin.write('stop qbxsql\nensure qbxsql\n');
       }
       if (
         output.includes('QBXSQL_RUNTIME_TEST_PASS') &&

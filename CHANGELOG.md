@@ -4,6 +4,7 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
+- Merged the oxmysql, mysql-async, and ghmattimysql providers into the single qbxsql resource. The manifest exposes oxmysql `version '2.14.1'` for dependency checks and `qbxsql_version '0.3.0'` for the native release identity.
 - Added CFX resource-tick scheduling and reduced prepared-batch, parameter parsing, result serialization, and field-metadata overhead; a same-machine smoke run reached oxmysql 2.14.1 throughput and latency parity.
 - The required local MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 integration runs pass.
 - A local one-hour, 100-worker reconnect soak and ten-minute same-hardware oxmysql 2.14.1 comparison pass every reliability, transaction, pool, memory, median, and p95 gate.
@@ -21,6 +22,6 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## 0.2.0 - 2026-07-22
 
-- Split legacy aliases into the client-visible `qbxsql_compat` resource targeting oxmysql 2.14.1.
+- Added a client-visible oxmysql 2.14.1 compatibility provider (merged into the core resource in the next release).
 - Added oxmysql/mysql-async/ghmattimysql callback, promise, transaction, stored-query, and Lua wrapper compatibility.
 - Added resilient connection states, bounded outage queues, retry/backoff, health checks, reconnect events, status reporting, and callback-transaction timeouts.

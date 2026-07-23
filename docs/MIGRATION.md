@@ -10,21 +10,20 @@
 
 ## Resource layout
 
-Install both directories from the same generated artifact:
+Install the qbxsql directory from the generated artifact:
 
 ```cfg
 set mysql_connection_string "mysql://user:password@127.0.0.1/qbox"
 ensure qbxsql
-ensure qbxsql_compat
 ```
 
-Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses and stops the shim if a real resource named `oxmysql` starts concurrently.
+Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses the conflict and leaves its connector inactive if a real resource named `oxmysql` is already running.
 
-The core is versioned independently. The shim reports `2.14.1` so dependency/version checks compare against the contract it implements rather than the qbxsql prerelease number.
+The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.3.0'`.
 
 ## Imports and calls
 
-Existing imports remain valid through the shim:
+Existing imports remain valid through qbxsql's provider aliases:
 
 ```lua
 server_script '@oxmysql/lib/MySQL.lua'
@@ -60,4 +59,4 @@ The baseline must be an integer from `0` through `schema.version - 1`. qbxsql re
 
 ## Rollback
 
-Stop consumers, stop `qbxsql_compat`, stop qbxsql, restore the real oxmysql resource, and start consumers again. Keep forward-compatible schema changes. qbxsql never performs automatic down-migrations; restore the verified backup if an explicitly destructive migration must be reversed.
+Stop consumers, stop qbxsql, restore the real oxmysql resource, and start consumers again. Keep forward-compatible schema changes. qbxsql never performs automatic down-migrations; restore the verified backup if an explicitly destructive migration must be reversed.

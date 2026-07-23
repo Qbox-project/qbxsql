@@ -22,8 +22,8 @@ local function append(recordType, fields)
 end
 
 append('start', {
-    qbxsqlVersion = GetResourceMetadata('qbxsql', 'version', 0),
-    compatibilityTarget = GetResourceMetadata('qbxsql_compat', 'version', 0),
+    qbxsqlVersion = GetResourceMetadata('qbxsql', 'qbxsql_version', 0),
+    compatibilityTarget = GetResourceMetadata('qbxsql', 'version', 0),
     intervalMs = interval,
     status = status()
 })

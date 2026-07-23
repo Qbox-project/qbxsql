@@ -6,7 +6,7 @@ The compatibility contract is pinned to [oxmysql 2.14.1](https://github.com/over
 
 | Surface | Target | Gate |
 | --- | --- | --- |
-| oxmysql callbacks and promises | 2.14.1 result/error semantics | Static fixtures plus a live stock-FXServer differential probe through the packaged `qbxsql_compat` provider |
+| oxmysql callbacks and promises | 2.14.1 result/error semantics | Static fixtures plus a live stock-FXServer differential probe through qbxsql's packaged `oxmysql` provider |
 | `MySQL.*`, `.await`, `Async`, `Sync` | 2.14.1 Lua wrapper | Static fixture and stock FXServer |
 | mysql-async aliases/import | oxmysql 2.14.1 mappings | Dedicated FXServer import fixture |
 | ghmattimysql aliases | oxmysql 2.14.1 mappings | Contract and FXServer fixture |
@@ -23,9 +23,8 @@ Local development on 2026-07-22 passed the complete 35-test integration suite ag
 
 - Minimum stock artifact: server build `12913`, matching the oxmysql 2.14.1 dependency floor.
 - Release smoke artifact: the pinned official stock-Linux artifact and SHA-256 recorded by the local runner.
-- Local stock Windows evidence: build `32561` passed the packaged compatibility/runtime gate on 2026-07-22.
-- The same build passed core/shim stop-and-restart recovery while a query was active.
-- Local stock Linux evidence: recommended build `25770` passed the containerized packaged gate on 2026-07-22, including active-query restart and concrete-oxmysql conflict handling.
+- Historical stock Windows evidence: build `32561` passed the former two-resource packaged compatibility/runtime gate on 2026-07-22.
+- Current single-resource stock Linux evidence: recommended build `25770` passed the containerized packaged gate on 2026-07-23, including provider metadata/imports/exports, active-query restart, and concrete-oxmysql conflict handling.
 - `bun run test:fxserver` downloads, verifies, caches, and tests the packaged resources locally with disposable MariaDB.
 - Enhanced CFX is not an active automation target while it remains in early access. Add a dedicated gate after it becomes the supported production runtime.
 

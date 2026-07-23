@@ -46,7 +46,7 @@ function runValidator(input: string, output: string, extra: string[] = []) {
 }
 
 describe('canary evidence gate', () => {
-  test('ships an optional monitor outside the two release resources', async () => {
+  test('ships an optional monitor outside the release resource', async () => {
     const [manifest, server] = await Promise.all([
       readFile(path.join(root, 'tools', 'qbxsql_canary', 'fxmanifest.lua'), 'utf8'),
       readFile(path.join(root, 'tools', 'qbxsql_canary', 'server.lua'), 'utf8'),

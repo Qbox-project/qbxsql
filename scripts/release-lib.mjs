@@ -16,6 +16,49 @@ export const releaseRoot = path.join(repositoryRoot, 'release');
 const fixedDosDate = 0x0021;
 const fixedDosTime = 0x0000;
 const utf8Flag = 0x0800;
+const oxmysqlCompatibilityVersion = '2.14.1';
+
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+    if (!match) throw new Error(`Invalid semantic version: ${value}`);
+    return {
+      numbers: match.slice(1, 4).map(Number),
+      prerelease: match[4]?.split('.'),
+    };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (a.numbers[index] !== b.numbers[index]) {
+      return a.numbers[index] > b.numbers[index] ? 1 : -1;
+    }
+  }
+  if (!a.prerelease && !b.prerelease) return 0;
+  if (!a.prerelease) return 1;
+  if (!b.prerelease) return -1;
+  const length = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = a.prerelease[index];
+    const rightPart = b.prerelease[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : null;
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : null;
+    if (leftNumber !== null && rightNumber !== null) return leftNumber > rightNumber ? 1 : -1;
+    if (leftNumber !== null) return -1;
+    if (rightNumber !== null) return 1;
+    return leftPart > rightPart ? 1 : -1;
+  }
+  return 0;
+}
+
+export function publicManifestVersion(qbxsqlVersion) {
+  return compareVersions(qbxsqlVersion, oxmysqlCompatibilityVersion) > 0
+    ? qbxsqlVersion
+    : oxmysqlCompatibilityVersion;
+}
 
 function assertReleasePath(target) {
   const relative = path.relative(repositoryRoot, target);
@@ -28,11 +71,15 @@ export async function readPackage() {
   return JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
 }
 
-export async function manifestVersion(relativePath) {
+export async function manifestMetadata(relativePath, key) {
   const manifest = await readFile(path.join(repositoryRoot, relativePath), 'utf8');
-  const match = manifest.match(/^version\s+['"]([^'"]+)['"]/m);
-  if (!match) throw new Error(`${relativePath} does not declare a version.`);
+  const match = manifest.match(new RegExp(`^${key}\\s+['"]([^'"]+)['"]`, 'm'));
+  if (!match) throw new Error(`${relativePath} does not declare ${key}.`);
   return match[1];
+}
+
+export async function manifestVersion(relativePath) {
+  return manifestMetadata(relativePath, 'version');
 }
 
 async function existingFiles(relativePaths) {
@@ -89,57 +136,45 @@ export async function releaseFiles() {
   const docs = await filesUnder('docs');
   const examples = await filesUnder('examples');
   const core = [...coreRequired, ...documentation, ...docs, ...examples].sort();
-  const compat = (await filesUnder('qbxsql_compat')).sort();
-  for (const required of [
-    'qbxsql_compat/fxmanifest.lua',
-    'qbxsql_compat/server.lua',
-    'qbxsql_compat/lib/MySQL.lua',
-  ]) {
-    if (!compat.includes(required)) throw new Error(`Required release file is missing: ${required}`);
-  }
-  return { core, compat };
+  return { core };
 }
 
 export async function validateSourceVersions() {
   const packageJson = await readPackage();
-  const coreVersion = await manifestVersion('fxmanifest.lua');
-  const compatibilityVersion = await manifestVersion('qbxsql_compat/fxmanifest.lua');
+  const coreVersion = await manifestMetadata('fxmanifest.lua', 'qbxsql_version');
+  const declaredManifestVersion = await manifestVersion('fxmanifest.lua');
+  const compatibilityVersion = oxmysqlCompatibilityVersion;
   if (packageJson.version !== coreVersion) {
     throw new Error(
-      `package.json (${packageJson.version}) and fxmanifest.lua (${coreVersion}) disagree.`,
+      `package.json (${packageJson.version}) and fxmanifest qbxsql_version (${coreVersion}) disagree.`,
     );
   }
-  if (compatibilityVersion !== '2.14.1') {
-    throw new Error(`qbxsql_compat must target oxmysql 2.14.1, found ${compatibilityVersion}.`);
+  const expectedManifestVersion = publicManifestVersion(coreVersion);
+  if (declaredManifestVersion !== expectedManifestVersion) {
+    throw new Error(
+      `qbxsql manifest version must be ${expectedManifestVersion}, found ${declaredManifestVersion}.`,
+    );
   }
 
   const coreManifest = await readFile(path.join(repositoryRoot, 'fxmanifest.lua'), 'utf8');
-  if (/^provide\s/m.test(coreManifest) || /server_only/m.test(coreManifest)) {
-    throw new Error('The core manifest must not contain provide or server_only declarations.');
-  }
-  const compatManifest = await readFile(
-    path.join(repositoryRoot, 'qbxsql_compat/fxmanifest.lua'),
-    'utf8',
-  );
   for (const declaration of [
-    "dependency 'qbxsql'",
     "provide 'oxmysql'",
     "provide 'mysql-async'",
     "provide 'ghmattimysql'",
   ]) {
-    if (!compatManifest.includes(declaration)) {
-      throw new Error(`qbxsql_compat is missing ${declaration}.`);
+    if (!coreManifest.includes(declaration)) {
+      throw new Error(`qbxsql is missing ${declaration}.`);
     }
   }
-  if (compatManifest.includes('server_only')) {
-    throw new Error('qbxsql_compat must remain visible to clients.');
+  if (coreManifest.includes('server_only')) {
+    throw new Error('qbxsql must remain visible to clients.');
   }
 
-  const loader = await readFile(path.join(repositoryRoot, 'qbxsql_compat/lib/MySQL.lua'), 'utf8');
-  if (!loader.includes("LoadResourceFile('qbxsql', 'lib/MySQL.lua')")) {
-    throw new Error('qbxsql_compat does not load the canonical qbxsql Lua wrapper.');
-  }
-  return { coreVersion, compatibilityVersion };
+  return {
+    coreVersion,
+    compatibilityVersion,
+    manifestVersion: declaredManifestVersion,
+  };
 }
 
 function crc32(buffer) {
@@ -219,22 +254,13 @@ export async function buildRelease() {
   await mkdir(releaseRoot, { recursive: true });
   const zipEntries = [];
 
-  for (const [resource, paths] of [
-    ['qbxsql', files.core],
-    ['qbxsql_compat', files.compat],
-  ]) {
-    for (const relativePath of paths) {
-      const sourceRelative =
-        resource === 'qbxsql_compat'
-          ? path.relative('qbxsql_compat', relativePath)
-          : relativePath;
-      const data = await readFile(path.join(repositoryRoot, relativePath));
-      const destination = path.join(releaseRoot, resource, sourceRelative);
-      assertReleasePath(destination);
-      await mkdir(path.dirname(destination), { recursive: true });
-      await writeFile(destination, data);
-      zipEntries.push({ name: `${resource}/${sourceRelative}`, data });
-    }
+  for (const relativePath of files.core) {
+    const data = await readFile(path.join(repositoryRoot, relativePath));
+    const destination = path.join(releaseRoot, 'qbxsql', relativePath);
+    assertReleasePath(destination);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, data);
+    zipEntries.push({ name: `qbxsql/${relativePath}`, data });
   }
 
   const zipName = `qbxsql-${versions.coreVersion}.zip`;
@@ -277,12 +303,7 @@ export async function validateBuiltRelease() {
   if (expectedChecksum !== actualChecksum) throw new Error('Release ZIP SHA-256 checksum mismatch.');
 
   const entries = await parseStoredZip(zip);
-  const expectedEntries = [
-    ...expected.core.map((entry) => `qbxsql/${entry}`),
-    ...expected.compat.map((entry) =>
-      `qbxsql_compat/${path.relative('qbxsql_compat', entry).replaceAll('\\', '/')}`,
-    ),
-  ].sort();
+  const expectedEntries = expected.core.map((entry) => `qbxsql/${entry}`).sort();
   const actualEntries = [...entries.keys()].sort();
   if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
     throw new Error('Release ZIP contents do not match the resource file allowlist.');
@@ -294,14 +315,6 @@ export async function validateBuiltRelease() {
       throw new Error(`Release ZIP is stale for source file: ${sourcePath}`);
     }
   }
-  for (const sourcePath of expected.compat) {
-    const entryName = `qbxsql_compat/${path.relative('qbxsql_compat', sourcePath).replaceAll('\\', '/')}`;
-    const source = await readFile(path.join(repositoryRoot, sourcePath));
-    if (!source.equals(entries.get(entryName))) {
-      throw new Error(`Release ZIP is stale for source file: ${sourcePath}`);
-    }
-  }
-
   for (const [entryName, entryData] of entries) {
     const unpacked = await readFile(path.join(releaseRoot, entryName));
     if (!unpacked.equals(entryData)) {
@@ -311,12 +324,14 @@ export async function validateBuiltRelease() {
 
   const packagedPackage = JSON.parse(entries.get('qbxsql/package.json').toString('utf8'));
   const packagedCoreManifest = entries.get('qbxsql/fxmanifest.lua').toString('utf8');
-  const packagedCompatManifest = entries.get('qbxsql_compat/fxmanifest.lua').toString('utf8');
-  if (packagedPackage.version !== versions.coreVersion || !packagedCoreManifest.includes(`version '${versions.coreVersion}'`)) {
+  if (
+    packagedPackage.version !== versions.coreVersion ||
+    !packagedCoreManifest.includes(`qbxsql_version '${versions.coreVersion}'`)
+  ) {
     throw new Error('Packaged core versions disagree.');
   }
-  if (!packagedCompatManifest.includes(`version '${versions.compatibilityVersion}'`)) {
-    throw new Error('Packaged compatibility target disagrees.');
+  if (!packagedCoreManifest.includes(`version '${versions.manifestVersion}'`)) {
+    throw new Error('Packaged public manifest version disagrees.');
   }
   if ((entries.get('qbxsql/dist/index.js')?.length ?? 0) === 0) {
     throw new Error('Packaged server build is empty.');
