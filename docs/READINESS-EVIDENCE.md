@@ -13,7 +13,7 @@ This file is the release traceability index for the production-readiness program
 | Declarative schemas | Planner/unit coverage plus 26 schema-manager integration cases for modes, drift, ownership, adoption, online refusal, blocking approval, recovery, scoped introspection, and separate credentials |
 | Qbox certification evidence | Deliberately incomplete 21-check template plus strict release-identity, evidence-reference, completeness, and credential-safety validation |
 | Canary evidence | Optional non-release monitor, sanitized JSONL lifecycle/status capture, continuity and duration validation, ending-pool checks, and bounded justified error deltas |
-| Release engineering | Actionlint-clean workflows, deterministic release builder/validator, SHA-256 output, guarded development installer, operations/security/migration/release documentation |
+| Release engineering | Lean hosted CI, a self-contained local stock-Linux smoke runner, deterministic release builder/validator, SHA-256 output, guarded development installer, operations/security/migration/release documentation |
 
 ## Local gate record — 2026-07-22
 
@@ -31,10 +31,10 @@ This file is the release traceability index for the production-readiness program
 
 Local benchmark hardware was Windows 11 Pro 10.0.26100, AMD Ryzen 9 7900X (12 cores/24 threads), and 31.09 GiB RAM. See [BENCHMARKS.md](BENCHMARKS.md) for the detailed figures and gate definitions.
 
-## External gates still required
+## Practical release gates
 
-- Archive green GitHub Actions quality, security, deterministic artifact, and all five database jobs.
-- Archive the self-hosted stock Windows/Linux and enhanced release jobs with the release-candidate artifact; all three variants pass locally.
-- Complete every item in [QBOX-CERTIFICATION.md](QBOX-CERTIFICATION.md) with a real client. The existing normal-Qbox smoke is useful evidence but is not the full checklist.
-- Run the seven-day Qbox canary with the documented monitoring and rollback procedure.
-- Link all artifacts, versions, checksums, operators, dates, and canary results from the release candidate before promoting `1.0.0`.
+- Record a green lean-CI run for the candidate.
+- Run `bun run test:fxserver` locally for runtime-affecting releases.
+- Validate the generated ZIP and checksum with `bun run release:validate`.
+- Repeat the relevant real-client checks in [QBOX-CERTIFICATION.md](QBOX-CERTIFICATION.md) when compatibility behavior changes.
+- Use the broader local matrix, benchmark, soak, and canary tools when the risk of a specific change warrants them.

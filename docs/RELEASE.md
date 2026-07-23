@@ -4,8 +4,8 @@
 
 1. `0.2.x`: compatibility shim, failure semantics, configuration, and reconnect lifecycle.
 2. `0.3.x`: schema safety, adoption, online DDL, and separate credentials.
-3. `1.0.0-rc.x`: completed database/FXServer matrices, Qbox certification, artifacts, and soak evidence.
-4. `1.0.0`: only after every required gate is linked and green.
+3. `1.0.0-rc.x`: lean CI, stock-Linux FXServer, Qbox, and release-artifact validation.
+4. `1.0.0`: only after those practical gates are green on the release candidate.
 
 Never change the shim from `2.14.1` merely to satisfy a dependency check. Change it only after verifying a newer upstream contract.
 
@@ -25,15 +25,15 @@ The output contains `qbxsql/`, `qbxsql_compat/`, `qbxsql-<version>.zip`, and `qb
 
 Required evidence before an RC can become stable:
 
-- quality, security, and deterministic artifact workflows;
-- MariaDB 10.11/11.4/11.8 and MySQL 8.0/8.4 integration matrix;
-- stock Windows and Linux FXServer gates plus enhanced Windows coverage;
-- completed real-client Qbox checklist and passing structured certification validator;
-- failure/restart evidence;
-- one-hour 100-worker soak and same-hardware oxmysql comparison;
-- seven-day canary report.
+- green `CI`, including MariaDB 11.4 integration coverage;
+- a local stock-Linux FXServer smoke test for the exact candidate;
+- `bun run release:validate` for the generated artifact;
+- focused MySQL or additional MariaDB checks when database-specific code changed;
+- relevant real-client Qbox checks for compatibility-affecting changes.
 
-Self-hosted FXServer jobs use license/connection secrets and are triggered only by release tags or explicit dispatch, never untrusted fork pull requests.
+Run `bun run cfx-key:save` once, then `bun run test:fxserver` locally. The saved key lives only in the gitignored `.cache/qbxsql/cfx-license-key`; `CFX_LICENSE_KEY` can override it for one process. The test verifies a pinned cached artifact, creates a disposable MariaDB service and Docker network, and cleans up after the packaged gate. The key is never a command argument or repository secret.
+
+The broader database matrix, benchmarks, reconnect soak, Windows checks, and seven-day canary remain available as targeted local assurance. Run them when a risky connector, lifecycle, schema, or performance change justifies their cost; they are not routine CI requirements. Enhanced CFX coverage is deferred until that runtime leaves early access.
 
 ## Canary
 

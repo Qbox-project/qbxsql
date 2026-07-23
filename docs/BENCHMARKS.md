@@ -1,4 +1,4 @@
-# Benchmark and soak gates
+# Optional benchmark and soak checks
 
 ## Workload
 
@@ -12,7 +12,7 @@ node scripts/run-benchmark.mjs --binary /path/to/FXServer --provider oxmysql --o
 node scripts/compare-benchmarks.mjs --qbxsql qbxsql.json --oxmysql oxmysql.json
 ```
 
-The release workflow records CPU, memory, OS, and kernel before testing. Do not compare results from different hardware or active workloads. Short smoke runs validate the harness only and are not performance evidence.
+Record CPU, memory, OS, and kernel before testing. Do not compare results from different hardware or active workloads. Short smoke runs validate the harness only and are not performance evidence.
 
 The benchmark runner disables connector slow-query console logging for both candidates. It uses qbxsql's native zero-disable setting and a very high legacy threshold for oxmysql 2.14.1, where zero means log every query. Slow-query detection is covered by the connector tests and production health counters; synchronous warning output would feed back into latency and make the fixed-workload comparison depend on terminal throughput.
 
@@ -25,9 +25,9 @@ The full local Windows gate on 2026-07-22 used an AMD Ryzen 9 7900X (12 cores/24
 | qbxsql | 2,056,279 | 28 ms | 40 ms | 0 | 0 |
 | oxmysql 2.14.1 | 2,079,285 | 27 ms | 41 ms | 0 | 0 |
 
-This passes the same-hardware 120% latency gate. Formal release evidence must still archive the self-hosted workflow artifact rather than relying only on a developer workstation result.
+This passes the same-hardware 120% latency threshold and remains useful historical local evidence.
 
-## Required gates
+## Acceptance thresholds when the benchmark is run
 
 - zero unexplained query/transaction failures;
 - zero transaction-invariant violations after reconnects;
@@ -37,4 +37,4 @@ This passes the same-hardware 120% latency gate. Formal release evidence must st
 - median and p95 qbxsql latency no more than 120% of oxmysql on the same workload;
 - at least one observed reconnect in the reconnect soak.
 
-The RC workflow restarts an isolated MariaDB container every ten minutes during the one-hour qbxsql soak. Failures observed while `qbxsql:disconnected` is active are recorded separately as expected reconnect failures; every other failure fails the gate. Separate steady qbxsql/oxmysql runs enforce latency comparability.
+For a reconnect soak, restart an isolated MariaDB container every ten minutes during the one-hour qbxsql run. Failures observed while `qbxsql:disconnected` is active are recorded separately as expected reconnect failures; every other failure fails the check. Separate steady qbxsql/oxmysql runs enforce latency comparability.

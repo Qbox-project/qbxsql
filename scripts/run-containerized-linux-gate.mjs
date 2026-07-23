@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -25,6 +26,11 @@ const artifactUrl = option(
   '--artifact-url',
   process.env.CFX_LINUX_ARTIFACT_URL ?? DEFAULT_ARTIFACT_URL,
 );
+const artifactPathOption = option(
+  '--artifact-path',
+  process.env.CFX_LINUX_ARTIFACT_PATH,
+);
+const dockerNetwork = option('--docker-network');
 const timeout = Number(option('--timeout', '180000'));
 const licenseKey = process.env.CFX_LICENSE_KEY;
 const connectionString = process.env.QBXSQL_TEST_CONNECTION_STRING;
@@ -36,47 +42,71 @@ if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 600_000) {
   throw new Error('--timeout must be an integer from 1000 through 600000.');
 }
 
-const parsedArtifact = new URL(artifactUrl);
-if (
-  parsedArtifact.protocol !== 'https:' ||
-  parsedArtifact.hostname !== 'runtime.fivem.net' ||
-  !parsedArtifact.pathname.endsWith('/fx.tar.xz')
-) {
-  throw new Error('--artifact-url must be an official runtime.fivem.net Linux fx.tar.xz URL.');
+let artifactPath;
+let parsedArtifact;
+if (artifactPathOption) {
+  artifactPath = path.resolve(artifactPathOption);
+  const artifact = await stat(artifactPath).catch(() => null);
+  if (!artifact?.isFile()) {
+    throw new Error(`--artifact-path is not a file: ${artifactPath}`);
+  }
+} else {
+  parsedArtifact = new URL(artifactUrl);
+  if (
+    parsedArtifact.protocol !== 'https:' ||
+    parsedArtifact.hostname !== 'runtime.fivem.net' ||
+    !parsedArtifact.pathname.endsWith('/fx.tar.xz')
+  ) {
+    throw new Error('--artifact-url must be an official runtime.fivem.net Linux fx.tar.xz URL.');
+  }
 }
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..');
+const artifactSetup = artifactPath
+  ? 'tar -xJf /qbxsql-artifact/fx.tar.xz -C /fxserver'
+  : 'curl --fail --location --retry 3 --silent --show-error "$CFX_LINUX_ARTIFACT_URL" | tar -xJ -C /fxserver';
 const containerScript = `
 set -euo pipefail
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils libatomic1 >/dev/null
 mkdir -p /fxserver
-curl --fail --location --retry 3 --silent --show-error "$CFX_LINUX_ARTIFACT_URL" | tar -xJ -C /fxserver
+${artifactSetup}
 node scripts/run-fxserver-gate.mjs --binary /fxserver/run.sh --flavor stock --timeout ${timeout}
 `;
 
+const dockerArguments = [
+  'run',
+  '--rm',
+  '--add-host',
+  'host.docker.internal:host-gateway',
+  '--env',
+  'CFX_LICENSE_KEY',
+  '--env',
+  'QBXSQL_TEST_CONNECTION_STRING',
+  '--env',
+  'CFX_LINUX_ARTIFACT_URL',
+];
+if (dockerNetwork) dockerArguments.push('--network', dockerNetwork);
+if (artifactPath) {
+  dockerArguments.push(
+    '--volume',
+    `${artifactPath}:/qbxsql-artifact/fx.tar.xz:ro`,
+  );
+}
+dockerArguments.push(
+  '--volume',
+  `${repositoryRoot}:/repo:ro`,
+  '--workdir',
+  '/repo',
+  NODE_IMAGE,
+  'bash',
+  '-lc',
+  containerScript,
+);
+
 const docker = spawn(
   'docker',
-  [
-    'run',
-    '--rm',
-    '--add-host',
-    'host.docker.internal:host-gateway',
-    '--env',
-    'CFX_LICENSE_KEY',
-    '--env',
-    'QBXSQL_TEST_CONNECTION_STRING',
-    '--env',
-    'CFX_LINUX_ARTIFACT_URL',
-    '--volume',
-    `${repositoryRoot}:/repo:ro`,
-    '--workdir',
-    '/repo',
-    NODE_IMAGE,
-    'bash',
-    '-lc',
-    containerScript,
-  ],
+  dockerArguments,
   {
     stdio: 'inherit',
     windowsHide: true,
@@ -84,7 +114,7 @@ const docker = spawn(
       ...process.env,
       CFX_LICENSE_KEY: licenseKey,
       QBXSQL_TEST_CONNECTION_STRING: dockerConnectionString(connectionString),
-      CFX_LINUX_ARTIFACT_URL: parsedArtifact.href,
+      CFX_LINUX_ARTIFACT_URL: parsedArtifact?.href ?? '',
     },
   },
 );
@@ -99,4 +129,8 @@ if (code !== 0) {
   throw new Error(`Containerized Linux FXServer gate failed (${signal ?? `exit ${code}`}).`);
 }
 
-console.log(`[qbxsql] containerized Linux gate passed with ${parsedArtifact.href}`);
+console.log(
+  artifactPath
+    ? `[qbxsql] containerized Linux gate passed with cached artifact ${path.basename(path.dirname(artifactPath))}.`
+    : `[qbxsql] containerized Linux gate passed with ${parsedArtifact.href}`,
+);

@@ -15,21 +15,21 @@ The compatibility contract is pinned to [oxmysql 2.14.1](https://github.com/over
 
 ## Database release target
 
-Required stable-release gates are MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. The rolling MariaDB job is informative and non-blocking. A matrix definition or local run is not final release evidence: release notes must link the completed workflow before `1.0.0`.
+Routine CI uses MariaDB 11.4 as the representative integration target. MariaDB 10.11/11.8 and MySQL 8.0/8.4 remain supported lines and should be rerun locally when query serialization, schema introspection, or DDL behavior changes. They are not separate jobs on every push.
 
 Local development on 2026-07-22 passed the complete 35-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
 
 ## FXServer target
 
 - Minimum stock artifact: server build `12913`, matching the oxmysql 2.14.1 dependency floor.
-- Release certification artifact: the explicitly recorded current Windows/Linux artifact in the release evidence.
+- Release smoke artifact: the pinned official stock-Linux artifact and SHA-256 recorded by the local runner.
 - Local stock Windows evidence: build `32561` passed the packaged compatibility/runtime gate on 2026-07-22.
 - The same build passed core/shim stop-and-restart recovery while a query was active.
 - Local stock Linux evidence: recommended build `25770` passed the containerized packaged gate on 2026-07-22, including active-query restart and concrete-oxmysql conflict handling.
-- The Linux self-hosted release workflow must still archive the release-candidate run.
-- Enhanced CFX on Windows is covered separately because it is not a stock artifact.
+- `bun run test:fxserver` downloads, verifies, caches, and tests the packaged resources locally with disposable MariaDB.
+- Enhanced CFX is not an active automation target while it remains in early access. Add a dedicated gate after it becomes the supported production runtime.
 
-The tested enhanced scanner rejects not-yet-started virtual providers during its initial parallel resource scan. The enhanced gate therefore starts `qbxsql_compat`, refreshes, and then starts compatibility consumers. Stock FXServer does not require this staging. Treat a future enhanced build as uncertified until its gate passes.
+Historical local enhanced-CFX results remain useful development evidence, but stock FXServer defines the current runtime contract. Treat a future enhanced build as uncertified until a new focused gate passes.
 
 ## Qbox
 

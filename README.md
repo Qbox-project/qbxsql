@@ -2,7 +2,7 @@
 
 qbxsql is a resilient MySQL/MariaDB connector and declarative schema manager for Cfx.re/FiveM. The `qbxsql_compat` companion resource targets the oxmysql 2.14.1, mysql-async, and ghmattimysql query contracts.
 
-This is a `0.x` prerelease. Do not treat it as `1.0.0` until the documented database, FXServer, Qbox, failure, and soak gates have passed.
+This is a `0.x` prerelease. Promote it only after the lean automated checks, a stock-FXServer smoke test, and the relevant real-Qbox checks pass.
 
 ## Installation
 
@@ -98,13 +98,16 @@ bun run release
 bun run release:validate
 ```
 
-With Docker available, the pinned Linux artifact can be exercised from any host before release:
+With Docker available, the packaged resources can be exercised locally on the pinned official stock-Linux artifact:
 
 ```sh
-CFX_LICENSE_KEY=... QBXSQL_TEST_CONNECTION_STRING=... bun run gate:linux
+bun run cfx-key:save
+bun run test:fxserver
 ```
 
-The command rebuilds the release, runs the complete stock FXServer gate in a pinned container, and rewrites loopback database hosts to Docker's host gateway without placing credentials in process arguments.
+`cfx-key:save` securely prompts once and stores the key in `.cache/qbxsql/cfx-license-key`, which is gitignored and restricted to the local user where the operating system supports Unix file modes. `test:fxserver` uses `CFX_LICENSE_KEY` first, then the saved key, and otherwise shows the same hidden prompt without saving it. It rebuilds the release, downloads and verifies the stock artifact once, and reuses it from `.cache/`. The command creates an isolated MariaDB 11.4 container and Docker network, runs the complete packaged FXServer gate, then removes the database, network, and temporary server configuration. No external database, GitHub secret, `act` installation, or self-hosted runner is required.
+
+GitHub Actions intentionally contains only `CI`: one hosted job for typechecking, unit/contract tests, the build, and MariaDB 11.4 integration tests on pushes to `main` and pull requests. FXServer execution is deliberately local because it requires each tester's own CFX key.
 
 The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through guarded junctions:
 
@@ -112,4 +115,4 @@ The deterministic builder produces `release/qbxsql/`, `release/qbxsql_compat/`, 
 bun run install:dev -- --resources C:\path\to\server\resources
 ```
 
-CI definitions cover quality, the LTS database matrix, security scanning, stock/enhanced FXServer gates, and the manually dispatched release-candidate soak. See [release policy](docs/RELEASE.md), [benchmark gates](docs/BENCHMARKS.md), and [seven-day canary evidence](docs/CANARY.md).
+Broader database checks, benchmarks, and canary tooling remain available for targeted local validation; they are not continuously scheduled workflows. See [release policy](docs/RELEASE.md), [optional benchmark checks](docs/BENCHMARKS.md), and [canary evidence](docs/CANARY.md).

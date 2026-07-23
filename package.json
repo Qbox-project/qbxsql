@@ -21,7 +21,8 @@
     "contract:probe": "node scripts/run-contract-probe.mjs",
     "contract:compare": "node scripts/compare-contract-probes.mjs",
     "evidence:runtime": "node scripts/write-runtime-evidence.mjs",
-    "gate:linux": "bun run release && node scripts/run-containerized-linux-gate.mjs",
+    "cfx-key:save": "node scripts/save-local-cfx-key.mjs",
+    "test:fxserver": "node scripts/run-local-linux-gate.mjs",
     "certification:validate": "node scripts/validate-qbox-certification.mjs",
     "soak:validate": "node scripts/validate-soak.mjs",
     "canary:validate": "node scripts/validate-canary.mjs"

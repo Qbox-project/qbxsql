@@ -2,8 +2,8 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
 import { releaseRoot, repositoryRoot, validateBuiltRelease } from './release-lib.mjs';
+import { createSecretSafeWriter } from './secret-safe-writer.mjs';
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -12,12 +12,12 @@ function option(name, fallback) {
 
 const binary = option('--binary');
 const connectionString = option('--connection-string', process.env.QBXSQL_TEST_CONNECTION_STRING);
-const licenseKey = option('--license-key', process.env.CFX_LICENSE_KEY);
+const licenseKey = process.env.CFX_LICENSE_KEY;
 const flavor = option('--flavor', 'stock');
 const timeout = Number(option('--timeout', '120000'));
 if (!binary || !connectionString || !licenseKey) {
   throw new Error(
-    'Usage: node scripts/run-fxserver-gate.mjs --binary <FXServer> --connection-string <url> --license-key <key> [--flavor stock|enhanced]',
+    'Usage: CFX_LICENSE_KEY=<secret> QBXSQL_TEST_CONNECTION_STRING=<url> node scripts/run-fxserver-gate.mjs --binary <FXServer> [--flavor stock|enhanced]',
   );
 }
 if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 600_000) {
@@ -30,6 +30,8 @@ const resources = path.join(temporaryRoot, 'resources');
 const port = 32_000 + (process.pid % 1_000);
 let output = '';
 
+const sensitiveValues = [licenseKey, connectionString];
+
 async function cleanup() {
   const relative = path.relative(os.tmpdir(), temporaryRoot);
   if (relative.startsWith('qbxsql-fxserver-') && !relative.includes(path.sep)) {
@@ -38,18 +40,31 @@ async function cleanup() {
 }
 
 async function closeServer(server) {
-  if (server.exitCode !== null) return;
+  const exited = () => server.exitCode !== null || server.signalCode !== null;
+  if (exited()) return;
 
-  const closed = once(server, 'close');
+  const waitForClose = (timeout) =>
+    new Promise((resolve) => {
+      if (exited()) {
+        resolve(true);
+        return;
+      }
+      const onClose = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        server.off('close', onClose);
+        resolve(false);
+      }, timeout);
+      server.once('close', onClose);
+    });
+
   if (server.stdin.writable) server.stdin.write('quit\n');
-  const graceful = await Promise.race([
-    closed.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
-  ]);
-  if (!graceful) {
-    server.kill('SIGKILL');
-    await closed;
-  }
+  if (await waitForClose(5_000)) return;
+
+  if (!exited()) server.kill('SIGKILL');
+  await waitForClose(2_000);
 }
 
 async function runConflictGate() {
@@ -87,6 +102,8 @@ async function runConflictGate() {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  const safeConflictStdout = createSecretSafeWriter(process.stdout, sensitiveValues);
+  const safeConflictStderr = createSecretSafeWriter(process.stderr, sensitiveValues);
   let conflictOutput = '';
   let compatibilityInstalled = false;
   const conflictFinished = new Promise((resolve, reject) => {
@@ -94,10 +111,10 @@ async function runConflictGate() {
       () => reject(new Error(`FXServer conflict gate timed out after ${timeout}ms.`)),
       timeout,
     );
-    const consume = (chunk) => {
+    const consume = (chunk, safeWriter) => {
       const text = chunk.toString();
       conflictOutput += text;
-      process.stdout.write(text);
+      safeWriter.push(text);
       if (conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_FAIL')) {
         clearTimeout(timer);
         reject(new Error('The qbxsql compatibility conflict probe reported a failure.'));
@@ -120,16 +137,22 @@ async function runConflictGate() {
         resolve();
       }
     };
-    conflictServer.stdout.on('data', consume);
-    conflictServer.stderr.on('data', consume);
+    conflictServer.stdout.on('data', (chunk) => consume(chunk, safeConflictStdout));
+    conflictServer.stderr.on('data', (chunk) => consume(chunk, safeConflictStderr));
+    conflictServer.stdout.on('end', () => safeConflictStdout.flush());
+    conflictServer.stderr.on('end', () => safeConflictStderr.flush());
     conflictServer.on('error', (error) => {
       clearTimeout(timer);
       reject(error);
     });
-    conflictServer.on('exit', (code) => {
+    conflictServer.on('exit', (code, signal) => {
       if (!conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS')) {
         clearTimeout(timer);
-        reject(new Error(`FXServer conflict gate exited with code ${code} before the fixture passed.`));
+        reject(
+          new Error(
+            `FXServer conflict gate exited with ${signal ?? `code ${code}`} before the fixture passed.`,
+          ),
+        );
       }
     });
   });
@@ -138,6 +161,8 @@ async function runConflictGate() {
     await conflictFinished;
   } finally {
     await closeServer(conflictServer);
+    safeConflictStdout.flush();
+    safeConflictStderr.flush();
   }
 }
 
@@ -192,15 +217,17 @@ try {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  const safeStdout = createSecretSafeWriter(process.stdout, sensitiveValues);
+  const safeStderr = createSecretSafeWriter(process.stderr, sensitiveValues);
   const finished = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`FXServer gate timed out after ${timeout}ms.`)), timeout);
     let enhancedFixturesStarted = false;
     let restartProbeStarted = false;
     let restartCommandsSent = false;
-    const consume = (chunk) => {
+    const consume = (chunk, safeWriter) => {
       const text = chunk.toString();
       output += text;
-      process.stdout.write(text);
+      safeWriter.push(text);
       if (
         flavor === 'enhanced' &&
         !enhancedFixturesStarted &&
@@ -244,20 +271,26 @@ try {
         resolve();
       }
     };
-    server.stdout.on('data', consume);
-    server.stderr.on('data', consume);
+    server.stdout.on('data', (chunk) => consume(chunk, safeStdout));
+    server.stderr.on('data', (chunk) => consume(chunk, safeStderr));
+    server.stdout.on('end', () => safeStdout.flush());
+    server.stderr.on('end', () => safeStderr.flush());
     server.on('error', (error) => {
       clearTimeout(timer);
       reject(error);
     });
-    server.on('exit', (code) => {
+    server.on('exit', (code, signal) => {
       if (
         !output.includes('QBXSQL_RUNTIME_TEST_PASS') ||
         !output.includes('QBXSQL_MYSQL_ASYNC_IMPORT_PASS') ||
         !output.includes('QBXSQL_RESOURCE_RESTART_PASS')
       ) {
         clearTimeout(timer);
-        reject(new Error(`FXServer exited with code ${code} before all fixtures passed.`));
+        reject(
+          new Error(
+            `FXServer exited with ${signal ?? `code ${code}`} before all fixtures passed.`,
+          ),
+        );
       }
     });
   });
@@ -266,6 +299,8 @@ try {
     await finished;
   } finally {
     await closeServer(server);
+    safeStdout.flush();
+    safeStderr.flush();
   }
 
   await runConflictGate();
