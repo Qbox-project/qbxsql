@@ -21458,6 +21458,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
+  const oxmysqlProvider = legacyProviders && options.oxmysqlProvider !== false;
   function normalize(query, parameters) {
     const normalizer = database2.normalize;
     return typeof normalizer === "function" ? normalizer.call(database2, query, parameters) : [query, parameters ?? []];
@@ -21696,12 +21697,12 @@ ${message}`
   }, "asyncExport");
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
-    if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
+    if (oxmysqlProvider) runtime.addProviderExport("oxmysql", name, method);
     if (!["isReady", "awaitConnection", "getStatus", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
-      if (legacyProviders) {
+      if (oxmysqlProvider) {
         runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
         runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
       }
@@ -21719,7 +21720,7 @@ ${message}`
   };
   for (const [name, method] of Object.entries(lifecycleAliases)) {
     runtime.addExport(name, method);
-    if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
+    if (oxmysqlProvider) runtime.addProviderExport("oxmysql", name, method);
   }
   const mysqlAsyncAliases = {
     mysql_fetch_all: api.query,
@@ -23800,8 +23801,14 @@ function isConcreteOxmysqlInstalled() {
   return false;
 }
 __name(isConcreteOxmysqlInstalled, "isConcreteOxmysqlInstalled");
+function isQbxsqlCompatibilityBridge() {
+  return isConcreteOxmysqlInstalled() && typeof GetResourceMetadata === "function" && GetResourceMetadata("oxmysql", "qbxsql_bridge", 0) === "true";
+}
+__name(isQbxsqlCompatibilityBridge, "isQbxsqlCompatibilityBridge");
 function isConcreteOxmysqlActive() {
-  if (!isConcreteOxmysqlInstalled() || typeof GetResourceState !== "function") return false;
+  if (!isConcreteOxmysqlInstalled() || isQbxsqlCompatibilityBridge() || typeof GetResourceState !== "function") {
+    return false;
+  }
   const state = GetResourceState("oxmysql");
   return state === "started" || state === "starting";
 }
@@ -23812,6 +23819,15 @@ function reportOxmysqlConflict() {
   );
 }
 __name(reportOxmysqlConflict, "reportOxmysqlConflict");
+function startQbxsqlCompatibilityBridge() {
+  if (!isQbxsqlCompatibilityBridge() || typeof GetResourceState !== "function" || typeof StartResource !== "function") {
+    return;
+  }
+  setImmediate(() => {
+    if (GetResourceState("oxmysql") === "stopped") StartResource("oxmysql");
+  });
+}
+__name(startQbxsqlCompatibilityBridge, "startQbxsqlCompatibilityBridge");
 var connectorStarted = false;
 if (isConcreteOxmysqlActive()) {
   reportOxmysqlConflict();
@@ -23823,7 +23839,10 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
-  registerCompatibilityExports(database, void 0, { legacyProviders: true });
+  registerCompatibilityExports(database, void 0, {
+    legacyProviders: true,
+    oxmysqlProvider: !isQbxsqlCompatibilityBridge()
+  });
   registerSchemaExports(schemas);
   database.onLifecycle((event, status) => {
     if (event === "ready" || event === "reconnected") {
@@ -23834,6 +23853,7 @@ if (isConcreteOxmysqlActive()) {
     if (typeof emit === "function") emit(`qbxsql:${event}`, status);
   });
   database.start();
+  startQbxsqlCompatibilityBridge();
   connectorStarted = true;
   if (typeof RegisterCommand === "function") {
     RegisterCommand(
@@ -23848,7 +23868,9 @@ if (isConcreteOxmysqlActive()) {
 }
 if (typeof on === "function") {
   on("onResourceStart", (startedResource) => {
-    if (startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
+    if (startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled() || isQbxsqlCompatibilityBridge()) {
+      return;
+    }
     reportOxmysqlConflict();
     if (typeof StopResource === "function") StopResource(resourceName2);
   });
@@ -23860,7 +23882,9 @@ if (typeof on === "function") {
           ...schemaDatabase === database ? [] : [schemaDatabase.close()]
         ]);
       }
-      if (isConcreteOxmysqlInstalled()) reportOxmysqlConflict();
+      if (isConcreteOxmysqlInstalled() && !isQbxsqlCompatibilityBridge()) {
+        reportOxmysqlConflict();
+      }
     }
   });
 }

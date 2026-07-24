@@ -18,10 +18,19 @@ RegisterCommand('qbxsql_restart_probe_begin', function()
         while GetResourceState('qbxsql') ~= 'started' do Wait(10) end
         Wait(250)
 
+        local bridgeDeadline = GetGameTimer() + 5000
+        while GetResourceState('oxmysql') ~= 'started' and GetGameTimer() < bridgeDeadline do
+            Wait(10)
+        end
+        if GetResourceState('oxmysql') ~= 'started' then
+            print(('QBXSQL_RESOURCE_RESTART_FAIL:oxmysql state is %s'):format(GetResourceState('oxmysql')))
+            return
+        end
+
         local response = promise.new()
-        exports.qbxsql:scalar('SELECT 50 AS value', {}, function(result, err)
+        exports.oxmysql:scalar('SELECT 50 AS value', {}, function(result, err)
             if err then response:reject(err) else response:resolve(result) end
-        end, GetCurrentResourceName(), true)
+        end)
 
         local success, value = pcall(Citizen.Await, response)
         if not success or value ~= 50 then

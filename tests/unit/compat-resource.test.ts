@@ -56,13 +56,30 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(runner).toContain("conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS')");
   });
 
+  test('allows only an explicitly marked qbxsql oxmysql bridge', async () => {
+    const core = await fixture('src/index.ts');
+    const manifest = await fixture('tests/fxserver/oxmysql_bridge/fxmanifest.lua');
+    const bridge = await fixture('tests/fxserver/oxmysql_bridge/server.lua');
+    const loader = await fixture('tests/fxserver/oxmysql_bridge/lib/MySQL.lua');
+    const runner = await fixture('scripts/run-fxserver-gate.mjs');
+
+    expect(core).toContain("GetResourceMetadata('oxmysql', 'qbxsql_bridge', 0) === 'true'");
+    expect(core).toContain('oxmysqlProvider: !isQbxsqlCompatibilityBridge()');
+    expect(core).toContain("StartResource('oxmysql')");
+    expect(manifest).toContain("qbxsql_bridge 'true'");
+    expect(manifest).toContain("dependency 'qbxsql'");
+    expect(bridge).toContain("exports(exportName");
+    expect(loader).toContain("LoadResourceFile('qbxsql', 'lib/MySQL.lua')");
+    expect(runner).toContain("path.join(resources, 'oxmysql')");
+    expect(runner).toContain(".replace(\n    /^provide 'oxmysql'");
+  });
+
   test('registers all legacy export routing directly from qbxsql', async () => {
     const core = await fixture('src/index.ts');
     const compatibility = await fixture('src/api/compatibility.ts');
 
-    expect(core).toContain(
-      'registerCompatibilityExports(database, undefined, { legacyProviders: true })',
-    );
+    expect(core).toContain('registerCompatibilityExports(database, undefined, {');
+    expect(core).toContain('legacyProviders: true');
     expect(compatibility).toContain("runtime.addProviderExport('oxmysql'");
     expect(compatibility).toContain("runtime.addProviderExport('mysql-async'");
     expect(compatibility).toContain("runtime.addProviderExport('ghmattimysql'");

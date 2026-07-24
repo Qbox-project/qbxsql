@@ -19,6 +19,7 @@ export interface RuntimeBindings {
 
 export interface CompatibilityRegistrationOptions {
   legacyProviders?: boolean;
+  oxmysqlProvider?: boolean;
 }
 
 function errorMessage(error: unknown): string {
@@ -128,6 +129,7 @@ export function registerCompatibilityExports(
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
+  const oxmysqlProvider = legacyProviders && options.oxmysqlProvider !== false;
 
   function normalize(
     query: string,
@@ -427,13 +429,13 @@ export function registerCompatibilityExports(
 
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
-    if (legacyProviders) runtime.addProviderExport('oxmysql', name, method);
+    if (oxmysqlProvider) runtime.addProviderExport('oxmysql', name, method);
 
     if (!['isReady', 'awaitConnection', 'getStatus', 'store', 'startTransaction'].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
-      if (legacyProviders) {
+      if (oxmysqlProvider) {
         runtime.addProviderExport('oxmysql', `${name}_async`, promiseMethod);
         runtime.addProviderExport('oxmysql', `${name}Sync`, promiseMethod);
       }
@@ -452,7 +454,7 @@ export function registerCompatibilityExports(
   };
   for (const [name, method] of Object.entries(lifecycleAliases)) {
     runtime.addExport(name, method);
-    if (legacyProviders) runtime.addProviderExport('oxmysql', name, method);
+    if (oxmysqlProvider) runtime.addProviderExport('oxmysql', name, method);
   }
 
   const mysqlAsyncAliases: Record<string, ExportFunction> = {

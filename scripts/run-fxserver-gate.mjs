@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -167,7 +167,18 @@ try {
   await cp(path.join(releaseRoot, 'qbxsql'), path.join(resources, 'qbxsql'), {
     recursive: true,
   });
+  const qbxsqlManifest = path.join(resources, 'qbxsql', 'fxmanifest.lua');
+  const bridgeManifest = (await readFile(qbxsqlManifest, 'utf8')).replace(
+    /^provide 'oxmysql'\r?\n/m,
+    '',
+  );
+  await writeFile(qbxsqlManifest, bridgeManifest);
   const installFixtures = async () => {
+    await cp(
+      path.join(repositoryRoot, 'tests', 'fxserver', 'oxmysql_bridge'),
+      path.join(resources, 'oxmysql'),
+      { recursive: true },
+    );
     for (const fixture of [
       'qbxsql_runtime_test',
       'mysql_async_import_test',
@@ -195,6 +206,7 @@ try {
     ...(flavor === 'enhanced'
       ? []
       : [
+          'ensure oxmysql',
           'ensure mysql_async_import_test',
           'ensure qbxsql_runtime_test',
           'ensure qbxsql_restart_probe',
@@ -232,7 +244,7 @@ try {
         void installFixtures()
           .then(() => {
             server.stdin.write(
-              'refresh\nensure mysql_async_import_test\nensure qbxsql_runtime_test\nensure qbxsql_restart_probe\n',
+              'refresh\nensure oxmysql\nensure mysql_async_import_test\nensure qbxsql_runtime_test\nensure qbxsql_restart_probe\n',
             );
           })
           .catch(reject);

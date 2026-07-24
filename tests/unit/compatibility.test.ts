@@ -73,6 +73,22 @@ describe('compatibility provider registration', () => {
     expect(providers).toEqual([]);
   });
 
+  test('lets a physical bridge own only the oxmysql provider exports', () => {
+    const providers: string[] = [];
+    registerCompatibilityExports(
+      {} as DatabaseService,
+      {
+        addExport() {},
+        addProviderExport: (resource, name) => providers.push(`${resource}:${name}`),
+        invokingResource: () => 'test-resource',
+      },
+      { legacyProviders: true, oxmysqlProvider: false },
+    );
+
+    expect(providers.some((entry) => entry.startsWith('oxmysql:'))).toBe(false);
+    expect(providers).toContain('mysql-async:mysql_fetch_all');
+    expect(providers).toContain('ghmattimysql:execute');
+  });
 });
 
 describe('oxmysql error semantics', () => {

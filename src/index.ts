@@ -35,8 +35,22 @@ function isConcreteOxmysqlInstalled(): boolean {
   return false;
 }
 
+function isQbxsqlCompatibilityBridge(): boolean {
+  return (
+    isConcreteOxmysqlInstalled() &&
+    typeof GetResourceMetadata === 'function' &&
+    GetResourceMetadata('oxmysql', 'qbxsql_bridge', 0) === 'true'
+  );
+}
+
 function isConcreteOxmysqlActive(): boolean {
-  if (!isConcreteOxmysqlInstalled() || typeof GetResourceState !== 'function') return false;
+  if (
+    !isConcreteOxmysqlInstalled() ||
+    isQbxsqlCompatibilityBridge() ||
+    typeof GetResourceState !== 'function'
+  ) {
+    return false;
+  }
   const state = GetResourceState('oxmysql');
   return state === 'started' || state === 'starting';
 }
@@ -45,6 +59,20 @@ function reportOxmysqlConflict(): void {
   console.error(
     '^1[qbxsql] Refusing to run while the real oxmysql resource is active. Stop and remove oxmysql before starting qbxsql.^0',
   );
+}
+
+function startQbxsqlCompatibilityBridge(): void {
+  if (
+    !isQbxsqlCompatibilityBridge() ||
+    typeof GetResourceState !== 'function' ||
+    typeof StartResource !== 'function'
+  ) {
+    return;
+  }
+
+  setImmediate(() => {
+    if (GetResourceState('oxmysql') === 'stopped') StartResource('oxmysql');
+  });
 }
 
 let connectorStarted = false;
@@ -62,7 +90,10 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
-  registerCompatibilityExports(database, undefined, { legacyProviders: true });
+  registerCompatibilityExports(database, undefined, {
+    legacyProviders: true,
+    oxmysqlProvider: !isQbxsqlCompatibilityBridge(),
+  });
   registerSchemaExports(schemas);
 
   database.onLifecycle((event, status) => {
@@ -75,6 +106,7 @@ if (isConcreteOxmysqlActive()) {
   });
 
   database.start();
+  startQbxsqlCompatibilityBridge();
   connectorStarted = true;
 
   if (typeof RegisterCommand === 'function') {
@@ -91,7 +123,13 @@ if (isConcreteOxmysqlActive()) {
 
 if (typeof on === 'function') {
   on('onResourceStart', (startedResource: string) => {
-    if (startedResource !== 'oxmysql' || !isConcreteOxmysqlInstalled()) return;
+    if (
+      startedResource !== 'oxmysql' ||
+      !isConcreteOxmysqlInstalled() ||
+      isQbxsqlCompatibilityBridge()
+    ) {
+      return;
+    }
     reportOxmysqlConflict();
     if (typeof StopResource === 'function') StopResource(resourceName);
   });
@@ -104,7 +142,9 @@ if (typeof on === 'function') {
           ...(schemaDatabase === database ? [] : [schemaDatabase.close()]),
         ]);
       }
-      if (isConcreteOxmysqlInstalled()) reportOxmysqlConflict();
+      if (isConcreteOxmysqlInstalled() && !isQbxsqlCompatibilityBridge()) {
+        reportOxmysqlConflict();
+      }
     }
   });
 }
