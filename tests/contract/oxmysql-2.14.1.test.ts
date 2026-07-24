@@ -82,6 +82,18 @@ describe(`${contract.target} compatibility contract`, () => {
     }
   });
 
+  test('extends ghmattimysql compatibility with insert and insertSync', async () => {
+    const { providers } = createHarness({
+      insert: async () => 17,
+    });
+    const ghmatti = providers.get('ghmattimysql')!;
+
+    expect(ghmatti.has('insert')).toBe(true);
+    expect(ghmatti.has('insertSync')).toBe(true);
+    await expect(callbackResult(ghmatti.get('insert')!, 'INSERT', [])).resolves.toBe(17);
+    await expect(ghmatti.get('insertSync')!('INSERT', [])).resolves.toBe(17);
+  });
+
   test('preserves result shapes across callback, promise, and legacy aliases', async () => {
     const database: Partial<DatabaseService> = {
       query: async () => [{ id: 1, name: 'row' }],

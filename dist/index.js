@@ -21737,6 +21737,7 @@ ${message}`
   const ghmattiAliases = {
     execute: api.query,
     scalar: api.scalar,
+    insert: api.insert,
     transaction: api.transaction,
     store: api.store
   };

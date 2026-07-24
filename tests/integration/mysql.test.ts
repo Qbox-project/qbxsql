@@ -287,6 +287,8 @@ describe('MySQL driver integration', () => {
     expect(providerExports.has('mysql-async:mysql_fetch_scalar')).toBe(true);
     expect(providerExports.has('ghmattimysql:execute')).toBe(true);
     expect(providerExports.has('ghmattimysql:executeSync')).toBe(true);
+    expect(providerExports.has('ghmattimysql:insert')).toBe(true);
+    expect(providerExports.has('ghmattimysql:insertSync')).toBe(true);
   });
 
   test('executes callback and promise compatibility APIs', async () => {
@@ -301,6 +303,28 @@ describe('MySQL driver integration', () => {
 
     const scalarSync = providerExports.get('ghmattimysql:scalarSync')!;
     expect(await scalarSync('SELECT ? AS value', [73])).toBe(73);
+
+    const ghmattiInsert = providerExports.get('ghmattimysql:insert')!;
+    const callbackInsertId = await new Promise<unknown>((resolve, reject) => {
+      ghmattiInsert(
+        'INSERT INTO values_test (name, enabled) VALUES (?, ?)',
+        ['GHMatti callback insert', true],
+        (result: unknown, error?: string) => {
+          if (error) reject(new Error(error));
+          else resolve(result);
+        },
+      );
+    });
+    expect(typeof callbackInsertId).toBe('number');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const ghmattiInsertSync = providerExports.get('ghmattimysql:insertSync')!;
+    await expect(
+      ghmattiInsertSync(
+        'INSERT INTO values_test (name, enabled) VALUES (?, ?)',
+        ['GHMatti sync insert', true],
+      ),
+    ).resolves.toBeNumber();
 
     const queryAsync = directExports.get('query_async')!;
     expect(await queryAsync('SELECT ? AS value', [99])).toEqual([{ value: 99 }]);

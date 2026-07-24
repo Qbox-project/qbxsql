@@ -4,6 +4,7 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
+- Added `ghmattimysql` `insert` and `insertSync` provider exports for resources that use the extended legacy insert helpers.
 - Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
 ## 0.3.2 - 2026-07-24

@@ -131,6 +131,19 @@ local function runTests()
         47,
         'ghmattimysql synchronous export'
     )
+    local ghmattiInsertId = callbackAwait(function(callback)
+        exports.ghmattimysql:insert(
+            'INSERT INTO fxsql_values (name, enabled) VALUES (?, ?)',
+            { 'ghmatti callback insert', true },
+            callback
+        )
+    end)
+    assert(type(ghmattiInsertId) == 'number', 'ghmattimysql insert export did not return an id')
+    local ghmattiSyncInsertId = exports.ghmattimysql:insertSync(
+        'INSERT INTO fxsql_values (name, enabled) VALUES (?, ?)',
+        { 'ghmatti sync insert', true }
+    )
+    assert(type(ghmattiSyncInsertId) == 'number', 'ghmattimysql insertSync export did not return an id')
 
     local transaction = MySQL.transaction.await({
         'INSERT INTO fxsql_values (name, enabled) VALUES (@name, true)',
