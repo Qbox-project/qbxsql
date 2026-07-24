@@ -6,6 +6,27 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 - Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
+## 0.5.0 - 2026-07-24
+
+- Added verify-only PostgreSQL extension requirements with minimum versions,
+  actionable unavailable/not-enabled/outdated states, structured schema errors,
+  cached health summaries, the `Postgres.extensions` API, and the
+  `qbxsql_extensions` console diagnostic.
+- Added pgvector-native `vector`, `halfvec`, and `sparsevec` schema types,
+  dimension validation, HNSW/IVFFlat indexes, per-column operator classes,
+  index storage options, safe Lua vector parameter helpers, and optional dense
+  vector result parsing.
+- Added generic extension-ready operator-class indexes and PostgreSQL exclusion
+  constraints. Blocking exclusion changes remain protected by migration and
+  operator approval.
+- Pinned the hosted PostgreSQL integration service and local stock-Linux
+  FXServer gate to pgvector 0.8.5 on PostgreSQL 16 and exercised extension
+  discovery, schema reconciliation, HNSW catalog drift, parameters, and result
+  parsing end to end.
+- Documented operator-owned extension installation, per-database enablement,
+  least-privilege application credentials, Docker/PGDG examples, and
+  `pg_stat_statements` preload requirements.
+
 ## 0.4.0 - 2026-07-24
 
 - Added an independent PostgreSQL 16+ lane using the pure-JavaScript `pg` driver. PostgreSQL-only and simultaneous MySQL/PostgreSQL deployments are supported with separate pools, reconnect lifecycles, queues, health status, events, and schema credentials.

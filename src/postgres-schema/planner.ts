@@ -6,6 +6,7 @@ import {
   postgresCheckSql,
   postgresColumnSql,
   postgresDefault,
+  postgresExclusionSql,
   postgresForeignKeySql,
   postgresType,
   qualifiedTable,
@@ -96,12 +97,30 @@ function indexMatches(
   actual: ActualPostgresIndex,
   desired: PostgresIndexDefinition,
 ): boolean {
+  const desiredColumns = desired.columns.map((column) => {
+    if (typeof column === 'string') return column;
+    return [
+      column.name,
+      column.order,
+      column.nulls ? `NULLS ${column.nulls}` : undefined,
+    ].filter(Boolean).join(' ');
+  });
+  const desiredOptions = Object.fromEntries(
+    Object.entries(desired.options ?? {}).map(([key, value]) => [key, String(value)]),
+  );
+  const actualOptions = actual.options ?? {};
   return (
     actual.valid &&
     actual.unique === (desired.unique ?? false) &&
     actual.method === (desired.method ?? 'btree') &&
-    sameArray(actual.columns, desired.columns) &&
+    sameArray(actual.columns, desiredColumns) &&
+    desired.columns.every((column, index) =>
+      typeof column === 'string' ||
+      column.operatorClass === undefined ||
+      (actual.operatorClasses ?? [])[index] === column.operatorClass) &&
     sameArray(actual.include, desired.include ?? []) &&
+    Object.keys(desiredOptions).length === Object.keys(actualOptions).length &&
+    Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) &&
     normalizeSql(actual.predicate) === normalizeSql(desired.where)
   );
 }
@@ -380,6 +399,40 @@ function planExistingTable(
   for (const foreignKey of actual.foreignKeys.values()) {
     if (!desiredForeignKeys.has(foreignKey.name)) {
       warnings.push(`foreign key public.${name}.${foreignKey.name} is not declared`);
+    }
+  }
+
+  const desiredExclusions = new Map(
+    (desired.exclusions ?? []).map((exclusion) => [exclusion.name, exclusion]),
+  );
+  const actualExclusions = actual.exclusions ?? new Map();
+  for (const exclusion of desired.exclusions ?? []) {
+    const current = actualExclusions.get(exclusion.name);
+    const desiredDefinition = postgresExclusionSql(exclusion)
+      .replace(/^CONSTRAINT\s+"[^"]+"\s+/i, '');
+    if (!current) {
+      actions.push(manualAction({
+        kind: 'addExclusion',
+        sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,
+        algorithm: 'MANUAL',
+        reason: `exclusion constraint ${exclusion.name} builds an index and requires an explicit blocking migration`,
+        table: name,
+        risk: 'high',
+      }));
+    } else if (normalizeSql(current.definition) !== normalizeSql(desiredDefinition)) {
+      actions.push(manualAction({
+        kind: 'replaceExclusion',
+        sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,
+        algorithm: 'MANUAL',
+        reason: `exclusion constraint ${exclusion.name} differs and requires an explicit replacement migration`,
+        table: name,
+        risk: 'high',
+      }));
+    }
+  }
+  for (const exclusion of actualExclusions.values()) {
+    if (!desiredExclusions.has(exclusion.name)) {
+      warnings.push(`exclusion constraint public.${name}.${exclusion.name} is not declared`);
     }
   }
 }

@@ -25,6 +25,7 @@
 | `qbxsql_mysql_schema_connection_string` | unset | Optional MySQL schema-only credentials |
 | `qbxsql_postgres_schema_connection_string` | unset | Optional PostgreSQL schema-only credentials |
 | `qbxsql_schema_lock_timeout` | MySQL `30000`, PostgreSQL `2000` | Shared schema DDL lock wait (ms) |
+| `qbxsql_postgres_parse_vector_results` | `true` | Parse pgvector `vector`/`halfvec` results into Lua arrays |
 
 Every shared pool, timeout, slow-query, result-set, queue, health, retry, transaction, and schema-lock option also accepts a `qbxsql_mysql_` or `qbxsql_postgres_` prefixed form. The per-lane form wins over the shared value. Native MySQL names win over legacy names. Invalid typed values are rejected with sanitized warnings. Enabling MySQL `multipleStatements` emits a prominent warning because it increases the impact of SQL injection.
 
@@ -43,6 +44,14 @@ Fatal active-query errors and failed idle health checks trigger one pool rebuild
 Explicit per-lane events are `qbxsql:mysql:ready|disconnected|reconnected` and `qbxsql:postgres:ready|disconnected|reconnected`.
 
 Use `qbxsql_status` from the server console, `exports.qbxsql:getStatus()` for the primary lane, `getStatus('mysql'|'postgresql')` for one lane, or `getStatuses()` for both. Alert on non-ready state, rising errors/reconnects, sustained queue depth, slow queries, acquired connections that never return, and final-half process-memory growth.
+
+Use `qbxsql_extensions` to refresh and print sanitized PostgreSQL extension
+requirements and installed versions. `unavailable` means the server package is
+missing; `not-installed` means the package exists but `CREATE EXTENSION` has
+not been run in the application database; `version-too-old` means the enabled
+version does not meet a resource's declared minimum. Perform those operator
+steps with separate administrative tooling, never by placing admin credentials
+in `server.cfg`.
 
 Status never contains connection strings, credentials, or query parameter values.
 

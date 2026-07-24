@@ -34,6 +34,12 @@ export interface DatabaseStatus {
     slowQueries: number;
     reconnects: number;
   };
+  extensions?: {
+    required: number;
+    ready: number;
+    unsatisfied: number;
+    resources: number;
+  };
 }
 
 interface ConnectionWaiter {

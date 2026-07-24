@@ -2,6 +2,8 @@ import type {
   PostgresCheckDefinition,
   PostgresColumnDefinition,
   PostgresForeignKeyDefinition,
+  PostgresExclusionDefinition,
+  PostgresIndexColumn,
   PostgresIndexDefinition,
   PostgresMigrationOperation,
   PostgresTableDefinition,
@@ -33,6 +35,20 @@ export function postgresLiteral(value: unknown, type?: string): string {
 }
 
 export function postgresType(column: PostgresColumnDefinition): string {
+  if (
+    column.type === 'vector' ||
+    column.type === 'halfvec' ||
+    column.type === 'sparsevec'
+  ) {
+    return `${column.type.toUpperCase()}(${column.dimensions})`;
+  }
+  if (
+    (column.type === 'geometry' || column.type === 'geography') &&
+    column.spatialType &&
+    column.srid !== undefined
+  ) {
+    return `${column.type.toUpperCase()}(${column.spatialType.toUpperCase()},${column.srid})`;
+  }
   switch (column.type) {
     case 'int':
       return 'INTEGER';
@@ -50,6 +66,19 @@ export function postgresType(column: PostgresColumnDefinition): string {
     default:
       return column.type.toUpperCase();
   }
+}
+
+function postgresIndexColumnSql(column: PostgresIndexColumn): string {
+  if (typeof column === 'string') return quotePostgresIdentifier(column);
+  const parts = [quotePostgresIdentifier(column.name)];
+  if (column.operatorClass) parts.push(quotePostgresIdentifier(column.operatorClass));
+  if (column.order) parts.push(column.order);
+  if (column.nulls) parts.push(`NULLS ${column.nulls}`);
+  return parts.join(' ');
+}
+
+function postgresIndexOptionSql(value: string | number | boolean): string {
+  return typeof value === 'string' ? postgresLiteral(value) : postgresLiteral(value);
 }
 
 export function postgresDefault(column: PostgresColumnDefinition): string | null {
@@ -100,6 +129,28 @@ export function postgresForeignKeySql(
   return parts.join(' ');
 }
 
+export function postgresExclusionSql(
+  exclusion: PostgresExclusionDefinition,
+): string {
+  const method = (exclusion.method ?? 'gist').toUpperCase();
+  const elements = exclusion.elements.map((element) => {
+    const operatorClass = element.operatorClass
+      ? ` ${quotePostgresIdentifier(element.operatorClass)}`
+      : '';
+    return `${quotePostgresIdentifier(element.column)}${operatorClass} WITH ${element.operator}`;
+  });
+  const parts = [
+    `CONSTRAINT ${quotePostgresIdentifier(exclusion.name)}`,
+    `EXCLUDE USING ${method} (${elements.join(', ')})`,
+  ];
+  if (exclusion.where) parts.push(`WHERE (${exclusion.where})`);
+  if (exclusion.deferrable) {
+    parts.push('DEFERRABLE');
+    if (exclusion.initiallyDeferred) parts.push('INITIALLY DEFERRED');
+  }
+  return parts.join(' ');
+}
+
 export function createPostgresTableSql(
   name: string,
   table: PostgresTableDefinition,
@@ -116,6 +167,9 @@ export function createPostgresTableSql(
     definitions.push(`PRIMARY KEY (${primary.map(quotePostgresIdentifier).join(', ')})`);
   }
   for (const check of table.checks ?? []) definitions.push(postgresCheckSql(check));
+  for (const exclusion of table.exclusions ?? []) {
+    definitions.push(postgresExclusionSql(exclusion));
+  }
   return `CREATE TABLE ${qualifiedTable(name)} (\n  ${definitions.join(',\n  ')}\n)`;
 }
 
@@ -130,7 +184,12 @@ export function createPostgresIndexSql(
       ? ` INCLUDE (${index.include.map(quotePostgresIdentifier).join(', ')})`
       : '';
   const predicate = index.where ? ` WHERE ${index.where}` : '';
-  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX${concurrently ? ' CONCURRENTLY' : ''} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(quotePostgresIdentifier).join(', ')})${include}${predicate}`;
+  const options = index.options && Object.keys(index.options).length > 0
+    ? ` WITH (${Object.entries(index.options)
+      .map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`)
+      .join(', ')})`
+    : '';
+  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX${concurrently ? ' CONCURRENTLY' : ''} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(', ')})${include}${options}${predicate}`;
 }
 
 export interface PostgresMigrationStatement {
@@ -201,6 +260,10 @@ export function postgresMigrationStatements(
           sql: `ALTER TABLE ${qualifiedTable(operation.table)} VALIDATE CONSTRAINT ${quotePostgresIdentifier(operation.definition.name)}`,
         },
       ];
+    case 'addExclusion':
+      return [{
+        sql: `ALTER TABLE ${qualifiedTable(operation.table)} ADD ${postgresExclusionSql(operation.definition)}`,
+      }];
     case 'addCheck':
       return [
         {

@@ -29,7 +29,10 @@ describe('containerized Linux FXServer gate', () => {
     );
     expect(localRunner).toContain("'.cache',\n    'fxserver'");
     expect(localRunner).toContain("const DATABASE_IMAGE = 'mariadb:11.4';");
-    expect(localRunner).toContain("const POSTGRES_IMAGE = 'postgres:16-alpine';");
+    expect(localRunner).toContain(
+      "const POSTGRES_IMAGE = 'pgvector/pgvector:0.8.5-pg16-bookworm';",
+    );
+    expect(localRunner).toContain("'CREATE EXTENSION IF NOT EXISTS vector'");
     expect(localRunner).toContain("'POSTGRES_PASSWORD=root'");
     expect(localRunner).toContain("'network', 'create'");
     expect(localRunner).toContain('await readLocalCfxKey(repositoryRoot)');

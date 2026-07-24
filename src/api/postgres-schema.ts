@@ -5,6 +5,7 @@ import {
   type PostgresSchemaManager,
 } from '../postgres-schema/manager.js';
 import type { PostgresResourceSchema } from '../postgres-schema/types.js';
+import { PostgresExtensionRequirementError } from '../postgres-extensions.js';
 import {
   createRuntimeBindings,
   type ExportFunction,
@@ -15,6 +16,7 @@ import type { PostgresApiError } from './postgres.js';
 type SchemaCallback = (result: unknown, error?: PostgresApiError & {
   result?: unknown;
   plan?: unknown;
+  extensions?: unknown;
 }) => void;
 
 function invokeCallback(
@@ -33,6 +35,7 @@ function invokeCallback(
 function errorPayload(error: unknown): PostgresApiError & {
   result?: unknown;
   plan?: unknown;
+  extensions?: unknown;
 } {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof PostgresSchemaPendingChangesError) {
@@ -40,6 +43,13 @@ function errorPayload(error: unknown): PostgresApiError & {
       code: 'QBXSQL_POSTGRES_SCHEMA_PENDING_CHANGES',
       message,
       result: error.result,
+    };
+  }
+  if (error instanceof PostgresExtensionRequirementError) {
+    return {
+      code: error.code,
+      message,
+      extensions: error.report,
     };
   }
   if (error instanceof PostgresSchemaMigrationRequiredError) {
@@ -138,6 +148,16 @@ export function registerPostgresSchemaExports(
         },
       );
     },
+    postgresGetExtensions(callback?: SchemaCallback) {
+      void manager.extensions.diagnostics().then(
+        (result) => invokeCallback(callback, result),
+        (error: unknown) => {
+          const failure = errorPayload(error);
+          console.error(`[qbxsql] PostgreSQL extension diagnostics failed: ${failure.message}`);
+          invokeCallback(callback, null, failure);
+        },
+      );
+    },
   };
 
   for (const [name, callback] of Object.entries(api)) runtime.addExport(name, callback);
@@ -164,6 +184,7 @@ export function registerPostgresSchemaUnavailableExports(
     'postgresPlanSchema',
     'postgresAdoptSchema',
     'postgresPlanSchemaAdoption',
+    'postgresGetExtensions',
   ]) {
     bindings.addExport(name, unavailable);
   }

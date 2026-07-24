@@ -34,7 +34,7 @@ set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox
 ensure qbxsql
 ```
 
-The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.4.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
+The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.5.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
 
 Existing resources can keep their normal imports:
 
@@ -144,6 +144,14 @@ Postgres.Schema.ensure.await({
 
 The PostgreSQL manager uses transactions for ordinary DDL, concurrent index creation where needed, `NOT VALID` followed by `VALIDATE CONSTRAINT` for online constraint rollout, advisory locks, action journaling, ownership, adoption, and resumable reconciliation. It never accepts MySQL-only schema fields.
 
+Resources can also declare required PostgreSQL extensions and minimum versions.
+qbxsql verifies server availability and database enablement before schema DDL,
+but intentionally leaves package installation and `CREATE EXTENSION` to the
+operator. pgvector columns (`vector`, `halfvec`, `sparsevec`), HNSW/IVFFlat
+indexes, operator classes, storage options, exclusion constraints, validated
+Lua vector parameters, and dense-vector result parsing are supported. See the
+[extension installation and schema guide](docs/POSTGRESQL.md#extensions).
+
 ## Health and operations
 
 ```lua
@@ -152,7 +160,7 @@ local postgres = exports.qbxsql:getStatus('postgresql')
 local both = exports.qbxsql:getStatuses()
 ```
 
-Each sanitized result includes the dialect, lifecycle state, database family/version/name, pool counts, queue depth, process-memory counters, query/error/slow-query totals, and reconnect count. The same information is available through the server-console command `qbxsql_status`. The primary lane emits `qbxsql:ready`, `qbxsql:disconnected`, and `qbxsql:reconnected`; explicit lane events use `qbxsql:mysql:*` and `qbxsql:postgres:*`.
+Each sanitized result includes the dialect, lifecycle state, database family/version/name, pool counts, queue depth, process-memory counters, query/error/slow-query totals, and reconnect count. The same information is available through the server-console command `qbxsql_status`; use `qbxsql_extensions` for PostgreSQL extension requirements and installed versions. The primary lane emits `qbxsql:ready`, `qbxsql:disconnected`, and `qbxsql:reconnected`; explicit lane events use `qbxsql:mysql:*` and `qbxsql:postgres:*`.
 
 See the [operations runbook](docs/OPERATIONS.md) for convars, outage behavior, monitoring, shutdown, and recovery.
 

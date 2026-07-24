@@ -31,7 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:0.8.5-pg16-bookworm
         env:
           POSTGRES_PASSWORD: root
         ports:

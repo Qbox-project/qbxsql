@@ -11,7 +11,7 @@ describe('lean GitHub Actions workflows', () => {
 
     expect(workflow.match(/runs-on: ubuntu-latest/g)).toHaveLength(1);
     expect(workflow).toContain('image: mariadb:11.4');
-    expect(workflow).toContain('image: postgres:16-alpine');
+    expect(workflow).toContain('image: pgvector/pgvector:0.8.5-pg16-bookworm');
     expect(workflow).toContain('bun run test:unit');
     expect(workflow).toContain('bun run test:contract');
     expect(workflow).toContain('bun run test:integration');

@@ -3,6 +3,7 @@ import { planPostgresSchema } from '../../src/postgres-schema/planner.js';
 import {
   createPostgresIndexSql,
   createPostgresTableSql,
+  postgresExclusionSql,
   postgresMigrationStatements,
 } from '../../src/postgres-schema/sql.js';
 import type {
@@ -41,10 +42,13 @@ function schema(): PostgresResourceSchema {
 
 describe('PostgreSQL declarative schemas', () => {
   test('validates and normalizes PostgreSQL-native definitions', () => {
-    const value = validatePostgresSchema(schema());
+    const input = schema();
+    input.extensions = [{ name: 'uuid-ossp' }];
+    const value = validatePostgresSchema(input);
     expect(value.tables.properties?.columns.metadata?.type).toBe('jsonb');
+    expect(value.extensions).toEqual([{ name: 'uuid-ossp' }]);
     expect(postgresSchemaChecksum(value)).toBe(
-      postgresSchemaChecksum(validatePostgresSchema(schema())),
+      postgresSchemaChecksum(validatePostgresSchema(input)),
     );
   });
 
@@ -145,5 +149,107 @@ describe('PostgreSQL declarative schemas', () => {
         automatic: true,
       }),
     );
+  });
+
+  test('validates extension-backed vector columns and renders ANN index options', () => {
+    const vectorSchema = validatePostgresSchema({
+      version: 1,
+      extensions: [{ name: 'vector', minimumVersion: '0.8.5' }],
+      tables: {
+        embeddings: {
+          columns: {
+            id: { type: 'integer', primary: true },
+            embedding: { type: 'vector', dimensions: 1536 },
+          },
+          indexes: [{
+            name: 'embeddings_hnsw_idx',
+            method: 'hnsw',
+            columns: [{
+              name: 'embedding',
+              operatorClass: 'vector_cosine_ops',
+            }],
+            options: { m: 16, ef_construction: 64 },
+          }],
+        },
+      },
+    });
+    const table = vectorSchema.tables.embeddings!;
+    expect(createPostgresTableSql('embeddings', table)).toContain('"embedding" VECTOR(1536)');
+    expect(createPostgresIndexSql('embeddings', table.indexes![0]!, true)).toBe(
+      'CREATE INDEX CONCURRENTLY "embeddings_hnsw_idx" ON "public"."embeddings" USING HNSW ("embedding" "vector_cosine_ops") WITH ("m" = 16, "ef_construction" = 64)',
+    );
+
+    const undeclared = structuredClone(vectorSchema);
+    undeclared.extensions = [];
+    expect(() => validatePostgresSchema(undeclared)).toThrow('must declare extensions');
+  });
+
+  test('renders extension-ready exclusion constraints without accepting arbitrary operators', () => {
+    expect(postgresExclusionSql({
+      name: 'bookings_no_overlap',
+      method: 'gist',
+      elements: [
+        { column: 'room_id', operator: '=', operatorClass: 'gist_int4_ops' },
+        { column: 'during', operator: '&&' },
+      ],
+      where: 'cancelled = false',
+    })).toBe(
+      'CONSTRAINT "bookings_no_overlap" EXCLUDE USING GIST ("room_id" "gist_int4_ops" WITH =, "during" WITH &&) WHERE (cancelled = false)',
+    );
+
+    const invalid: any = {
+      version: 1,
+      tables: {
+        bookings: {
+          columns: {
+            room_id: { type: 'integer' },
+            during: { type: 'text' },
+          },
+          exclusions: [{
+            name: 'bookings_bad',
+            elements: [{ column: 'during', operator: '; DROP TABLE bookings' }],
+          }],
+        },
+      },
+    };
+    expect(() => validatePostgresSchema(invalid)).toThrow('unsupported operator');
+  });
+
+  test('renders PostGIS typmods and generic operator-class indexes', () => {
+    const spatial = validatePostgresSchema({
+      version: 1,
+      extensions: [{ name: 'postgis', minimumVersion: '3.4.0' }],
+      tables: {
+        map_markers: {
+          columns: {
+            id: { type: 'integer', primary: true },
+            position: {
+              type: 'geometry',
+              spatialType: 'point',
+              srid: 4326,
+            },
+          },
+          indexes: [{
+            name: 'map_markers_position_gist_idx',
+            method: 'gist',
+            columns: [{
+              name: 'position',
+              operatorClass: 'gist_geometry_ops_2d',
+            }],
+          }],
+        },
+      },
+    });
+    const table = spatial.tables.map_markers!;
+    expect(createPostgresTableSql('map_markers', table)).toContain(
+      '"position" GEOMETRY(POINT,4326)',
+    );
+    expect(createPostgresIndexSql('map_markers', table.indexes![0]!, false)).toContain(
+      'USING GIST ("position" "gist_geometry_ops_2d")',
+    );
+
+    const missing = structuredClone(spatial);
+    missing.extensions = [];
+    expect(() => validatePostgresSchema(missing)).toThrow('must declare extensions');
   });
 });

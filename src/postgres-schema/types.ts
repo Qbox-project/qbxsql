@@ -20,7 +20,18 @@ export type PostgresColumnType =
   | 'json'
   | 'jsonb'
   | 'inet'
-  | 'cidr';
+  | 'cidr'
+  | 'int4range'
+  | 'int8range'
+  | 'numrange'
+  | 'tsrange'
+  | 'tstzrange'
+  | 'daterange'
+  | 'geometry'
+  | 'geography'
+  | 'vector'
+  | 'halfvec'
+  | 'sparsevec';
 
 export type PostgresDefaultExpression =
   | 'CURRENT_TIMESTAMP'
@@ -28,11 +39,24 @@ export type PostgresDefaultExpression =
   | 'CURRENT_TIME'
   | 'gen_random_uuid()';
 
+export type PostgresSpatialSubtype =
+  | 'geometry'
+  | 'point'
+  | 'linestring'
+  | 'polygon'
+  | 'multipoint'
+  | 'multilinestring'
+  | 'multipolygon'
+  | 'geometrycollection';
+
 export interface PostgresColumnDefinition {
   type: PostgresColumnType;
   length?: number;
   precision?: number;
   scale?: number;
+  dimensions?: number;
+  spatialType?: PostgresSpatialSubtype;
+  srid?: number;
   nullable?: boolean;
   default?: unknown;
   defaultExpression?: PostgresDefaultExpression;
@@ -41,12 +65,49 @@ export interface PostgresColumnDefinition {
   comment?: string;
 }
 
+export interface PostgresExtensionRequirement {
+  name: string;
+  minimumVersion?: string;
+}
+
+export type PostgresExtensionState =
+  | 'ready'
+  | 'not-installed'
+  | 'unavailable'
+  | 'version-too-old';
+
+export interface PostgresExtensionCheck extends PostgresExtensionRequirement {
+  state: PostgresExtensionState;
+  availableVersion: string | null;
+  installedVersion: string | null;
+  schema: string | null;
+  message: string;
+}
+
+export interface PostgresExtensionReport {
+  resource: string;
+  satisfied: boolean;
+  checkedAt: number;
+  extensions: PostgresExtensionCheck[];
+}
+
+export interface PostgresIndexColumnDefinition {
+  name: string;
+  operatorClass?: string;
+  order?: 'ASC' | 'DESC';
+  nulls?: 'FIRST' | 'LAST';
+}
+
+export type PostgresIndexColumn = string | PostgresIndexColumnDefinition;
+export type PostgresIndexOption = string | number | boolean;
+
 export interface PostgresIndexDefinition {
   name: string;
-  columns: string[];
+  columns: PostgresIndexColumn[];
   unique?: boolean;
-  method?: 'btree' | 'gin' | 'gist' | 'brin' | 'hash';
+  method?: 'btree' | 'gin' | 'gist' | 'spgist' | 'brin' | 'hash' | 'hnsw' | 'ivfflat';
   include?: string[];
+  options?: Record<string, PostgresIndexOption>;
   where?: string;
 }
 
@@ -68,12 +129,28 @@ export interface PostgresForeignKeyDefinition {
   initiallyDeferred?: boolean;
 }
 
+export interface PostgresExclusionElementDefinition {
+  column: string;
+  operator: '=' | '<>' | '&&' | '&&&' | '<@' | '@>' | '-|-' | '&<' | '&>' | '<<' | '>>';
+  operatorClass?: string;
+}
+
+export interface PostgresExclusionDefinition {
+  name: string;
+  method?: 'gist' | 'spgist';
+  elements: PostgresExclusionElementDefinition[];
+  where?: string;
+  deferrable?: boolean;
+  initiallyDeferred?: boolean;
+}
+
 export interface PostgresTableDefinition {
   columns: Record<string, PostgresColumnDefinition>;
   primaryKey?: string[];
   indexes?: PostgresIndexDefinition[];
   checks?: PostgresCheckDefinition[];
   foreignKeys?: PostgresForeignKeyDefinition[];
+  exclusions?: PostgresExclusionDefinition[];
   comment?: string;
 }
 
@@ -103,6 +180,11 @@ export type PostgresMigrationOperation =
       table: string;
       definition: PostgresForeignKeyDefinition;
     }
+  | {
+      type: 'addExclusion';
+      table: string;
+      definition: PostgresExclusionDefinition;
+    }
   | { type: 'addCheck'; table: string; definition: PostgresCheckDefinition }
   | { type: 'dropConstraint'; table: string; constraint: string }
   | { type: 'validateConstraint'; table: string; constraint: string }
@@ -120,6 +202,7 @@ export interface PostgresMigrationDefinition {
 
 export interface PostgresResourceSchema {
   version: number;
+  extensions?: PostgresExtensionRequirement[];
   tables: Record<string, PostgresTableDefinition>;
   migrations?: PostgresMigrationDefinition[];
 }
@@ -141,6 +224,8 @@ export interface ActualPostgresIndex {
   primary: boolean;
   valid: boolean;
   method: string;
+  operatorClasses?: string[];
+  options?: Record<string, string>;
   predicate: string | null;
 }
 
@@ -162,6 +247,13 @@ export interface ActualPostgresForeignKey {
   validated: boolean;
 }
 
+export interface ActualPostgresExclusion {
+  name: string;
+  definition: string;
+  deferrable: boolean;
+  initiallyDeferred: boolean;
+}
+
 export interface ActualPostgresTable {
   name: string;
   comment: string;
@@ -169,6 +261,7 @@ export interface ActualPostgresTable {
   indexes: Map<string, ActualPostgresIndex>;
   checks: Map<string, ActualPostgresCheck>;
   foreignKeys: Map<string, ActualPostgresForeignKey>;
+  exclusions?: Map<string, ActualPostgresExclusion>;
   primaryKey: string[];
   primaryKeyName: string | null;
 }
@@ -197,6 +290,7 @@ export interface PostgresSchemaPlan {
   version: number;
   actions: PostgresSchemaAction[];
   warnings: string[];
+  extensions?: PostgresExtensionReport;
 }
 
 export interface PostgresSchemaEnsureResult extends PostgresSchemaPlan {

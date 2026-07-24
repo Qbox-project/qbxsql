@@ -29,7 +29,12 @@ Routine CI uses MariaDB 11.4 and PostgreSQL 16 as the representative integration
 
 Local development on 2026-07-22 passed the complete 35-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
 
-The native PostgreSQL lane supports PostgreSQL 16 and newer. Its hosted gate covers PostgreSQL 16; newer major releases remain compatible targets but should be rerun locally after driver, type conversion, introspection, or DDL changes.
+The native PostgreSQL lane supports PostgreSQL 16 and newer. Its hosted gate
+covers PostgreSQL 16 with pgvector 0.8.5; newer PostgreSQL or extension releases
+remain compatible targets but should be rerun locally after driver, type
+conversion, introspection, or DDL changes. Extension declarations are
+verify-only: qbxsql never installs, enables, upgrades, or removes server
+extensions.
 
 | Routing | Database |
 | --- | --- |

@@ -6,8 +6,8 @@ CreateThread(function()
         print(('QBXSQL_CLIENT_VISIBILITY_FAIL: expected oxmysql 2.14.1, received %s'):format(tostring(version)))
         return
     end
-    if qbxsqlVersion ~= '0.4.0' then
-        print(('QBXSQL_CLIENT_VISIBILITY_FAIL: expected qbxsql 0.4.0, received %s'):format(tostring(qbxsqlVersion)))
+    if qbxsqlVersion ~= '0.5.0' then
+        print(('QBXSQL_CLIENT_VISIBILITY_FAIL: expected qbxsql 0.5.0, received %s'):format(tostring(qbxsqlVersion)))
         return
     end
 

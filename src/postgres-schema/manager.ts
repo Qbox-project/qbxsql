@@ -1,6 +1,9 @@
 import type { DatabaseConnection } from '../core/types.js';
 import type { DatabaseService } from '../core/database.js';
 import { stableChecksum } from '../schema/validate.js';
+import {
+  PostgresExtensionRegistry,
+} from '../postgres-extensions.js';
 import { introspectPostgresDatabase } from './introspect.js';
 import { planPostgresSchema } from './planner.js';
 import {
@@ -15,6 +18,7 @@ import type {
   PostgresSchemaAdoptionResult,
   PostgresSchemaEnsureResult,
   PostgresSchemaPlan,
+  PostgresExtensionReport,
 } from './types.js';
 import {
   postgresSchemaChecksum,
@@ -47,6 +51,7 @@ export interface PostgresSchemaManagerOptions {
   allowBlocking?: boolean;
   lockTimeout?: number;
   applicationDatabase?: DatabaseService;
+  extensionRegistry?: PostgresExtensionRegistry;
 }
 
 export class PostgresSchemaMigrationRequiredError extends Error {
@@ -126,8 +131,25 @@ function requiresBlocking(operation: PostgresMigrationOperation): boolean {
     'setPrimaryKey',
     'dropPrimaryKey',
     'dropConstraint',
+    'addExclusion',
     'sql',
   ].includes(operation.type);
+}
+
+function extensionPlanActions(report: PostgresExtensionReport): PostgresSchemaAction[] {
+  return report.extensions
+    .filter((extension) => extension.state !== 'ready')
+    .map((extension) => ({
+      kind: `extension:${extension.state}`,
+      sql: `-- ${extension.message}`,
+      safe: true,
+      dataSafe: true,
+      onlineSafe: false,
+      automatic: false,
+      risk: 'medium',
+      algorithm: 'MANUAL',
+      reason: extension.message,
+    }));
 }
 
 function migrationPlanActions(
@@ -174,6 +196,7 @@ export class PostgresSchemaManager {
   private readonly allowBlocking: boolean;
   private readonly lockTimeout: number;
   private readonly applicationDatabase: DatabaseService;
+  public readonly extensions: PostgresExtensionRegistry;
 
   public constructor(
     private readonly database: DatabaseService,
@@ -183,6 +206,7 @@ export class PostgresSchemaManager {
     this.allowBlocking = options.allowBlocking ?? false;
     this.lockTimeout = options.lockTimeout ?? 2_000;
     this.applicationDatabase = options.applicationDatabase ?? database;
+    this.extensions = options.extensionRegistry ?? new PostgresExtensionRegistry(database);
   }
 
   public initialize(): Promise<void> {
@@ -202,6 +226,7 @@ export class PostgresSchemaManager {
     validateResource(resource);
     const schema = validatePostgresSchema(input);
     const checksum = postgresSchemaChecksum(schema);
+    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
     await this.initialize();
     const registry = await this.readRegistry(resource);
     if (registry && registry.version > schema.version) {
@@ -217,7 +242,12 @@ export class PostgresSchemaManager {
     const drift = planPostgresSchema(resource, schema, actual);
     return {
       ...drift,
-      actions: [...migrationPlanActions(migrations, this.allowBlocking), ...drift.actions],
+      actions: [
+        ...extensionPlanActions(extensionReport),
+        ...migrationPlanActions(migrations, this.allowBlocking),
+        ...drift.actions,
+      ],
+      extensions: extensionReport,
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -237,6 +267,7 @@ export class PostgresSchemaManager {
       throw new PostgresSchemaPendingChangesError(await this.plan(resource, schema));
     }
 
+    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
     await this.initialize();
     const preflightRegistry = await this.readRegistry(resource);
     if (
@@ -284,6 +315,7 @@ export class PostgresSchemaManager {
 
       return {
         ...plan,
+        extensions: extensionReport,
         checksum,
         dryRun: false,
         appliedActions,
@@ -303,6 +335,7 @@ export class PostgresSchemaManager {
     validateResource(resource);
     const schema = validatePostgresSchema(input);
     this.validateBaseline(schema, baselineVersion);
+    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
     await this.initialize();
     await this.assertAdoptionAvailable(resource, schema);
     const checksum = postgresSchemaChecksum(schema);
@@ -318,7 +351,12 @@ export class PostgresSchemaManager {
     const drift = planPostgresSchema(resource, schema, actual);
     return {
       ...drift,
-      actions: [...migrationPlanActions(migrations, this.allowBlocking), ...drift.actions],
+      actions: [
+        ...extensionPlanActions(extensionReport),
+        ...migrationPlanActions(migrations, this.allowBlocking),
+        ...drift.actions,
+      ],
+      extensions: extensionReport,
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -341,6 +379,7 @@ export class PostgresSchemaManager {
       const plan = await this.planAdoption(resource, schema, baselineVersion);
       throw new PostgresSchemaPendingChangesError(plan);
     }
+    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
     await this.initialize();
     const checksum = postgresSchemaChecksum(schema);
     const lock = await this.database.driver.acquire();
@@ -399,6 +438,7 @@ export class PostgresSchemaManager {
       );
       return {
         ...plan,
+        extensions: extensionReport,
         checksum,
         dryRun: false,
         appliedActions,

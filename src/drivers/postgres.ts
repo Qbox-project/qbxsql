@@ -34,21 +34,13 @@ const oid = {
   timestamptz: 1184,
 } as const;
 
-const postgresTypes = {
-  getTypeParser(typeId: number, format?: 'text' | 'binary') {
-    if (format === 'binary') return defaultTypes.getTypeParser(typeId, format);
-    if (typeId === oid.date) {
-      return (value: string) => new Date(`${value}T00:00:00.000Z`);
-    }
-    if (typeId === oid.timestamp) {
-      return (value: string) => new Date(`${value.replace(' ', 'T')}Z`);
-    }
-    if (typeId === oid.timestamptz) {
-      return (value: string) => new Date(value);
-    }
-    return defaultTypes.getTypeParser(typeId, format);
-  },
-};
+export function parsePostgresVector(value: string): number[] | string {
+  if (!value.startsWith('[') || !value.endsWith(']')) return value;
+  const body = value.slice(1, -1);
+  if (body === '') return [];
+  const parsed = body.split(',').map((entry) => Number(entry));
+  return parsed.every(Number.isFinite) ? parsed : value;
+}
 
 function fieldMetadata(fields: readonly FieldDef[]) {
   return fields.map((field) => ({
@@ -163,6 +155,24 @@ export class PostgresDriver implements DatabaseDriver {
 
   private pool: Pool | null = null;
   private fatalErrorListener: ((error: unknown) => void) | null = null;
+  private readonly extensionTypeParsers = new Map<number, (value: string) => unknown>();
+  private readonly postgresTypes = {
+    getTypeParser: (typeId: number, format?: 'text' | 'binary') => {
+      if (format === 'binary') return defaultTypes.getTypeParser(typeId, format);
+      const extensionParser = this.extensionTypeParsers.get(typeId);
+      if (extensionParser) return extensionParser;
+      if (typeId === oid.date) {
+        return (value: string) => new Date(`${value}T00:00:00.000Z`);
+      }
+      if (typeId === oid.timestamp) {
+        return (value: string) => new Date(`${value.replace(' ', 'T')}Z`);
+      }
+      if (typeId === oid.timestamptz) {
+        return (value: string) => new Date(value);
+      }
+      return defaultTypes.getTypeParser(typeId, format);
+    },
+  };
 
   public constructor(private readonly config: PostgresSqlConfig) {}
 
@@ -183,7 +193,7 @@ export class PostgresDriver implements DatabaseDriver {
       application_name: resourceName,
       keepAlive: true,
       options: '-c search_path=public,pg_catalog',
-      types: postgresTypes,
+      types: this.postgresTypes,
     };
     const pool = new Pool(options);
     pool.on('error', (error) => this.reportFatalError(error));
@@ -213,7 +223,10 @@ export class PostgresDriver implements DatabaseDriver {
       this.databaseName = first?.databaseName ?? null;
       this.pool = pool;
       this.ready = true;
+      await this.refreshExtensionTypes();
     } catch (error) {
+      this.pool = null;
+      this.ready = false;
       await pool.end();
       throw error;
     }
@@ -249,6 +262,27 @@ export class PostgresDriver implements DatabaseDriver {
 
   public async healthCheck(): Promise<void> {
     await this.guard(this.requirePool().query('SELECT 1').then(() => undefined));
+  }
+
+  public async refreshExtensionTypes(): Promise<void> {
+    if (this.config.parseVectorResults === false) {
+      this.extensionTypeParsers.clear();
+      return;
+    }
+    const pool = this.pool;
+    if (!pool) return;
+    const result = await pool.query<{ oid: number; typeName: string }>(
+      `SELECT type.oid::int AS oid, type.typname AS "typeName"
+         FROM pg_catalog.pg_type type
+         JOIN pg_catalog.pg_extension extension
+           ON extension.extnamespace = type.typnamespace
+          AND extension.extname = 'vector'
+        WHERE type.typname IN ('vector', 'halfvec')`,
+    );
+    this.extensionTypeParsers.clear();
+    for (const row of result.rows) {
+      this.extensionTypeParsers.set(Number(row.oid), parsePostgresVector);
+    }
   }
 
   public getPoolStatus(): PoolStatus {

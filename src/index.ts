@@ -9,6 +9,7 @@ import { registerSchemaExports } from './api/schema.js';
 import { DatabaseService, type DatabaseStatus } from './core/database.js';
 import { MySqlDriver } from './drivers/mysql.js';
 import { PostgresDriver } from './drivers/postgres.js';
+import { PostgresExtensionRegistry } from './postgres-extensions.js';
 import { PostgresSchemaManager } from './postgres-schema/manager.js';
 import { SchemaManager } from './schema/manager.js';
 
@@ -26,6 +27,9 @@ function postgresService(databaseConfig: PostgresSqlConfig): DatabaseService {
 
 const mysqlDatabase = config.mysql ? mysqlService(config.mysql) : null;
 const postgresDatabase = config.postgres ? postgresService(config.postgres) : null;
+const postgresExtensions = postgresDatabase
+  ? new PostgresExtensionRegistry(postgresDatabase)
+  : null;
 const primaryDatabase = mysqlDatabase ?? postgresDatabase!;
 
 const mysqlSchemaDatabase =
@@ -53,6 +57,7 @@ const postgresSchemas =
         mode: config.schemaMode,
         allowBlocking: config.schemaAllowBlocking,
         applicationDatabase: postgresDatabase,
+        extensionRegistry: postgresExtensions!,
         ...(config.postgres?.schemaLockTimeout !== undefined
           ? { lockTimeout: config.postgres.schemaLockTimeout }
           : {}),
@@ -62,7 +67,10 @@ const postgresSchemas =
 function statusFor(dialect?: string): DatabaseStatus | null {
   const normalized = dialect?.trim().toLowerCase();
   if (normalized === 'postgres' || normalized === 'postgresql') {
-    return postgresDatabase?.getStatus() ?? null;
+    const status = postgresDatabase?.getStatus();
+    return status && postgresExtensions
+      ? { ...status, extensions: postgresExtensions.cachedSummary() }
+      : status ?? null;
   }
   if (normalized === 'mysql' || normalized === 'mariadb') {
     return mysqlDatabase?.getStatus() ?? null;
@@ -73,7 +81,7 @@ function statusFor(dialect?: string): DatabaseStatus | null {
 function allStatuses(): { mysql: DatabaseStatus | null; postgresql: DatabaseStatus | null } {
   return {
     mysql: mysqlDatabase?.getStatus() ?? null,
-    postgresql: postgresDatabase?.getStatus() ?? null,
+    postgresql: statusFor('postgresql'),
   };
 }
 
@@ -208,6 +216,41 @@ if (isConcreteOxmysqlActive()) {
       },
       false,
     );
+    RegisterCommand(
+      'qbxsql_extensions',
+      (source: number) => {
+        if (source !== 0) return;
+        if (!postgresExtensions) {
+          console.log(`[${resourceName}] PostgreSQL is not configured.`);
+          return;
+        }
+        void postgresExtensions.diagnostics().then(
+          (diagnostic) => {
+            console.log(
+              `[${resourceName}] PostgreSQL extensions checked at ${new Date(diagnostic.checkedAt).toISOString()}`,
+            );
+            console.log(
+              `[${resourceName}] installed: ${diagnostic.installed.map((extension) =>
+                `${extension.name}@${extension.version} (${extension.schema})`).join(', ') || '(none)'}`,
+            );
+            for (const report of diagnostic.requirements) {
+              console.log(
+                `[${resourceName}] ${report.resource}: ${report.satisfied ? 'ready' : 'action required'}`,
+              );
+              for (const extension of report.extensions) {
+                console.log(`[${resourceName}]   ${extension.state}: ${extension.message}`);
+              }
+            }
+          },
+          (error: unknown) => console.error(
+            `[${resourceName}] PostgreSQL extension diagnostics failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        );
+      },
+      false,
+    );
   }
 }
 
@@ -245,6 +288,7 @@ export {
   mysqlSchemaDatabase,
   mysqlSchemas,
   postgresDatabase,
+  postgresExtensions,
   postgresSchemaDatabase,
   postgresSchemas,
   schemaDatabase,

@@ -10,6 +10,7 @@ import {
   PostgresSchemaPendingChangesError,
   type PostgresSchemaManager,
 } from '../../src/postgres-schema/manager.js';
+import { PostgresExtensionRequirementError } from '../../src/postgres-extensions.js';
 import type {
   PostgresResourceSchema,
   PostgresSchemaEnsureResult,
@@ -86,5 +87,57 @@ describe('PostgreSQL schema exports', () => {
       code: 'QBXSQL_POSTGRES_SCHEMA_PENDING_CHANGES',
       result: pending,
     });
+  });
+
+  test('returns actionable extension requirement errors and diagnostics', async () => {
+    const exports = new Map<string, ExportFunction>();
+    const report = {
+      resource: 'housing',
+      satisfied: false,
+      checkedAt: 1,
+      extensions: [{
+        name: 'vector',
+        state: 'not-installed' as const,
+        availableVersion: '0.8.5',
+        installedVersion: null,
+        schema: null,
+        message: 'enable vector',
+      }],
+    };
+    const diagnostic = {
+      checkedAt: 1,
+      requirements: [report],
+      installed: [],
+    };
+    const manager = {
+      ensure: async () => {
+        throw new PostgresExtensionRequirementError(report);
+      },
+      extensions: {
+        diagnostics: async () => diagnostic,
+      },
+    } as unknown as PostgresSchemaManager;
+    registerPostgresSchemaExports(manager, {
+      addExport: (name, callback) => exports.set(name, callback),
+      addProviderExport: () => {},
+      invokingResource: () => 'housing',
+    });
+
+    const error = await new Promise<Record<string, unknown>>((resolve) => {
+      exports.get('postgresEnsureSchema')!(
+        schema,
+        (_value: unknown, failure?: Record<string, unknown>) => resolve(failure!),
+      );
+    });
+    expect(error).toMatchObject({
+      code: 'QBXSQL_POSTGRES_EXTENSION_REQUIRED',
+      extensions: report,
+    });
+    const returned = await new Promise((resolve, reject) => {
+      exports.get('postgresGetExtensions')!(
+        (value: unknown, failure?: unknown) => failure ? reject(failure) : resolve(value),
+      );
+    });
+    expect(returned).toEqual(diagnostic);
   });
 });

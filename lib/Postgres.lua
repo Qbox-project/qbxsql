@@ -121,6 +121,76 @@ Postgres.ready = setmetatable({ await = onReady }, {
     end
 })
 
+local function finiteNumber(value, label)
+    if type(value) ~= 'number' or value ~= value or value == math.huge or value == -math.huge then
+        error(("%s must contain finite numbers"):format(label))
+    end
+    return value
+end
+
+function Postgres.vector(values)
+    assert(type(values) == 'table', 'Postgres.vector expects an array')
+    local length = #values
+    assert(length > 0, 'Postgres.vector expects at least one value')
+    local encoded = {}
+    for key in pairs(values) do
+        if type(key) ~= 'number' or key < 1 or key > length or key % 1 ~= 0 then
+            error('Postgres.vector expects a dense numeric array')
+        end
+    end
+    for index = 1, length do
+        encoded[index] = tostring(finiteNumber(values[index], 'Postgres.vector'))
+    end
+    return ('[%s]'):format(table.concat(encoded, ','))
+end
+
+Postgres.halfvec = Postgres.vector
+
+function Postgres.sparsevec(dimensions, values)
+    assert(type(dimensions) == 'number' and dimensions % 1 == 0 and dimensions > 0,
+        'Postgres.sparsevec dimensions must be a positive integer')
+    assert(type(values) == 'table', 'Postgres.sparsevec values must be an index/value table')
+    local entries = {}
+    for index, value in pairs(values) do
+        assert(type(index) == 'number' and index % 1 == 0 and index >= 1 and index <= dimensions,
+            'Postgres.sparsevec indexes must be integers within dimensions')
+        entries[#entries + 1] = { index = index, value = finiteNumber(value, 'Postgres.sparsevec') }
+    end
+    table.sort(entries, function(left, right)
+        return left.index < right.index
+    end)
+    local encoded = {}
+    for index, entry in ipairs(entries) do
+        encoded[index] = ('%d:%s'):format(entry.index, tostring(entry.value))
+    end
+    return ('{%s}/%d'):format(table.concat(encoded, ','), dimensions)
+end
+
+local function extensionsCall(callback)
+    if callback and not isCallback(callback) then
+        error(("First argument expected function, received '%s'"):format(type(callback)))
+    end
+    return adapter.postgresGetExtensions(nil, callback)
+end
+
+Postgres.extensions = setmetatable({
+    await = function()
+        local response = promise.new()
+        extensionsCall(function(result, err)
+            if err then
+                response:reject(err)
+            else
+                response:resolve(result)
+            end
+        end)
+        return Await(response)
+    end
+}, {
+    __call = function(_, callback)
+        return extensionsCall(callback)
+    end
+})
+
 local function schemaCall(method, schema, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
     return adapter[method](nil, schema, callback, resourceName)

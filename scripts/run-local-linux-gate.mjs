@@ -26,7 +26,7 @@ const DEFAULT_ARTIFACT_SHA256 =
   '4d55acd1306651aecf8457699485c736d08aae37b075c493a66dacd623402631';
 const DATABASE_IMAGE = 'mariadb:11.4';
 const DATABASE_NAME = 'qbxsql_fxserver';
-const POSTGRES_IMAGE = 'postgres:16-alpine';
+const POSTGRES_IMAGE = 'pgvector/pgvector:0.8.5-pg16-bookworm';
 const POSTGRES_DATABASE_NAME = 'qbxsql_fxserver';
 
 function option(name) {
@@ -250,6 +250,21 @@ try {
   );
   postgresStarted = true;
   await waitForDatabase(postgres, 'PostgreSQL');
+  await run(
+    'docker',
+    [
+      'exec',
+      postgres,
+      'psql',
+      '--username',
+      'postgres',
+      '--dbname',
+      POSTGRES_DATABASE_NAME,
+      '--command',
+      'CREATE EXTENSION IF NOT EXISTS vector',
+    ],
+    { capture: true },
+  );
 
   licenseKey ??= await promptCfxKey();
   await run(

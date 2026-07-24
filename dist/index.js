@@ -15874,21 +15874,21 @@ var require_query2 = __commonJS({
           this.queryTimeout = null;
         }
         if (this.onResult) {
-          let rows3, fields;
+          let rows4, fields;
           if (this._resultIndex === 0) {
-            rows3 = this._rows[0];
+            rows4 = this._rows[0];
             fields = this._fields[0];
           } else {
-            rows3 = this._rows;
+            rows4 = this._rows;
             fields = this._fields;
           }
           if (fields) {
             process2.nextTick(() => {
-              this.onResult(null, rows3, fields);
+              this.onResult(null, rows4, fields);
             });
           } else {
             process2.nextTick(() => {
-              this.onResult(null, rows3);
+              this.onResult(null, rows4);
             });
           }
         }
@@ -18379,9 +18379,9 @@ var require_connection = __commonJS({
           Packets.BinaryRow.toPacket(column, this.serverConfig.encoding)
         );
       }
-      writeTextResult(rows3, columns, binary = false) {
+      writeTextResult(rows4, columns, binary = false) {
         this.writeColumns(columns);
-        rows3.forEach((row) => {
+        rows4.forEach((row) => {
           const arrayRow = new Array(columns.length);
           columns.forEach((column) => {
             arrayRow.push(row[column.name]);
@@ -18493,12 +18493,12 @@ var require_make_done_cb = __commonJS({
     "use strict";
     var { applyCapturedStack } = require_capture_local_err();
     function makeDoneCb(resolve, reject, stackHolder) {
-      return function(err, rows3, fields) {
+      return function(err, rows4, fields) {
         if (err) {
           applyCapturedStack(err, stackHolder);
           reject(err);
         } else {
-          resolve([rows3, fields]);
+          resolve([rows4, fields]);
         }
       };
     }
@@ -19135,9 +19135,9 @@ var require_pool = __commonJS({
             let queryError = null;
             const origOnResult = cmdQuery.onResult;
             if (origOnResult) {
-              cmdQuery.onResult = function(err2, rows3, fields) {
+              cmdQuery.onResult = function(err2, rows4, fields) {
                 queryError = err2 || null;
-                origOnResult(err2, rows3, fields);
+                origOnResult(err2, rows4, fields);
               };
             } else {
               cmdQuery.once("error", (err2) => {
@@ -19168,11 +19168,11 @@ var require_pool = __commonJS({
             return cb(err);
           }
           try {
-            conn.execute(sql, values, (err2, rows3, fields) => {
+            conn.execute(sql, values, (err2, rows4, fields) => {
               if (isReadOnlyError(err2)) {
                 conn.destroy();
               }
-              cb(err2, rows3, fields);
+              cb(err2, rows4, fields);
             }).once("end", () => {
               conn.release();
             });
@@ -22272,12 +22272,12 @@ var require_query3 = __commonJS({
       handlePortalSuspended(connection) {
         this._getRows(connection, this.rows);
       }
-      _getRows(connection, rows3) {
+      _getRows(connection, rows4) {
         connection.execute({
           portal: this.portal,
-          rows: rows3
+          rows: rows4
         });
-        if (!rows3) {
+        if (!rows4) {
           connection.sync();
         } else {
           connection.flush();
@@ -22763,7 +22763,7 @@ var require_serializer = __commonJS({
         return emptyExecute;
       }
       const portal = config2.portal || "";
-      const rows3 = config2.rows || 0;
+      const rows4 = config2.rows || 0;
       const portalLength = Buffer.byteLength(portal);
       const len = 4 + portalLength + 1 + 4;
       const buff = Buffer.allocUnsafe(1 + len);
@@ -22771,7 +22771,7 @@ var require_serializer = __commonJS({
       buff.writeInt32BE(len, 1);
       buff.write(portal, 5, "utf-8");
       buff[portalLength + 5] = 0;
-      buff.writeUInt32BE(rows3, buff.length - 4);
+      buff.writeUInt32BE(rows4, buff.length - 4);
       return buff;
     }, "execute");
     var cancel = /* @__PURE__ */ __name((processID, secretKey) => {
@@ -24999,7 +24999,7 @@ var require_query4 = __commonJS({
       const self2 = this;
       this.native = client.native;
       client.native.arrayMode = this._arrayMode;
-      let after = /* @__PURE__ */ __name(function(err, rows3, results) {
+      let after = /* @__PURE__ */ __name(function(err, rows4, results) {
         client.native.arrayMode = false;
         setImmediate(function() {
           self2.emit("_done");
@@ -25009,13 +25009,13 @@ var require_query4 = __commonJS({
         }
         if (self2._emitRowEvents) {
           if (results.length > 1) {
-            rows3.forEach((rowOfRows, i) => {
+            rows4.forEach((rowOfRows, i) => {
               rowOfRows.forEach((row) => {
                 self2.emit("row", row, results[i]);
               });
             });
           } else {
-            rows3.forEach(function(row) {
+            rows4.forEach(function(row) {
               self2.emit("row", row, results);
             });
           }
@@ -25408,6 +25408,7 @@ __export(index_exports, {
   mysqlSchemaDatabase: () => mysqlSchemaDatabase,
   mysqlSchemas: () => mysqlSchemas,
   postgresDatabase: () => postgresDatabase,
+  postgresExtensions: () => postgresExtensions,
   postgresSchemaDatabase: () => postgresSchemaDatabase,
   postgresSchemas: () => postgresSchemas,
   schemaDatabase: () => schemaDatabase,
@@ -25611,7 +25612,8 @@ function loadConfig() {
           allowBlocking,
           ...postgresSchemaConnectionString ? { schemaConnectionString: postgresSchemaConnectionString } : {}
         }),
-        minimumServerVersion: 16e4
+        minimumServerVersion: 16e4,
+        parseVectorResults: booleanConvar("qbxsql_postgres_parse_vector_results", true)
       }
     } : {}
   };
@@ -26482,15 +26484,191 @@ function schemaChecksum(schema) {
 }
 __name(schemaChecksum, "schemaChecksum");
 
-// src/postgres-schema/introspect.ts
+// src/postgres-extensions.ts
+var PostgresExtensionRequirementError = class extends Error {
+  constructor(report) {
+    const failures = report.extensions.filter((extension) => extension.state !== "ready").map((extension) => extension.message);
+    super(
+      failures.length > 0 ? `PostgreSQL extension requirements for '${report.resource}' are not satisfied: ${failures.join("; ")}` : `PostgreSQL extension requirements for '${report.resource}' are not satisfied.`
+    );
+    this.report = report;
+    this.name = "PostgresExtensionRequirementError";
+  }
+  report;
+  static {
+    __name(this, "PostgresExtensionRequirementError");
+  }
+  code = "QBXSQL_POSTGRES_EXTENSION_REQUIRED";
+};
 function rows(value) {
   return Array.isArray(value) ? value : [];
 }
 __name(rows, "rows");
+function versionParts(version) {
+  return version.toLowerCase().split(/([0-9]+)/).filter(Boolean).map((part) => /^[0-9]+$/.test(part) ? Number(part) : part);
+}
+__name(versionParts, "versionParts");
+function comparePostgresExtensionVersions(left, right) {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = leftParts[index] ?? 0;
+    const b = rightParts[index] ?? 0;
+    if (a === b) continue;
+    if (typeof a === "number" && typeof b === "number") return a < b ? -1 : 1;
+    if (typeof a === "number") return 1;
+    if (typeof b === "number") return -1;
+    return a < b ? -1 : 1;
+  }
+  return 0;
+}
+__name(comparePostgresExtensionVersions, "comparePostgresExtensionVersions");
+var PostgresExtensionRegistry = class {
+  constructor(database2) {
+    this.database = database2;
+  }
+  database;
+  static {
+    __name(this, "PostgresExtensionRegistry");
+  }
+  requirements = /* @__PURE__ */ new Map();
+  reports = /* @__PURE__ */ new Map();
+  async check(resource, requirements) {
+    const normalized = requirements.map((requirement) => ({ ...requirement }));
+    this.requirements.set(resource, normalized);
+    const names = normalized.map((requirement) => requirement.name);
+    const available = names.length === 0 ? [] : rows(await this.database.query(
+      `SELECT available.name,
+                available.default_version AS "availableVersion",
+                installed.extversion AS "installedVersion",
+                namespace.nspname AS schema
+           FROM pg_catalog.pg_available_extensions available
+           LEFT JOIN pg_catalog.pg_extension installed
+             ON installed.extname = available.name
+           LEFT JOIN pg_catalog.pg_namespace namespace
+             ON namespace.oid = installed.extnamespace
+          WHERE available.name = ANY($1::text[])
+          ORDER BY available.name`,
+      [names]
+    ));
+    const byName = new Map(available.map((row) => [String(row.name), row]));
+    const extensions = normalized.map((requirement) => {
+      const row = byName.get(requirement.name);
+      const availableVersion = row?.availableVersion == null ? null : String(row.availableVersion);
+      const installedVersion = row?.installedVersion == null ? null : String(row.installedVersion);
+      const schema = row?.schema == null ? null : String(row.schema);
+      if (!row) {
+        return {
+          ...requirement,
+          state: "unavailable",
+          availableVersion,
+          installedVersion,
+          schema,
+          message: `extension '${requirement.name}' is not available on this PostgreSQL server; install its server package before enabling it`
+        };
+      }
+      if (!installedVersion) {
+        return {
+          ...requirement,
+          state: "not-installed",
+          availableVersion,
+          installedVersion,
+          schema,
+          message: `extension '${requirement.name}' is available${availableVersion ? ` (${availableVersion})` : ""} but is not enabled in database '${this.database.driver.databaseName ?? "unknown"}'; run CREATE EXTENSION "${requirement.name}" using operator credentials`
+        };
+      }
+      if (requirement.minimumVersion && comparePostgresExtensionVersions(installedVersion, requirement.minimumVersion) < 0) {
+        return {
+          ...requirement,
+          state: "version-too-old",
+          availableVersion,
+          installedVersion,
+          schema,
+          message: `extension '${requirement.name}' is ${installedVersion}, but ${requirement.minimumVersion} or newer is required`
+        };
+      }
+      return {
+        ...requirement,
+        state: "ready",
+        availableVersion,
+        installedVersion,
+        schema,
+        message: `extension '${requirement.name}' ${installedVersion} is ready`
+      };
+    });
+    const report = {
+      resource,
+      satisfied: extensions.every((extension) => extension.state === "ready"),
+      checkedAt: Date.now(),
+      extensions
+    };
+    this.reports.set(resource, report);
+    if (report.satisfied && names.includes("vector")) {
+      await this.database.driver.refreshExtensionTypes?.();
+    }
+    return report;
+  }
+  async require(resource, requirements) {
+    const report = await this.check(resource, requirements);
+    if (!report.satisfied) throw new PostgresExtensionRequirementError(report);
+    return report;
+  }
+  async diagnostics() {
+    for (const [resource, requirements] of this.requirements) {
+      await this.check(resource, requirements);
+    }
+    const installed = rows(await this.database.query(
+      `SELECT extension.extname AS name,
+              extension.extversion AS version,
+              namespace.nspname AS schema
+         FROM pg_catalog.pg_extension extension
+         JOIN pg_catalog.pg_namespace namespace
+           ON namespace.oid = extension.extnamespace
+        ORDER BY extension.extname`
+    )).map((row) => ({
+      name: String(row.name),
+      version: String(row.version),
+      schema: String(row.schema)
+    }));
+    return {
+      checkedAt: Date.now(),
+      requirements: [...this.reports.values()].sort((left, right) => left.resource.localeCompare(right.resource)),
+      installed
+    };
+  }
+  cachedSummary() {
+    const reports = [...this.reports.values()];
+    const extensions = reports.flatMap((report) => report.extensions);
+    const ready = extensions.filter((extension) => extension.state === "ready").length;
+    return {
+      required: extensions.length,
+      ready,
+      unsatisfied: extensions.length - ready,
+      resources: reports.length
+    };
+  }
+};
+
+// src/postgres-schema/introspect.ts
+function rows2(value) {
+  return Array.isArray(value) ? value : [];
+}
+__name(rows2, "rows");
 function stringArray(value) {
   return Array.isArray(value) ? value.map(String) : [];
 }
 __name(stringArray, "stringArray");
+function indexOptions(value) {
+  const result = {};
+  for (const option of stringArray(value)) {
+    const separator = option.indexOf("=");
+    if (separator < 1) continue;
+    result[option.slice(0, separator)] = option.slice(separator + 1);
+  }
+  return result;
+}
+__name(indexOptions, "indexOptions");
 function actionName(value) {
   const actions = {
     a: "NO ACTION",
@@ -26547,6 +26725,15 @@ async function introspectPostgresDatabase(database2, tableNames) {
               idx.indisprimary AS "primary",
               idx.indisvalid AS valid,
               access_method.amname AS method,
+              ARRAY(
+                SELECT operator_class.opcname
+                  FROM unnest(idx.indclass::oid[]) WITH ORDINALITY AS class(oid, position)
+                  JOIN pg_catalog.pg_opclass operator_class
+                    ON operator_class.oid = class.oid
+                 WHERE class.position <= idx.indnkeyatts
+                 ORDER BY class.position
+              )::text[] AS "operatorClasses",
+              index_class.reloptions AS options,
               pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS predicate,
               ARRAY(
                 SELECT pg_catalog.pg_get_indexdef(idx.indexrelid, position, TRUE)
@@ -26600,12 +26787,12 @@ async function introspectPostgresDatabase(database2, tableNames) {
          LEFT JOIN pg_catalog.pg_class referenced_class ON referenced_class.oid = con.confrelid
         WHERE n.nspname = 'public'
           AND table_class.relname = ANY($1::text[])
-          AND con.contype IN ('p', 'f', 'c')`,
+          AND con.contype IN ('p', 'f', 'c', 'x')`,
       [names]
     )
   ]);
   const result = /* @__PURE__ */ new Map();
-  for (const row of rows(tableRows)) {
+  for (const row of rows2(tableRows)) {
     const name = String(row.tableName);
     result.set(name, {
       name,
@@ -26614,11 +26801,12 @@ async function introspectPostgresDatabase(database2, tableNames) {
       indexes: /* @__PURE__ */ new Map(),
       checks: /* @__PURE__ */ new Map(),
       foreignKeys: /* @__PURE__ */ new Map(),
+      exclusions: /* @__PURE__ */ new Map(),
       primaryKey: [],
       primaryKeyName: null
     });
   }
-  for (const row of rows(columnRows)) {
+  for (const row of rows2(columnRows)) {
     const table = result.get(String(row.tableName));
     if (!table) continue;
     const column = {
@@ -26631,7 +26819,7 @@ async function introspectPostgresDatabase(database2, tableNames) {
     };
     table.columns.set(column.name, column);
   }
-  for (const row of rows(indexRows)) {
+  for (const row of rows2(indexRows)) {
     const table = result.get(String(row.tableName));
     if (!table) continue;
     const index = {
@@ -26642,11 +26830,13 @@ async function introspectPostgresDatabase(database2, tableNames) {
       primary: Boolean(row.primary),
       valid: Boolean(row.valid),
       method: String(row.method),
+      operatorClasses: stringArray(row.operatorClasses),
+      options: indexOptions(row.options),
       predicate: row.predicate === null || row.predicate === void 0 ? null : String(row.predicate)
     };
     table.indexes.set(index.name, index);
   }
-  for (const row of rows(constraintRows)) {
+  for (const row of rows2(constraintRows)) {
     const table = result.get(String(row.tableName));
     if (!table) continue;
     if (row.type === "p") {
@@ -26672,6 +26862,14 @@ async function introspectPostgresDatabase(database2, tableNames) {
         validated: Boolean(row.validated)
       };
       table.foreignKeys.set(foreignKey.name, foreignKey);
+    } else if (row.type === "x") {
+      const exclusion = {
+        name: String(row.name),
+        definition: String(row.definition),
+        deferrable: Boolean(row.deferrable),
+        initiallyDeferred: Boolean(row.initiallyDeferred)
+      };
+      table.exclusions.set(exclusion.name, exclusion);
     }
   }
   for (const table of result.values()) {
@@ -26685,6 +26883,7 @@ __name(introspectPostgresDatabase, "introspectPostgresDatabase");
 
 // src/postgres-schema/validate.ts
 var identifierPattern2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var extensionNamePattern = /^[A-Za-z][A-Za-z0-9_-]*$/;
 var columnTypes2 = /* @__PURE__ */ new Set([
   "smallint",
   "integer",
@@ -26707,7 +26906,40 @@ var columnTypes2 = /* @__PURE__ */ new Set([
   "json",
   "jsonb",
   "inet",
-  "cidr"
+  "cidr",
+  "int4range",
+  "int8range",
+  "numrange",
+  "tsrange",
+  "tstzrange",
+  "daterange",
+  "geometry",
+  "geography",
+  "vector",
+  "halfvec",
+  "sparsevec"
+]);
+var vectorTypes = /* @__PURE__ */ new Set(["vector", "halfvec", "sparsevec"]);
+var spatialTypes = /* @__PURE__ */ new Set(["geometry", "geography"]);
+var spatialSubtypes = /* @__PURE__ */ new Set([
+  "geometry",
+  "point",
+  "linestring",
+  "polygon",
+  "multipoint",
+  "multilinestring",
+  "multipolygon",
+  "geometrycollection"
+]);
+var indexMethods = /* @__PURE__ */ new Set([
+  "btree",
+  "gin",
+  "gist",
+  "spgist",
+  "brin",
+  "hash",
+  "hnsw",
+  "ivfflat"
 ]);
 var integerTypes2 = /* @__PURE__ */ new Set(["smallint", "integer", "int", "bigint"]);
 var defaultExpressions = /* @__PURE__ */ new Set([
@@ -26783,6 +27015,28 @@ function validateColumn2(name, source) {
   } else if (column.precision !== void 0 || column.scale !== void 0) {
     throw new Error(`Column '${name}' can only define precision/scale for numeric.`);
   }
+  if (vectorTypes.has(type)) {
+    const maximumDimensions = type === "sparsevec" ? 1e9 : 16e3;
+    if (!Number.isInteger(column.dimensions) || (column.dimensions ?? 0) < 1 || (column.dimensions ?? 0) > maximumDimensions) {
+      throw new Error(
+        `Vector column '${name}' requires dimensions between 1 and ${maximumDimensions}.`
+      );
+    }
+  } else if (column.dimensions !== void 0) {
+    throw new Error(`Column '${name}' can only define dimensions for vector types.`);
+  }
+  if (spatialTypes.has(type)) {
+    if (column.spatialType === void 0 !== (column.srid === void 0)) {
+      throw new Error(
+        `Spatial column '${name}' must define spatialType and srid together or omit both.`
+      );
+    }
+    if (column.spatialType !== void 0 && (!spatialSubtypes.has(column.spatialType) || !Number.isInteger(column.srid) || (column.srid ?? -1) < 0 || (column.srid ?? 1e6) > 999999)) {
+      throw new Error(`Spatial column '${name}' has an invalid spatialType or srid.`);
+    }
+  } else if (column.spatialType !== void 0 || column.srid !== void 0) {
+    throw new Error(`Column '${name}' can only define spatialType/srid for PostGIS types.`);
+  }
   if (column.default !== void 0 && column.defaultExpression !== void 0) {
     throw new Error(`Column '${name}' cannot define both default and defaultExpression.`);
   }
@@ -26804,32 +27058,131 @@ function validateColumn2(name, source) {
   return column;
 }
 __name(validateColumn2, "validateColumn");
-function validateIndex2(index, columns) {
+function validateIndex2(index, columns, checkColumnExistence = true) {
   assertPostgresIdentifier(index.name, "index name");
-  const indexColumns = orderedArray2(index.columns, `Index '${index.name}' columns`);
+  const indexColumns = orderedArray2(
+    index.columns,
+    `Index '${index.name}' columns`
+  );
   if (indexColumns.length === 0) throw new Error(`Index '${index.name}' requires columns.`);
-  for (const column of indexColumns) {
-    assertPostgresIdentifier(column, `index '${index.name}' column`);
-    if (!columns[column]) throw new Error(`Index '${index.name}' references missing column '${column}'.`);
-  }
+  const normalizedColumns = indexColumns.map((column) => {
+    const definition = typeof column === "string" ? { name: column } : column;
+    if (!definition || typeof definition !== "object") {
+      throw new Error(`Index '${index.name}' columns must be strings or objects.`);
+    }
+    assertPostgresIdentifier(definition.name, `index '${index.name}' column`);
+    if (checkColumnExistence && !columns[definition.name]) {
+      throw new Error(`Index '${index.name}' references missing column '${definition.name}'.`);
+    }
+    if (definition.operatorClass !== void 0) {
+      assertPostgresIdentifier(
+        definition.operatorClass,
+        `index '${index.name}' operator class`
+      );
+    }
+    if (definition.order !== void 0 && !["ASC", "DESC"].includes(definition.order)) {
+      throw new Error(`Index '${index.name}' order must be ASC or DESC.`);
+    }
+    if (definition.nulls !== void 0 && !["FIRST", "LAST"].includes(definition.nulls)) {
+      throw new Error(`Index '${index.name}' nulls must be FIRST or LAST.`);
+    }
+    if (typeof column === "string") return column;
+    return {
+      name: definition.name,
+      ...definition.operatorClass ? { operatorClass: definition.operatorClass } : {},
+      ...definition.order ? { order: definition.order } : {},
+      ...definition.nulls ? { nulls: definition.nulls } : {}
+    };
+  });
   const include = index.include ? orderedArray2(index.include, `Index '${index.name}' include`) : void 0;
   for (const column of include ?? []) {
     assertPostgresIdentifier(column, `index '${index.name}' include column`);
-    if (!columns[column]) {
+    if (checkColumnExistence && !columns[column]) {
       throw new Error(`Index '${index.name}' includes missing column '${column}'.`);
     }
   }
   if (index.unique && index.method && index.method !== "btree") {
     throw new Error(`Unique index '${index.name}' must use btree.`);
   }
+  if (index.method && !indexMethods.has(index.method)) {
+    throw new Error(`Index '${index.name}' has unsupported method '${index.method}'.`);
+  }
+  if (checkColumnExistence && (index.method === "hnsw" || index.method === "ivfflat")) {
+    for (const column of normalizedColumns) {
+      const name = typeof column === "string" ? column : column.name;
+      const definition = columns[name];
+      if (!definition || !vectorTypes.has(definition.type)) {
+        throw new Error(
+          `${index.method.toUpperCase()} index '${index.name}' requires vector, halfvec, or sparsevec columns.`
+        );
+      }
+      const maximumIndexedDimensions = definition.type === "vector" ? 2e3 : definition.type === "halfvec" ? 4e3 : Number.POSITIVE_INFINITY;
+      if ((definition.dimensions ?? 0) > maximumIndexedDimensions) {
+        throw new Error(
+          `${index.method.toUpperCase()} index '${index.name}' supports at most ${maximumIndexedDimensions} dimensions for ${definition.type}.`
+        );
+      }
+    }
+  }
+  let options;
+  if (index.options !== void 0) {
+    if (!index.options || typeof index.options !== "object" || Array.isArray(index.options)) {
+      throw new Error(`Index '${index.name}' options must be an object.`);
+    }
+    options = {};
+    for (const [key, value] of Object.entries(index.options)) {
+      assertPostgresIdentifier(key, `index '${index.name}' option`);
+      if (!["string", "number", "boolean"].includes(typeof value) || typeof value === "number" && !Number.isFinite(value) || typeof value === "string" && (value.length === 0 || value.includes("\0"))) {
+        throw new Error(`Index '${index.name}' option '${key}' has an unsupported value.`);
+      }
+      options[key] = value;
+    }
+  }
   return {
     ...index,
-    columns: indexColumns,
+    columns: normalizedColumns,
     ...include ? { include } : {},
+    ...options ? { options } : {},
     ...index.where ? { where: sqlFragment(index.where, `Index '${index.name}' predicate`) } : {}
   };
 }
 __name(validateIndex2, "validateIndex");
+function validateExclusion(exclusion, columns, checkColumnExistence = true) {
+  assertPostgresIdentifier(exclusion.name, "exclusion constraint name");
+  if (exclusion.method && !["gist", "spgist"].includes(exclusion.method)) {
+    throw new Error(`Exclusion '${exclusion.name}' method must be gist or spgist.`);
+  }
+  const elements = orderedArray2(
+    exclusion.elements,
+    `Exclusion '${exclusion.name}' elements`
+  );
+  if (elements.length === 0) throw new Error(`Exclusion '${exclusion.name}' requires elements.`);
+  const allowedOperators = /* @__PURE__ */ new Set(["=", "<>", "&&", "&&&", "<@", "@>", "-|-", "&<", "&>", "<<", ">>"]);
+  for (const element of elements) {
+    assertPostgresIdentifier(element.column, `exclusion '${exclusion.name}' column`);
+    if (checkColumnExistence && !columns[element.column]) {
+      throw new Error(`Exclusion '${exclusion.name}' references missing column '${element.column}'.`);
+    }
+    if (!allowedOperators.has(element.operator)) {
+      throw new Error(`Exclusion '${exclusion.name}' has unsupported operator '${element.operator}'.`);
+    }
+    if (element.operatorClass) {
+      assertPostgresIdentifier(
+        element.operatorClass,
+        `exclusion '${exclusion.name}' operator class`
+      );
+    }
+  }
+  if (exclusion.initiallyDeferred && !exclusion.deferrable) {
+    throw new Error(`Exclusion '${exclusion.name}' cannot be initially deferred unless deferrable.`);
+  }
+  return {
+    ...exclusion,
+    elements,
+    ...exclusion.where ? { where: sqlFragment(exclusion.where, `Exclusion '${exclusion.name}' predicate`) } : {}
+  };
+}
+__name(validateExclusion, "validateExclusion");
 function validateCheck(check) {
   assertPostgresIdentifier(check.name, "check constraint name");
   return {
@@ -26895,7 +27248,11 @@ function validateTable2(name, source) {
     source.foreignKeys ?? [],
     `Table '${name}' foreign keys`
   ).map((foreignKey) => validateForeignKey2(foreignKey, columns));
-  const names = [...indexes, ...checks, ...foreignKeys].map((entry) => entry.name);
+  const exclusions = orderedArray2(
+    source.exclusions ?? [],
+    `Table '${name}' exclusions`
+  ).map((exclusion) => validateExclusion(exclusion, columns));
+  const names = [...indexes, ...checks, ...foreignKeys, ...exclusions].map((entry) => entry.name);
   if (new Set(names).size !== names.length) {
     throw new Error(`Table '${name}' contains duplicate index or constraint names.`);
   }
@@ -26905,7 +27262,8 @@ function validateTable2(name, source) {
     ...primaryKey.length > 0 ? { primaryKey } : {},
     indexes,
     checks,
-    foreignKeys
+    foreignKeys,
+    exclusions
   };
 }
 __name(validateTable2, "validateTable");
@@ -26928,11 +27286,19 @@ function validateOperation(operation) {
       };
     }
     if (operation.type === "addIndex") {
-      assertPostgresIdentifier(operation.definition.name, "migration index name");
+      return {
+        ...operation,
+        definition: validateIndex2(operation.definition, {}, false)
+      };
     } else if (operation.type === "addCheck") {
       return { ...operation, definition: validateCheck(operation.definition) };
     } else if (operation.type === "addForeignKey") {
       assertPostgresIdentifier(operation.definition.name, "migration foreign key name");
+    } else if (operation.type === "addExclusion") {
+      return {
+        ...operation,
+        definition: validateExclusion(operation.definition, {}, false)
+      };
     }
   }
   if (operation.type === "sql") {
@@ -26943,6 +27309,68 @@ function validateOperation(operation) {
   return operation;
 }
 __name(validateOperation, "validateOperation");
+function validateExtensions(source) {
+  const requirements = orderedArray2(
+    source ?? [],
+    "PostgreSQL extensions"
+  ).map((requirement) => {
+    if (!requirement || typeof requirement !== "object") {
+      throw new Error("PostgreSQL extension requirements must be objects.");
+    }
+    if (typeof requirement.name !== "string" || !extensionNamePattern.test(requirement.name) || Buffer.byteLength(requirement.name, "utf8") > 63) {
+      throw new Error(
+        `Invalid extension name '${String(requirement.name)}'. Use at most 63 bytes of letters, numbers, underscores, and hyphens.`
+      );
+    }
+    const name = requirement.name.toLowerCase();
+    if (requirement.minimumVersion !== void 0 && (typeof requirement.minimumVersion !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(requirement.minimumVersion))) {
+      throw new Error(`Extension '${name}' minimumVersion has an invalid format.`);
+    }
+    return {
+      name,
+      ...requirement.minimumVersion ? { minimumVersion: requirement.minimumVersion } : {}
+    };
+  });
+  const names = requirements.map((requirement) => requirement.name);
+  if (new Set(names).size !== names.length) {
+    throw new Error("PostgreSQL extension requirements cannot contain duplicate names.");
+  }
+  return requirements.sort((left, right) => left.name.localeCompare(right.name));
+}
+__name(validateExtensions, "validateExtensions");
+function assertExtensionDeclarations(extensions, tables) {
+  const declared = new Set(extensions.map((extension) => extension.name));
+  let needsVector = false;
+  let needsTrigram = false;
+  let needsPostgis = false;
+  for (const table of Object.values(tables)) {
+    if (Object.values(table.columns).some((column) => vectorTypes.has(column.type))) {
+      needsVector = true;
+    }
+    if (Object.values(table.columns).some((column) => spatialTypes.has(column.type))) {
+      needsPostgis = true;
+    }
+    for (const index of table.indexes ?? []) {
+      if (index.method === "hnsw" || index.method === "ivfflat") needsVector = true;
+      for (const column of index.columns) {
+        const operatorClass = typeof column === "string" ? void 0 : column.operatorClass;
+        if (operatorClass === "gin_trgm_ops" || operatorClass === "gist_trgm_ops") {
+          needsTrigram = true;
+        }
+      }
+    }
+  }
+  if (needsVector && !declared.has("vector")) {
+    throw new Error("Schemas using vector types or indexes must declare extensions = {{ name = 'vector' }}.");
+  }
+  if (needsTrigram && !declared.has("pg_trgm")) {
+    throw new Error("Schemas using trigram operator classes must declare extensions = {{ name = 'pg_trgm' }}.");
+  }
+  if (needsPostgis && !declared.has("postgis")) {
+    throw new Error("Schemas using geometry/geography columns must declare extensions = {{ name = 'postgis' }}.");
+  }
+}
+__name(assertExtensionDeclarations, "assertExtensionDeclarations");
 function validateMigrations2(source, version) {
   const migrations = orderedArray2(source ?? [], "Migrations").map((migration) => ({
     ...migration,
@@ -26971,8 +27399,11 @@ function validatePostgresSchema(input) {
   const tables = Object.fromEntries(
     Object.entries(input.tables).map(([name, table]) => [name, validateTable2(name, table)])
   );
+  const extensions = validateExtensions(input.extensions);
+  assertExtensionDeclarations(extensions, tables);
   return {
     version: input.version,
+    extensions,
     tables,
     migrations: validateMigrations2(input.migrations, input.version)
   };
@@ -27009,6 +27440,12 @@ function postgresLiteral(value, type) {
 }
 __name(postgresLiteral, "postgresLiteral");
 function postgresType(column) {
+  if (column.type === "vector" || column.type === "halfvec" || column.type === "sparsevec") {
+    return `${column.type.toUpperCase()}(${column.dimensions})`;
+  }
+  if ((column.type === "geometry" || column.type === "geography") && column.spatialType && column.srid !== void 0) {
+    return `${column.type.toUpperCase()}(${column.spatialType.toUpperCase()},${column.srid})`;
+  }
   switch (column.type) {
     case "int":
       return "INTEGER";
@@ -27028,6 +27465,19 @@ function postgresType(column) {
   }
 }
 __name(postgresType, "postgresType");
+function postgresIndexColumnSql(column) {
+  if (typeof column === "string") return quotePostgresIdentifier(column);
+  const parts = [quotePostgresIdentifier(column.name)];
+  if (column.operatorClass) parts.push(quotePostgresIdentifier(column.operatorClass));
+  if (column.order) parts.push(column.order);
+  if (column.nulls) parts.push(`NULLS ${column.nulls}`);
+  return parts.join(" ");
+}
+__name(postgresIndexColumnSql, "postgresIndexColumnSql");
+function postgresIndexOptionSql(value) {
+  return typeof value === "string" ? postgresLiteral(value) : postgresLiteral(value);
+}
+__name(postgresIndexOptionSql, "postgresIndexOptionSql");
 function postgresDefault(column) {
   if (column.defaultExpression !== void 0) return column.defaultExpression;
   if (column.default !== void 0) return postgresLiteral(column.default, column.type);
@@ -27067,6 +27517,24 @@ function postgresForeignKeySql(foreignKey, notValid = false) {
   return parts.join(" ");
 }
 __name(postgresForeignKeySql, "postgresForeignKeySql");
+function postgresExclusionSql(exclusion) {
+  const method = (exclusion.method ?? "gist").toUpperCase();
+  const elements = exclusion.elements.map((element) => {
+    const operatorClass = element.operatorClass ? ` ${quotePostgresIdentifier(element.operatorClass)}` : "";
+    return `${quotePostgresIdentifier(element.column)}${operatorClass} WITH ${element.operator}`;
+  });
+  const parts = [
+    `CONSTRAINT ${quotePostgresIdentifier(exclusion.name)}`,
+    `EXCLUDE USING ${method} (${elements.join(", ")})`
+  ];
+  if (exclusion.where) parts.push(`WHERE (${exclusion.where})`);
+  if (exclusion.deferrable) {
+    parts.push("DEFERRABLE");
+    if (exclusion.initiallyDeferred) parts.push("INITIALLY DEFERRED");
+  }
+  return parts.join(" ");
+}
+__name(postgresExclusionSql, "postgresExclusionSql");
 function createPostgresTableSql(name, table) {
   const definitions = Object.entries(table.columns).map(
     ([column, definition]) => postgresColumnSql(column, definition)
@@ -27076,6 +27544,9 @@ function createPostgresTableSql(name, table) {
     definitions.push(`PRIMARY KEY (${primary.map(quotePostgresIdentifier).join(", ")})`);
   }
   for (const check of table.checks ?? []) definitions.push(postgresCheckSql(check));
+  for (const exclusion of table.exclusions ?? []) {
+    definitions.push(postgresExclusionSql(exclusion));
+  }
   return `CREATE TABLE ${qualifiedTable(name)} (
   ${definitions.join(",\n  ")}
 )`;
@@ -27085,7 +27556,8 @@ function createPostgresIndexSql(table, index, concurrently) {
   const method = (index.method ?? "btree").toUpperCase();
   const include = index.include && index.include.length > 0 ? ` INCLUDE (${index.include.map(quotePostgresIdentifier).join(", ")})` : "";
   const predicate = index.where ? ` WHERE ${index.where}` : "";
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX${concurrently ? " CONCURRENTLY" : ""} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(quotePostgresIdentifier).join(", ")})${include}${predicate}`;
+  const options = index.options && Object.keys(index.options).length > 0 ? ` WITH (${Object.entries(index.options).map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`).join(", ")})` : "";
+  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX${concurrently ? " CONCURRENTLY" : ""} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(", ")})${include}${options}${predicate}`;
 }
 __name(createPostgresIndexSql, "createPostgresIndexSql");
 function postgresMigrationStatements(operation) {
@@ -27146,6 +27618,10 @@ function postgresMigrationStatements(operation) {
           sql: `ALTER TABLE ${qualifiedTable(operation.table)} VALIDATE CONSTRAINT ${quotePostgresIdentifier(operation.definition.name)}`
         }
       ];
+    case "addExclusion":
+      return [{
+        sql: `ALTER TABLE ${qualifiedTable(operation.table)} ADD ${postgresExclusionSql(operation.definition)}`
+      }];
     case "addCheck":
       return [
         {
@@ -27247,7 +27723,19 @@ function safeWidening(actual, desired) {
 }
 __name(safeWidening, "safeWidening");
 function indexMatches(actual, desired) {
-  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desired.columns) && sameArray(actual.include, desired.include ?? []) && normalizeSql(actual.predicate) === normalizeSql(desired.where);
+  const desiredColumns = desired.columns.map((column) => {
+    if (typeof column === "string") return column;
+    return [
+      column.name,
+      column.order,
+      column.nulls ? `NULLS ${column.nulls}` : void 0
+    ].filter(Boolean).join(" ");
+  });
+  const desiredOptions = Object.fromEntries(
+    Object.entries(desired.options ?? {}).map(([key, value]) => [key, String(value)])
+  );
+  const actualOptions = actual.options ?? {};
+  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desiredColumns) && desired.columns.every((column, index) => typeof column === "string" || column.operatorClass === void 0 || (actual.operatorClasses ?? [])[index] === column.operatorClass) && sameArray(actual.include, desired.include ?? []) && Object.keys(desiredOptions).length === Object.keys(actualOptions).length && Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) && normalizeSql(actual.predicate) === normalizeSql(desired.where);
 }
 __name(indexMatches, "indexMatches");
 function foreignKeyMatches(actual, desired) {
@@ -27484,6 +27972,38 @@ function planExistingTable(name, desired, actual, actions, warnings) {
       warnings.push(`foreign key public.${name}.${foreignKey.name} is not declared`);
     }
   }
+  const desiredExclusions = new Map(
+    (desired.exclusions ?? []).map((exclusion) => [exclusion.name, exclusion])
+  );
+  const actualExclusions = actual.exclusions ?? /* @__PURE__ */ new Map();
+  for (const exclusion of desired.exclusions ?? []) {
+    const current = actualExclusions.get(exclusion.name);
+    const desiredDefinition = postgresExclusionSql(exclusion).replace(/^CONSTRAINT\s+"[^"]+"\s+/i, "");
+    if (!current) {
+      actions.push(manualAction({
+        kind: "addExclusion",
+        sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,
+        algorithm: "MANUAL",
+        reason: `exclusion constraint ${exclusion.name} builds an index and requires an explicit blocking migration`,
+        table: name,
+        risk: "high"
+      }));
+    } else if (normalizeSql(current.definition) !== normalizeSql(desiredDefinition)) {
+      actions.push(manualAction({
+        kind: "replaceExclusion",
+        sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,
+        algorithm: "MANUAL",
+        reason: `exclusion constraint ${exclusion.name} differs and requires an explicit replacement migration`,
+        table: name,
+        risk: "high"
+      }));
+    }
+  }
+  for (const exclusion of actualExclusions.values()) {
+    if (!desiredExclusions.has(exclusion.name)) {
+      warnings.push(`exclusion constraint public.${name}.${exclusion.name} is not declared`);
+    }
+  }
 }
 __name(planExistingTable, "planExistingTable");
 function planPostgresSchema(resource, schema, actual) {
@@ -27601,12 +28121,12 @@ var PostgresSchemaAdoptionConflictError = class extends Error {
     this.name = "PostgresSchemaAdoptionConflictError";
   }
 };
-function rows2(value) {
+function rows3(value) {
   return Array.isArray(value) ? value : [];
 }
-__name(rows2, "rows");
+__name(rows3, "rows");
 function first(value) {
-  return rows2(value)[0];
+  return rows3(value)[0];
 }
 __name(first, "first");
 function validateResource(resource) {
@@ -27636,10 +28156,25 @@ function requiresBlocking(operation) {
     "setPrimaryKey",
     "dropPrimaryKey",
     "dropConstraint",
+    "addExclusion",
     "sql"
   ].includes(operation.type);
 }
 __name(requiresBlocking, "requiresBlocking");
+function extensionPlanActions(report) {
+  return report.extensions.filter((extension) => extension.state !== "ready").map((extension) => ({
+    kind: `extension:${extension.state}`,
+    sql: `-- ${extension.message}`,
+    safe: true,
+    dataSafe: true,
+    onlineSafe: false,
+    automatic: false,
+    risk: "medium",
+    algorithm: "MANUAL",
+    reason: extension.message
+  }));
+}
+__name(extensionPlanActions, "extensionPlanActions");
 function migrationPlanActions(migrations, operatorAllowsBlocking) {
   return migrations.flatMap(
     (migration) => migration.operations.flatMap((operation) => {
@@ -27672,6 +28207,7 @@ var PostgresSchemaManager = class {
     this.allowBlocking = options.allowBlocking ?? false;
     this.lockTimeout = options.lockTimeout ?? 2e3;
     this.applicationDatabase = options.applicationDatabase ?? database2;
+    this.extensions = options.extensionRegistry ?? new PostgresExtensionRegistry(database2);
   }
   database;
   static {
@@ -27682,6 +28218,7 @@ var PostgresSchemaManager = class {
   allowBlocking;
   lockTimeout;
   applicationDatabase;
+  extensions;
   initialize() {
     this.initialization ??= this.verifySchemaTarget().then(() => this.createMetadata()).catch((error) => {
       this.initialization = null;
@@ -27693,6 +28230,7 @@ var PostgresSchemaManager = class {
     validateResource(resource);
     const schema = validatePostgresSchema(input);
     const checksum = postgresSchemaChecksum(schema);
+    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
     await this.initialize();
     const registry = await this.readRegistry(resource);
     if (registry && registry.version > schema.version) {
@@ -27708,7 +28246,12 @@ var PostgresSchemaManager = class {
     const drift = planPostgresSchema(resource, schema, actual);
     return {
       ...drift,
-      actions: [...migrationPlanActions(migrations, this.allowBlocking), ...drift.actions],
+      actions: [
+        ...extensionPlanActions(extensionReport),
+        ...migrationPlanActions(migrations, this.allowBlocking),
+        ...drift.actions
+      ],
+      extensions: extensionReport,
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -27723,6 +28266,7 @@ var PostgresSchemaManager = class {
     if (this.mode === "plan") {
       throw new PostgresSchemaPendingChangesError(await this.plan(resource, schema));
     }
+    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
     await this.initialize();
     const preflightRegistry = await this.readRegistry(resource);
     if (!preflightRegistry && !await this.hasInterruptedReconciliation(resource, checksum)) {
@@ -27762,6 +28306,7 @@ var PostgresSchemaManager = class {
       await this.finishSchema(lock, resource, schema, checksum);
       return {
         ...plan,
+        extensions: extensionReport,
         checksum,
         dryRun: false,
         appliedActions,
@@ -27776,6 +28321,7 @@ var PostgresSchemaManager = class {
     validateResource(resource);
     const schema = validatePostgresSchema(input);
     this.validateBaseline(schema, baselineVersion);
+    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
     await this.initialize();
     await this.assertAdoptionAvailable(resource, schema);
     const checksum = postgresSchemaChecksum(schema);
@@ -27791,7 +28337,12 @@ var PostgresSchemaManager = class {
     const drift = planPostgresSchema(resource, schema, actual);
     return {
       ...drift,
-      actions: [...migrationPlanActions(migrations, this.allowBlocking), ...drift.actions],
+      actions: [
+        ...extensionPlanActions(extensionReport),
+        ...migrationPlanActions(migrations, this.allowBlocking),
+        ...drift.actions
+      ],
+      extensions: extensionReport,
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -27809,6 +28360,7 @@ var PostgresSchemaManager = class {
       const plan = await this.planAdoption(resource, schema, baselineVersion);
       throw new PostgresSchemaPendingChangesError(plan);
     }
+    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
     await this.initialize();
     const checksum = postgresSchemaChecksum(schema);
     const lock = await this.database.driver.acquire();
@@ -27860,6 +28412,7 @@ var PostgresSchemaManager = class {
       );
       return {
         ...plan,
+        extensions: extensionReport,
         checksum,
         dryRun: false,
         appliedActions,
@@ -27984,7 +28537,7 @@ var PostgresSchemaManager = class {
   }
   async readMigrationRows(resource) {
     const result = /* @__PURE__ */ new Map();
-    for (const row of rows2(await this.database.query(
+    for (const row of rows3(await this.database.query(
       `SELECT version, checksum, status
          FROM qbxsql_internal.schema_migrations
         WHERE resource_name = $1`,
@@ -28041,7 +28594,7 @@ var PostgresSchemaManager = class {
     }
   }
   async relevantTables(resource, schema, migrations) {
-    const owned = rows2(await this.database.query(
+    const owned = rows3(await this.database.query(
       `SELECT table_name AS "tableName"
          FROM qbxsql_internal.owned_tables
         WHERE resource_name = $1 AND table_schema = 'public'`,
@@ -28341,6 +28894,13 @@ function errorPayload2(error) {
       result: error.result
     };
   }
+  if (error instanceof PostgresExtensionRequirementError) {
+    return {
+      code: error.code,
+      message,
+      extensions: error.report
+    };
+  }
   if (error instanceof PostgresSchemaMigrationRequiredError) {
     return {
       code: "QBXSQL_POSTGRES_SCHEMA_MIGRATION_REQUIRED",
@@ -28415,6 +28975,16 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
           invokeCallback2(callback, null, failure);
         }
       );
+    },
+    postgresGetExtensions(callback) {
+      void manager.extensions.diagnostics().then(
+        (result) => invokeCallback2(callback, result),
+        (error) => {
+          const failure = errorPayload2(error);
+          console.error(`[qbxsql] PostgreSQL extension diagnostics failed: ${failure.message}`);
+          invokeCallback2(callback, null, failure);
+        }
+      );
     }
   };
   for (const [name, callback] of Object.entries(api)) runtime.addExport(name, callback);
@@ -28436,7 +29006,8 @@ function registerPostgresSchemaUnavailableExports(bindings = createRuntimeBindin
     "postgresEnsureSchema",
     "postgresPlanSchema",
     "postgresAdoptSchema",
-    "postgresPlanSchemaAdoption"
+    "postgresPlanSchemaAdoption",
+    "postgresGetExtensions"
   ]) {
     bindings.addExport(name, unavailable);
   }
@@ -29629,8 +30200,8 @@ var SchemaManager = class {
   }
   async acquireLock(connection) {
     const result = await connection.query(`SELECT GET_LOCK('qbxsql:schema', 30) AS acquired`);
-    const rows3 = result.rows;
-    if (Number(rows3[0]?.acquired) !== 1) throw new Error("Timed out waiting for the qbxsql schema lock.");
+    const rows4 = result.rows;
+    if (Number(rows4[0]?.acquired) !== 1) throw new Error("Timed out waiting for the qbxsql schema lock.");
   }
   async readRegistry(resource) {
     const row = await this.database.single(
@@ -29648,13 +30219,13 @@ var SchemaManager = class {
     };
   }
   async readMigrationRows(resource) {
-    const rows3 = await this.database.query(
+    const rows4 = await this.database.query(
       `SELECT version, checksum, status FROM qbxsql_schema_migrations WHERE resource_name = ?`,
       [resource],
       { invokingResource: "qbxsql:schema" }
     );
     return new Map(
-      rows3.map((row) => [
+      rows4.map((row) => [
         Number(row.version),
         {
           version: Number(row.version),
@@ -29692,13 +30263,13 @@ var SchemaManager = class {
   }
   async assertOwnership(resource, tableNames) {
     if (tableNames.length === 0) return;
-    const rows3 = await this.database.query(
+    const rows4 = await this.database.query(
       `SELECT table_name AS tableName, resource_name AS resourceName FROM qbxsql_schema_tables`,
       [],
       { invokingResource: "qbxsql:schema" }
     );
     const desired = new Set(tableNames);
-    for (const row of rows3) {
+    for (const row of rows4) {
       const tableName = String(row.tableName);
       if (desired.has(tableName) && String(row.resourceName) !== resource) {
         throw new Error(
@@ -29959,7 +30530,7 @@ var SchemaManager = class {
   }
   async readOwnership(tableNames) {
     if (tableNames.length === 0) return /* @__PURE__ */ new Map();
-    const rows3 = await this.database.query(
+    const rows4 = await this.database.query(
       `SELECT table_name AS tableName, resource_name AS resourceName
        FROM qbxsql_schema_tables`,
       [],
@@ -29967,7 +30538,7 @@ var SchemaManager = class {
     );
     const relevant = new Set(tableNames);
     return new Map(
-      rows3.filter((row) => relevant.has(String(row.tableName))).map((row) => [String(row.tableName), String(row.resourceName)])
+      rows4.filter((row) => relevant.has(String(row.tableName))).map((row) => [String(row.tableName), String(row.resourceName)])
     );
   }
   async writeAdoptionBaseline(resource, schema, baselineVersion, checksum) {
@@ -30479,8 +31050,8 @@ var DatabaseService = class {
     return [normalizedQuery, parameterSets];
   }
   async single(sql, parameters, options = {}) {
-    const rows3 = await this.query(sql, parameters, options);
-    return Array.isArray(rows3) ? rows3[0] ?? null : null;
+    const rows4 = await this.query(sql, parameters, options);
+    return Array.isArray(rows4) ? rows4[0] ?? null : null;
   }
   async scalar(sql, parameters, options = {}) {
     const row = await this.single(sql, parameters, options);
@@ -30694,10 +31265,10 @@ ${reason}`);
   validateResultSet(query, resource, result) {
     const warning = this.config.resultsetWarning ?? 1e3;
     if (warning <= 0 || !result || typeof result !== "object" || !("rows" in result)) return;
-    const rows3 = result.rows;
-    if (!Array.isArray(rows3) || rows3.length < warning) return;
+    const rows4 = result.rows;
+    if (!Array.isArray(rows4) || rows4.length < warning) return;
     console.warn(
-      `[qbxsql] ${resource} returned ${rows3.length} rows for a query; qbxsql_resultset_warning is ${warning}.
+      `[qbxsql] ${resource} returned ${rows4.length} rows for a query; qbxsql_resultset_warning is ${warning}.
 ${query}`
     );
   }
@@ -30834,9 +31405,9 @@ ${query}`
     if (operation === "INSERT" || operation === "REPLACE" || operation === "UPDATE" || operation === "DELETE") {
       return response[0];
     }
-    const rows3 = response[0];
-    if (!Array.isArray(rows3)) return rows3;
-    const first2 = rows3[0];
+    const rows4 = response[0];
+    if (!Array.isArray(rows4)) return rows4;
+    const first2 = rows4[0];
     if (!first2 || typeof first2 !== "object") return first2 ?? null;
     const values = Object.values(first2);
     return values.length === 1 ? values[0] ?? null : first2;
@@ -31133,18 +31704,18 @@ function typeCastExecute(field, next) {
 __name(typeCastExecute, "typeCastExecute");
 var binaryCharset = 63;
 var blobColumnTypes = /* @__PURE__ */ new Set([249, 250, 251, 252]);
-function replaceNullBinaryBlobs(rows3, fields) {
-  if (!Array.isArray(rows3) || !Array.isArray(fields) || fields.length === 0) return rows3;
+function replaceNullBinaryBlobs(rows4, fields) {
+  if (!Array.isArray(rows4) || !Array.isArray(fields) || fields.length === 0) return rows4;
   if (Array.isArray(fields[0])) {
-    return rows3.map(
+    return rows4.map(
       (result, index) => replaceNullBinaryBlobs(result, fields[index] ?? [])
     );
   }
   const binaryBlobNames = fields.filter(
     (field) => field.characterSet === binaryCharset && blobColumnTypes.has(field.type ?? -1)
   ).map((field) => field.name);
-  if (binaryBlobNames.length === 0) return rows3;
-  return rows3.map((row) => {
+  if (binaryBlobNames.length === 0) return rows4;
+  return rows4.map((row) => {
     if (!row || typeof row !== "object" || Array.isArray(row)) return row;
     const source = row;
     let result = null;
@@ -31157,9 +31728,9 @@ function replaceNullBinaryBlobs(rows3, fields) {
   });
 }
 __name(replaceNullBinaryBlobs, "replaceNullBinaryBlobs");
-function normalizeDriverResult(rows3, fields = [], prepared) {
-  const header = !Array.isArray(rows3) ? rows3 : null;
-  const serializedRows = serializeForRuntime(rows3);
+function normalizeDriverResult(rows4, fields = [], prepared) {
+  const header = !Array.isArray(rows4) ? rows4 : null;
+  const serializedRows = serializeForRuntime(rows4);
   return {
     rows: prepared ? serializedRows : replaceNullBinaryBlobs(serializedRows, fields),
     fields: (Array.isArray(fields[0]) ? fields.flat() : fields).map((field) => ({
@@ -31180,9 +31751,9 @@ __name(normalizeDriverResult, "normalizeDriverResult");
 async function runQuery(connection, sql, parameters, prepared) {
   const executor = connection;
   scheduleResourceTick();
-  const [rows3, fields] = prepared ? await executor.execute({ sql, typeCast: typeCastExecute }, parameters) : await executor.query(sql, parameters);
+  const [rows4, fields] = prepared ? await executor.execute({ sql, typeCast: typeCastExecute }, parameters) : await executor.query(sql, parameters);
   return normalizeDriverResult(
-    rows3,
+    rows4,
     fields,
     prepared
   );
@@ -31289,10 +31860,10 @@ var MySqlDriver = class {
       );
     });
     try {
-      const [rows3] = await pool.query(
+      const [rows4] = await pool.query(
         "SELECT VERSION() AS version, DATABASE() AS databaseName"
       );
-      const first2 = rows3[0];
+      const first2 = rows4[0];
       this.serverVersion = first2?.version ?? null;
       this.databaseName = first2?.databaseName ?? null;
       this.pool = pool;
@@ -31521,21 +32092,14 @@ var oid = {
   timestamp: 1114,
   timestamptz: 1184
 };
-var postgresTypes = {
-  getTypeParser(typeId, format) {
-    if (format === "binary") return types.getTypeParser(typeId, format);
-    if (typeId === oid.date) {
-      return (value) => /* @__PURE__ */ new Date(`${value}T00:00:00.000Z`);
-    }
-    if (typeId === oid.timestamp) {
-      return (value) => /* @__PURE__ */ new Date(`${value.replace(" ", "T")}Z`);
-    }
-    if (typeId === oid.timestamptz) {
-      return (value) => new Date(value);
-    }
-    return types.getTypeParser(typeId, format);
-  }
-};
+function parsePostgresVector(value) {
+  if (!value.startsWith("[") || !value.endsWith("]")) return value;
+  const body = value.slice(1, -1);
+  if (body === "") return [];
+  const parsed = body.split(",").map((entry) => Number(entry));
+  return parsed.every(Number.isFinite) ? parsed : value;
+}
+__name(parsePostgresVector, "parsePostgresVector");
 function fieldMetadata(fields) {
   return fields.map((field) => ({
     name: field.name,
@@ -31642,6 +32206,24 @@ var PostgresDriver = class {
   namedPlaceholders = false;
   pool = null;
   fatalErrorListener = null;
+  extensionTypeParsers = /* @__PURE__ */ new Map();
+  postgresTypes = {
+    getTypeParser: /* @__PURE__ */ __name((typeId, format) => {
+      if (format === "binary") return types.getTypeParser(typeId, format);
+      const extensionParser = this.extensionTypeParsers.get(typeId);
+      if (extensionParser) return extensionParser;
+      if (typeId === oid.date) {
+        return (value) => /* @__PURE__ */ new Date(`${value}T00:00:00.000Z`);
+      }
+      if (typeId === oid.timestamp) {
+        return (value) => /* @__PURE__ */ new Date(`${value.replace(" ", "T")}Z`);
+      }
+      if (typeId === oid.timestamptz) {
+        return (value) => new Date(value);
+      }
+      return types.getTypeParser(typeId, format);
+    }, "getTypeParser")
+  };
   normalizeParameters(sql, parameters) {
     return normalizePostgresParameters(sql, parameters);
   }
@@ -31654,7 +32236,7 @@ var PostgresDriver = class {
       application_name: resourceName3,
       keepAlive: true,
       options: "-c search_path=public,pg_catalog",
-      types: postgresTypes
+      types: this.postgresTypes
     };
     const pool = new Pool(options);
     pool.on("error", (error) => this.reportFatalError(error));
@@ -31675,7 +32257,10 @@ var PostgresDriver = class {
       this.databaseName = first2?.databaseName ?? null;
       this.pool = pool;
       this.ready = true;
+      await this.refreshExtensionTypes();
     } catch (error) {
+      this.pool = null;
+      this.ready = false;
       await pool.end();
       throw error;
     }
@@ -31706,6 +32291,26 @@ var PostgresDriver = class {
   }
   async healthCheck() {
     await this.guard(this.requirePool().query("SELECT 1").then(() => void 0));
+  }
+  async refreshExtensionTypes() {
+    if (this.config.parseVectorResults === false) {
+      this.extensionTypeParsers.clear();
+      return;
+    }
+    const pool = this.pool;
+    if (!pool) return;
+    const result = await pool.query(
+      `SELECT type.oid::int AS oid, type.typname AS "typeName"
+         FROM pg_catalog.pg_type type
+         JOIN pg_catalog.pg_extension extension
+           ON extension.extnamespace = type.typnamespace
+          AND extension.extname = 'vector'
+        WHERE type.typname IN ('vector', 'halfvec')`
+    );
+    this.extensionTypeParsers.clear();
+    for (const row of result.rows) {
+      this.extensionTypeParsers.set(Number(row.oid), parsePostgresVector);
+    }
   }
   getPoolStatus() {
     const pool = this.pool;
@@ -31750,6 +32355,7 @@ function postgresService(databaseConfig2) {
 __name(postgresService, "postgresService");
 var mysqlDatabase = config.mysql ? mysqlService(config.mysql) : null;
 var postgresDatabase = config.postgres ? postgresService(config.postgres) : null;
+var postgresExtensions = postgresDatabase ? new PostgresExtensionRegistry(postgresDatabase) : null;
 var primaryDatabase = mysqlDatabase ?? postgresDatabase;
 var mysqlSchemaDatabase = config.mysql?.schemaConnectionString ? mysqlService({ ...config.mysql, connectionString: config.mysql.schemaConnectionString }) : mysqlDatabase;
 var mysqlSchemas = mysqlSchemaDatabase && mysqlDatabase ? new SchemaManager(mysqlSchemaDatabase, {
@@ -31765,12 +32371,14 @@ var postgresSchemas = postgresSchemaDatabase && postgresDatabase ? new PostgresS
   mode: config.schemaMode,
   allowBlocking: config.schemaAllowBlocking,
   applicationDatabase: postgresDatabase,
+  extensionRegistry: postgresExtensions,
   ...config.postgres?.schemaLockTimeout !== void 0 ? { lockTimeout: config.postgres.schemaLockTimeout } : {}
 }) : null;
 function statusFor(dialect) {
   const normalized = dialect?.trim().toLowerCase();
   if (normalized === "postgres" || normalized === "postgresql") {
-    return postgresDatabase?.getStatus() ?? null;
+    const status = postgresDatabase?.getStatus();
+    return status && postgresExtensions ? { ...status, extensions: postgresExtensions.cachedSummary() } : status ?? null;
   }
   if (normalized === "mysql" || normalized === "mariadb") {
     return mysqlDatabase?.getStatus() ?? null;
@@ -31781,7 +32389,7 @@ __name(statusFor, "statusFor");
 function allStatuses() {
   return {
     mysql: mysqlDatabase?.getStatus() ?? null,
-    postgresql: postgresDatabase?.getStatus() ?? null
+    postgresql: statusFor("postgresql")
   };
 }
 __name(allStatuses, "allStatuses");
@@ -31885,6 +32493,38 @@ if (isConcreteOxmysqlActive()) {
       },
       false
     );
+    RegisterCommand(
+      "qbxsql_extensions",
+      (source) => {
+        if (source !== 0) return;
+        if (!postgresExtensions) {
+          console.log(`[${resourceName4}] PostgreSQL is not configured.`);
+          return;
+        }
+        void postgresExtensions.diagnostics().then(
+          (diagnostic) => {
+            console.log(
+              `[${resourceName4}] PostgreSQL extensions checked at ${new Date(diagnostic.checkedAt).toISOString()}`
+            );
+            console.log(
+              `[${resourceName4}] installed: ${diagnostic.installed.map((extension) => `${extension.name}@${extension.version} (${extension.schema})`).join(", ") || "(none)"}`
+            );
+            for (const report of diagnostic.requirements) {
+              console.log(
+                `[${resourceName4}] ${report.resource}: ${report.satisfied ? "ready" : "action required"}`
+              );
+              for (const extension of report.extensions) {
+                console.log(`[${resourceName4}]   ${extension.state}: ${extension.message}`);
+              }
+            }
+          },
+          (error) => console.error(
+            `[${resourceName4}] PostgreSQL extension diagnostics failed: ${error instanceof Error ? error.message : String(error)}`
+          )
+        );
+      },
+      false
+    );
   }
 }
 if (typeof on === "function") {
@@ -31914,6 +32554,7 @@ var schemas = mysqlSchemas;
   mysqlSchemaDatabase,
   mysqlSchemas,
   postgresDatabase,
+  postgresExtensions,
   postgresSchemaDatabase,
   postgresSchemas,
   schemaDatabase,

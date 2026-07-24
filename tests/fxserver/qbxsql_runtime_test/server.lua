@@ -22,6 +22,9 @@ local schema = {
 
 local postgresSchema = {
     version = 1,
+    extensions = {
+        { name = 'vector', minimumVersion = '0.8.0' }
+    },
     tables = {
         fxsql_postgres_values = {
             columns = {
@@ -36,7 +39,8 @@ local postgresSchema = {
                 created_at = {
                     type = 'timestamptz',
                     defaultExpression = 'CURRENT_TIMESTAMP'
-                }
+                },
+                embedding = { type = 'vector', dimensions = 3, nullable = true }
             },
             checks = {
                 {
@@ -48,6 +52,14 @@ local postgresSchema = {
                 {
                     name = 'fxsql_postgres_owner_idx',
                     columns = { 'owner' }
+                },
+                {
+                    name = 'fxsql_postgres_embedding_hnsw_idx',
+                    method = 'hnsw',
+                    columns = {
+                        { name = 'embedding', operatorClass = 'vector_cosine_ops' }
+                    },
+                    options = { m = 8, ef_construction = 32 }
                 }
             }
         }
@@ -68,10 +80,21 @@ local function assertEqual(actual, expected, label)
     end
 end
 
+local function assertNear(actual, expected, tolerance, label)
+    if type(actual) ~= 'number' or math.abs(actual - expected) > tolerance then
+        error(('%s: expected %s +/- %s, received %s'):format(
+            label,
+            tostring(expected),
+            tostring(tolerance),
+            tostring(actual)
+        ))
+    end
+end
+
 local function runTests()
     assertEqual(GetResourceState('qbxsql'), 'started', 'qbxsql resource state')
     assertEqual(GetResourceMetadata('oxmysql', 'version', 0), '2.14.1', 'oxmysql compatibility version')
-    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.4.0', 'qbxsql version')
+    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.5.0', 'qbxsql version')
     assert(LoadResourceFile('oxmysql', 'lib/MySQL.lua'), '@oxmysql/lib/MySQL.lua did not resolve')
     assert(LoadResourceFile('mysql-async', 'lib/MySQL.lua'), '@mysql-async/lib/MySQL.lua did not resolve')
 
@@ -223,19 +246,29 @@ local function runTests()
     assertEqual(callbackTransaction, true, 'callback transaction result')
 
     Postgres.Schema.ensure.await(postgresSchema)
+    local extensionDiagnostics = Postgres.extensions.await()
+    assert(extensionDiagnostics.requirements[1].satisfied,
+        'PostgreSQL vector extension requirement was not reported ready')
     local postgresId = Postgres.scalar.await(
-        'INSERT INTO fxsql_postgres_values (owner, amount, payload) VALUES ($1, $2, $3) RETURNING id',
-        { 'postgres-owner', '9007199254740993.25', { source = 'fxserver' } }
+        'INSERT INTO fxsql_postgres_values (owner, amount, payload, embedding) VALUES ($1, $2, $3, $4::vector) RETURNING id',
+        {
+            'postgres-owner',
+            '9007199254740993.25',
+            { source = 'fxserver' },
+            Postgres.vector({ 0.1, 0.2, 0.3 })
+        }
     )
     assert(type(postgresId) == 'string', 'PostgreSQL bigint identity did not retain precision')
     local postgresRow = Postgres.single.await(
-        'SELECT owner, amount, payload, created_at FROM fxsql_postgres_values WHERE id = $1',
+        'SELECT owner, amount, payload, created_at, embedding FROM fxsql_postgres_values WHERE id = $1',
         { postgresId }
     )
     assertEqual(postgresRow.owner, 'postgres-owner', 'PostgreSQL native query')
     assertEqual(postgresRow.amount, '9007199254740993.25', 'PostgreSQL numeric precision')
     assertEqual(postgresRow.payload.source, 'fxserver', 'PostgreSQL JSONB conversion')
     assert(type(postgresRow.created_at) == 'number', 'PostgreSQL timestamp conversion')
+    assertEqual(#postgresRow.embedding, 3, 'PostgreSQL vector result parsing')
+    assertNear(postgresRow.embedding[2], 0.2, 0.000001, 'PostgreSQL vector result contents')
 
     local postgresExecute = Postgres.execute.await(
         'UPDATE fxsql_postgres_values SET owner = $1 WHERE id = $2 RETURNING owner',

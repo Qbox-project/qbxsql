@@ -38,6 +38,7 @@ const config: PostgresSqlConfig = {
   schemaAllowBlocking: false,
   schemaLockTimeout: 2_000,
   minimumServerVersion: 160_000,
+  parseVectorResults: true,
 };
 
 let database: DatabaseService;
@@ -87,6 +88,11 @@ describe('PostgreSQL driver and schema integration', () => {
       `GRANT CONNECT, CREATE ON DATABASE "${credentialDatabaseName}" TO "${schemaUser}"`,
     );
     await admin.end();
+
+    const extensionAdmin = new Pool({ connectionString: connectionString.toString() });
+    await extensionAdmin.query('CREATE EXTENSION vector');
+    await extensionAdmin.query('CREATE EXTENSION btree_gist');
+    await extensionAdmin.end();
 
     const credentialAdminUrl = new URL(adminConnection);
     credentialAdminUrl.pathname = `/${credentialDatabaseName}`;
@@ -162,6 +168,107 @@ describe('PostgreSQL driver and schema integration', () => {
       bytes: [1, 2, 255],
     });
   });
+
+  test('verifies pgvector requirements and manages vector types and indexes', async () => {
+    const vectorSchema: PostgresResourceSchema = {
+      version: 1,
+      extensions: [{ name: 'vector', minimumVersion: '0.8.0' }],
+      tables: {
+        pg_embeddings: {
+          columns: {
+            id: { type: 'integer', primary: true },
+            embedding: { type: 'vector', dimensions: 3 },
+            half_embedding: { type: 'halfvec', dimensions: 3, nullable: true },
+            sparse_embedding: { type: 'sparsevec', dimensions: 10, nullable: true },
+          },
+          indexes: [{
+            name: 'pg_embeddings_hnsw_idx',
+            method: 'hnsw',
+            columns: [{
+              name: 'embedding',
+              operatorClass: 'vector_cosine_ops',
+            }],
+            options: { m: 8, ef_construction: 32 },
+          }],
+        },
+      },
+    };
+    const created = await manager.ensure('postgres_vectors', vectorSchema);
+    expect(created.extensions).toMatchObject({
+      satisfied: true,
+      extensions: [{ name: 'vector', state: 'ready' }],
+    });
+
+    await database.query(
+      `INSERT INTO pg_embeddings (id, embedding, half_embedding, sparse_embedding)
+       VALUES ($1, $2::vector, $3::halfvec, $4::sparsevec)`,
+      [1, '[0.1,0.2,0.3]', '[0.4,0.5,0.6]', '{1:1,5:2}/10'],
+    );
+    const row = await database.single(
+      'SELECT embedding, half_embedding, sparse_embedding FROM pg_embeddings WHERE id = $1',
+      [1],
+    ) as Record<string, unknown>;
+    expect(row.embedding).toEqual([0.1, 0.2, 0.3]);
+    expect(Array.isArray(row.half_embedding)).toBe(true);
+    expect((row.half_embedding as number[])).toHaveLength(3);
+    expect((row.half_embedding as number[])[0]).toBeCloseTo(0.4, 3);
+    expect(row.sparse_embedding).toBe('{1:1,5:2}/10');
+
+    const actual = await introspectPostgresDatabase(database, ['pg_embeddings']);
+    expect(actual.get('pg_embeddings')?.columns.get('embedding')?.formattedType).toBe('vector(3)');
+    expect(actual.get('pg_embeddings')?.indexes.get('pg_embeddings_hnsw_idx')).toMatchObject({
+      method: 'hnsw',
+      operatorClasses: ['vector_cosine_ops'],
+      options: { m: '8', ef_construction: '32' },
+    });
+    expect((await manager.plan('postgres_vectors', vectorSchema)).actions).toEqual([]);
+  });
+
+  test('manages extension-backed exclusion constraints', async () => {
+    const bookingSchema: PostgresResourceSchema = {
+      version: 1,
+      extensions: [{ name: 'btree_gist' }],
+      tables: {
+        pg_room_bookings: {
+          columns: {
+            id: { type: 'integer', primary: true },
+            room_id: { type: 'integer' },
+            during: { type: 'tstzrange' },
+          },
+          exclusions: [{
+            name: 'pg_room_bookings_no_overlap',
+            method: 'gist',
+            elements: [
+              { column: 'room_id', operator: '=' },
+              { column: 'during', operator: '&&' },
+            ],
+          }],
+        },
+      },
+    };
+    const result = await manager.ensure('postgres_bookings', bookingSchema);
+    expect(result.extensions?.satisfied).toBe(true);
+    await database.query(
+      `INSERT INTO pg_room_bookings (id, room_id, during)
+       VALUES ($1, $2, tstzrange($3, $4, '[)'))`,
+      [1, 10, '2026-07-24T10:00:00Z', '2026-07-24T11:00:00Z'],
+    );
+    let overlapError: unknown;
+    try {
+      await database.query(
+        `INSERT INTO pg_room_bookings (id, room_id, during)
+         VALUES ($1, $2, tstzrange($3, $4, '[)'))`,
+        [2, 10, '2026-07-24T10:30:00Z', '2026-07-24T11:30:00Z'],
+      );
+    } catch (error) {
+      overlapError = error;
+    }
+    expect(overlapError).toMatchObject({ code: '23P01' });
+    const actual = await introspectPostgresDatabase(database, ['pg_room_bookings']);
+    expect(actual.get('pg_room_bookings')?.exclusions?.has('pg_room_bookings_no_overlap'))
+      .toBe(true);
+    expect((await manager.plan('postgres_bookings', bookingSchema)).actions).toEqual([]);
+  }, 15_000);
 
   test('pins transactions and rolls failed statements back', async () => {
     await database.query('CREATE TABLE transaction_test (id INTEGER PRIMARY KEY)');

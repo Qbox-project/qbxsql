@@ -3,6 +3,7 @@ import type {
   ActualPostgresCheck,
   ActualPostgresColumn,
   ActualPostgresForeignKey,
+  ActualPostgresExclusion,
   ActualPostgresIndex,
   ActualPostgresTable,
 } from './types.js';
@@ -15,6 +16,16 @@ function rows(value: unknown): Row[] {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function indexOptions(value: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const option of stringArray(value)) {
+    const separator = option.indexOf('=');
+    if (separator < 1) continue;
+    result[option.slice(0, separator)] = option.slice(separator + 1);
+  }
+  return result;
 }
 
 function actionName(value: unknown): string {
@@ -77,6 +88,15 @@ export async function introspectPostgresDatabase(
               idx.indisprimary AS "primary",
               idx.indisvalid AS valid,
               access_method.amname AS method,
+              ARRAY(
+                SELECT operator_class.opcname
+                  FROM unnest(idx.indclass::oid[]) WITH ORDINALITY AS class(oid, position)
+                  JOIN pg_catalog.pg_opclass operator_class
+                    ON operator_class.oid = class.oid
+                 WHERE class.position <= idx.indnkeyatts
+                 ORDER BY class.position
+              )::text[] AS "operatorClasses",
+              index_class.reloptions AS options,
               pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS predicate,
               ARRAY(
                 SELECT pg_catalog.pg_get_indexdef(idx.indexrelid, position, TRUE)
@@ -130,7 +150,7 @@ export async function introspectPostgresDatabase(
          LEFT JOIN pg_catalog.pg_class referenced_class ON referenced_class.oid = con.confrelid
         WHERE n.nspname = 'public'
           AND table_class.relname = ANY($1::text[])
-          AND con.contype IN ('p', 'f', 'c')`,
+          AND con.contype IN ('p', 'f', 'c', 'x')`,
       [names],
     ),
   ]);
@@ -145,6 +165,7 @@ export async function introspectPostgresDatabase(
       indexes: new Map(),
       checks: new Map(),
       foreignKeys: new Map(),
+      exclusions: new Map(),
       primaryKey: [],
       primaryKeyName: null,
     });
@@ -178,6 +199,8 @@ export async function introspectPostgresDatabase(
       primary: Boolean(row.primary),
       valid: Boolean(row.valid),
       method: String(row.method),
+      operatorClasses: stringArray(row.operatorClasses),
+      options: indexOptions(row.options),
       predicate: row.predicate === null || row.predicate === undefined ? null : String(row.predicate),
     };
     table.indexes.set(index.name, index);
@@ -209,6 +232,14 @@ export async function introspectPostgresDatabase(
         validated: Boolean(row.validated),
       };
       table.foreignKeys.set(foreignKey.name, foreignKey);
+    } else if (row.type === 'x') {
+      const exclusion: ActualPostgresExclusion = {
+        name: String(row.name),
+        definition: String(row.definition),
+        deferrable: Boolean(row.deferrable),
+        initiallyDeferred: Boolean(row.initiallyDeferred),
+      };
+      table.exclusions!.set(exclusion.name, exclusion);
     }
   }
 

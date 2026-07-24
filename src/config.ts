@@ -34,6 +34,7 @@ export interface QbxSqlConfig {
 
 export interface PostgresSqlConfig extends QbxSqlConfig {
   minimumServerVersion: number;
+  parseVectorResults?: boolean;
 }
 
 export interface QbxSqlRuntimeConfig {
@@ -279,6 +280,7 @@ export function loadConfig(): QbxSqlRuntimeConfig {
                 : {}),
             }),
             minimumServerVersion: 160_000,
+            parseVectorResults: booleanConvar('qbxsql_postgres_parse_vector_results', true),
           },
         }
       : {}),

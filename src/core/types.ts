@@ -63,6 +63,7 @@ export interface DatabaseDriver {
   healthCheck?(): Promise<void>;
   getPoolStatus?(): PoolStatus;
   onFatalError?(listener: (error: unknown) => void): void;
+  refreshExtensionTypes?(): Promise<void>;
 }
 
 export interface TransactionStatement {
