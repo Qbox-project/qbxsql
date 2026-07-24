@@ -125,6 +125,7 @@ export async function releaseFiles() {
     'dist/index.js',
     'dist/index.js.map',
     'lib/MySQL.lua',
+    'lib/Postgres.lua',
     'lib/Schema.lua',
   ];
   for (const relativePath of coreRequired) {

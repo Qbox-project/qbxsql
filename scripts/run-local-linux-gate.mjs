@@ -26,6 +26,8 @@ const DEFAULT_ARTIFACT_SHA256 =
   '4d55acd1306651aecf8457699485c736d08aae37b075c493a66dacd623402631';
 const DATABASE_IMAGE = 'mariadb:11.4';
 const DATABASE_NAME = 'qbxsql_fxserver';
+const POSTGRES_IMAGE = 'postgres:16-alpine';
+const POSTGRES_DATABASE_NAME = 'qbxsql_fxserver';
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -36,6 +38,7 @@ function publicEnvironment() {
   const environment = { ...process.env };
   delete environment.CFX_LICENSE_KEY;
   delete environment.QBXSQL_TEST_CONNECTION_STRING;
+  delete environment.QBXSQL_TEST_POSTGRES_CONNECTION_STRING;
   return environment;
 }
 
@@ -135,7 +138,7 @@ async function verifiedArtifact(repositoryRoot, artifact) {
   return archive;
 }
 
-async function waitForDatabase(container) {
+async function waitForDatabase(container, label) {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     const inspected = await run(
@@ -147,13 +150,13 @@ async function waitForDatabase(container) {
       if (inspected.stdout === 'running healthy') return;
       if (inspected.stdout.startsWith('exited ')) {
         await run('docker', ['logs', container], { allowFailure: true });
-        throw new Error('The disposable MariaDB container exited during startup.');
+        throw new Error(`The disposable ${label} container exited during startup.`);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   await run('docker', ['logs', container], { allowFailure: true });
-  throw new Error('The disposable MariaDB container did not become healthy within 120 seconds.');
+  throw new Error(`The disposable ${label} container did not become healthy within 120 seconds.`);
 }
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..');
@@ -174,12 +177,15 @@ let licenseKey =
   process.env.CFX_LICENSE_KEY ?? (await readLocalCfxKey(repositoryRoot));
 delete process.env.CFX_LICENSE_KEY;
 delete process.env.QBXSQL_TEST_CONNECTION_STRING;
+delete process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING;
 
 const identifier = `${process.pid}-${Date.now().toString(36)}`;
 const network = `qbxsql-gate-${identifier}`;
 const database = `qbxsql-gate-db-${identifier}`;
+const postgres = `qbxsql-gate-pg-${identifier}`;
 let networkCreated = false;
 let databaseStarted = false;
+let postgresStarted = false;
 
 try {
   await run('docker', ['version'], { capture: true });
@@ -215,7 +221,35 @@ try {
     { capture: true },
   );
   databaseStarted = true;
-  await waitForDatabase(database);
+  await waitForDatabase(database, 'MariaDB');
+  await run(
+    'docker',
+    [
+      'run',
+      '--detach',
+      '--rm',
+      '--name',
+      postgres,
+      '--network',
+      network,
+      '--env',
+      'POSTGRES_PASSWORD=root',
+      '--env',
+      `POSTGRES_DB=${POSTGRES_DATABASE_NAME}`,
+      '--health-cmd',
+      'pg_isready -U postgres',
+      '--health-interval',
+      '2s',
+      '--health-timeout',
+      '5s',
+      '--health-retries',
+      '60',
+      POSTGRES_IMAGE,
+    ],
+    { capture: true },
+  );
+  postgresStarted = true;
+  await waitForDatabase(postgres, 'PostgreSQL');
 
   licenseKey ??= await promptCfxKey();
   await run(
@@ -233,12 +267,20 @@ try {
         CFX_LICENSE_KEY: licenseKey,
         QBXSQL_TEST_CONNECTION_STRING:
           `mysql://root:root@${database}:3306/${DATABASE_NAME}`,
+        QBXSQL_TEST_POSTGRES_CONNECTION_STRING:
+          `postgresql://postgres:root@${postgres}:5432/${POSTGRES_DATABASE_NAME}`,
       },
     },
   );
   console.log('[qbxsql] local stock-Linux FXServer test passed.');
 } finally {
   licenseKey = undefined;
+  if (postgresStarted) {
+    await run('docker', ['rm', '--force', postgres], {
+      capture: true,
+      allowFailure: true,
+    });
+  }
   if (databaseStarted) {
     await run('docker', ['rm', '--force', database], {
       capture: true,

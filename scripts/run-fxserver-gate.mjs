@@ -12,12 +12,16 @@ function option(name, fallback) {
 
 const binary = option('--binary');
 const connectionString = option('--connection-string', process.env.QBXSQL_TEST_CONNECTION_STRING);
+const postgresConnectionString = option(
+  '--postgres-connection-string',
+  process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING,
+);
 const licenseKey = process.env.CFX_LICENSE_KEY;
 const flavor = option('--flavor', 'stock');
 const timeout = Number(option('--timeout', '120000'));
-if (!binary || !connectionString || !licenseKey) {
+if (!binary || !connectionString || !postgresConnectionString || !licenseKey) {
   throw new Error(
-    'Usage: CFX_LICENSE_KEY=<secret> QBXSQL_TEST_CONNECTION_STRING=<url> node scripts/run-fxserver-gate.mjs --binary <FXServer> [--flavor stock|enhanced]',
+    'Usage: CFX_LICENSE_KEY=<secret> QBXSQL_TEST_CONNECTION_STRING=<mysql-url> QBXSQL_TEST_POSTGRES_CONNECTION_STRING=<postgres-url> node scripts/run-fxserver-gate.mjs --binary <FXServer> [--flavor stock|enhanced]',
   );
 }
 if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 600_000) {
@@ -84,6 +88,7 @@ async function runConflictGate() {
     `endpoint_add_tcp "127.0.0.1:${port + 1}"`,
     `endpoint_add_udp "127.0.0.1:${port + 1}"`,
     `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
+    `set qbxsql_postgres_connection_string "${postgresConnectionString.replaceAll('"', '')}"`,
     'ensure oxmysql',
   ].join('\n');
   await writeFile(path.join(conflictRoot, 'server.cfg'), `${conflictConfig}\n`, { mode: 0o600 });
@@ -200,6 +205,7 @@ try {
     `endpoint_add_tcp "127.0.0.1:${port}"`,
     `endpoint_add_udp "127.0.0.1:${port}"`,
     `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
+    `set qbxsql_postgres_connection_string "${postgresConnectionString.replaceAll('"', '')}"`,
     'set qbxsql_connection_wait_timeout 30000',
     'set qbxsql_schema_mode auto',
     'ensure qbxsql',

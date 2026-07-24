@@ -19,7 +19,17 @@ ensure qbxsql
 
 Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses the conflict and leaves its connector inactive if a real resource named `oxmysql` is already running.
 
-The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.3.2'`.
+The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.4.0'`.
+
+New resources may add PostgreSQL without changing legacy consumers:
+
+```cfg
+set qbxsql_mysql_connection_string "mysql://user:password@127.0.0.1/qbox_legacy"
+set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox_new"
+ensure qbxsql
+```
+
+Legacy imports and exports always use the MySQL lane. A new resource opts into PostgreSQL by importing `@qbxsql/lib/Postgres.lua` and using `Postgres.*` with `$1` parameters. qbxsql does not translate old SQL or provide transactions spanning both databases. See [the PostgreSQL guide](POSTGRESQL.md).
 
 ## Imports and calls
 

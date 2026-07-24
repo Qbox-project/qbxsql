@@ -34,9 +34,12 @@ const dockerNetwork = option('--docker-network');
 const timeout = Number(option('--timeout', '180000'));
 const licenseKey = process.env.CFX_LICENSE_KEY;
 const connectionString = process.env.QBXSQL_TEST_CONNECTION_STRING;
+const postgresConnectionString = process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING;
 
-if (!licenseKey || !connectionString) {
-  throw new Error('CFX_LICENSE_KEY and QBXSQL_TEST_CONNECTION_STRING are required.');
+if (!licenseKey || !connectionString || !postgresConnectionString) {
+  throw new Error(
+    'CFX_LICENSE_KEY, QBXSQL_TEST_CONNECTION_STRING, and QBXSQL_TEST_POSTGRES_CONNECTION_STRING are required.',
+  );
 }
 if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 600_000) {
   throw new Error('--timeout must be an integer from 1000 through 600000.');
@@ -84,6 +87,8 @@ const dockerArguments = [
   '--env',
   'QBXSQL_TEST_CONNECTION_STRING',
   '--env',
+  'QBXSQL_TEST_POSTGRES_CONNECTION_STRING',
+  '--env',
   'CFX_LINUX_ARTIFACT_URL',
 ];
 if (dockerNetwork) dockerArguments.push('--network', dockerNetwork);
@@ -114,6 +119,8 @@ const docker = spawn(
       ...process.env,
       CFX_LICENSE_KEY: licenseKey,
       QBXSQL_TEST_CONNECTION_STRING: dockerConnectionString(connectionString),
+      QBXSQL_TEST_POSTGRES_CONNECTION_STRING:
+        dockerConnectionString(postgresConnectionString),
       CFX_LINUX_ARTIFACT_URL: parsedArtifact?.href ?? '',
     },
   },

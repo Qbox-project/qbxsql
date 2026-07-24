@@ -6,11 +6,12 @@ const root = path.resolve(import.meta.dir, '..', '..');
 const workflows = path.join(root, '.github', 'workflows');
 
 describe('lean GitHub Actions workflows', () => {
-  test('keeps routine CI to one MariaDB-backed hosted job', async () => {
+  test('keeps routine CI to one MariaDB/PostgreSQL-backed hosted job', async () => {
     const workflow = await readFile(path.join(workflows, 'ci.yml'), 'utf8');
 
     expect(workflow.match(/runs-on: ubuntu-latest/g)).toHaveLength(1);
     expect(workflow).toContain('image: mariadb:11.4');
+    expect(workflow).toContain('image: postgres:16-alpine');
     expect(workflow).toContain('bun run test:unit');
     expect(workflow).toContain('bun run test:contract');
     expect(workflow).toContain('bun run test:integration');

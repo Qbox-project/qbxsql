@@ -4,8 +4,9 @@
 
 1. `0.2.x`: compatibility shim, failure semantics, configuration, and reconnect lifecycle.
 2. `0.3.x`: schema safety, adoption, online DDL, and separate credentials.
-3. `1.0.0-rc.x`: lean CI, stock-Linux FXServer, Qbox, and release-artifact validation.
-4. `1.0.0`: only after those practical gates are green on the release candidate.
+3. `0.4.x`: PostgreSQL-native query, transaction, lifecycle, and schema lanes.
+4. `1.0.0-rc.x`: lean CI, stock-Linux FXServer, Qbox, and release-artifact validation.
+5. `1.0.0`: only after those practical gates are green on the release candidate.
 
 Never change the oxmysql compatibility target from `2.14.1` merely to satisfy a dependency check. Change it only after verifying a newer upstream contract.
 
@@ -27,13 +28,13 @@ The output contains `qbxsql/`, `qbxsql-<qbxsql_version>.zip`, and `qbxsql-<qbxsq
 
 Required evidence before an RC can become stable:
 
-- green `CI`, including MariaDB 11.4 integration coverage;
+- green `CI`, including MariaDB 11.4 and PostgreSQL 16 integration coverage;
 - a local stock-Linux FXServer smoke test for the exact candidate;
 - `bun run release:validate` for the generated artifact;
 - focused MySQL or additional MariaDB checks when database-specific code changed;
 - relevant real-client Qbox checks for compatibility-affecting changes.
 
-Run `bun run cfx-key:save` once, then `bun run test:fxserver` locally. The saved key lives only in the gitignored `.cache/qbxsql/cfx-license-key`; `CFX_LICENSE_KEY` can override it for one process. The test verifies a pinned cached artifact, creates a disposable MariaDB service and Docker network, and cleans up after the packaged gate. The key is never a command argument or repository secret.
+Run `bun run cfx-key:save` once, then `bun run test:fxserver` locally. The saved key lives only in the gitignored `.cache/qbxsql/cfx-license-key`; `CFX_LICENSE_KEY` can override it for one process. The test verifies a pinned cached artifact, creates disposable MariaDB 11.4 and PostgreSQL 16 services plus a Docker network, and cleans up after the packaged dual-database gate. The key is never a command argument or repository secret.
 
 The broader database matrix, benchmarks, reconnect soak, Windows checks, and seven-day canary remain available as targeted local assurance. Run them when a risky connector, lifecycle, schema, or performance change justifies their cost; they are not routine CI requirements. Enhanced CFX coverage is deferred until that runtime leaves early access.
 

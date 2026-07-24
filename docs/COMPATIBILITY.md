@@ -25,9 +25,20 @@ Compatibility fixtures also cover the less obvious 2.14.1 behavior:
 
 ## Database release target
 
-Routine CI uses MariaDB 11.4 as the representative integration target. MariaDB 10.11/11.8 and MySQL 8.0/8.4 remain supported lines and should be rerun locally when query serialization, schema introspection, or DDL behavior changes. They are not separate jobs on every push.
+Routine CI uses MariaDB 11.4 and PostgreSQL 16 as the representative integration targets. MariaDB 10.11/11.8 and MySQL 8.0/8.4 remain supported lines and should be rerun locally when query serialization, schema introspection, or DDL behavior changes. They are not separate jobs on every push.
 
 Local development on 2026-07-22 passed the complete 35-test integration suite against each required line: MariaDB 10.11, 11.4, and 11.8 plus MySQL 8.0 and 8.4. MariaDB 12.0.2 also passed locally as rolling-release smoke coverage, but is not a guaranteed support line.
+
+The native PostgreSQL lane supports PostgreSQL 16 and newer. Its hosted gate covers PostgreSQL 16; newer major releases remain compatible targets but should be rerun locally after driver, type conversion, introspection, or DDL changes.
+
+| Routing | Database |
+| --- | --- |
+| `MySQL.*`, oxmysql, mysql-async, ghmattimysql | MySQL/MariaDB only |
+| `Postgres.*` | PostgreSQL only |
+| Cross-database transactions | Not supported |
+| MySQL-to-PostgreSQL SQL translation | Not supported |
+
+`BIGINT` and `NUMERIC` values remain strings on PostgreSQL to avoid JavaScript precision loss. PostgreSQL timestamps become epoch milliseconds, bytea becomes byte arrays, and JSON/JSONB remains structured data. See [POSTGRESQL.md](POSTGRESQL.md).
 
 ## FXServer target
 
@@ -35,7 +46,7 @@ Local development on 2026-07-22 passed the complete 35-test integration suite ag
 - Release smoke artifact: the pinned official stock-Linux artifact and SHA-256 recorded by the local runner.
 - Historical stock Windows evidence: build `32561` passed the former two-resource packaged compatibility/runtime gate on 2026-07-22.
 - Current single-resource stock Linux evidence: recommended build `25770` passed the containerized packaged gate on 2026-07-23, including provider metadata/imports/exports, active-query restart, and concrete-oxmysql conflict handling.
-- `bun run test:fxserver` downloads, verifies, caches, and tests the packaged resources locally with disposable MariaDB.
+- `bun run test:fxserver` downloads, verifies, caches, and tests the packaged resource locally with disposable MariaDB 11.4 and PostgreSQL 16.
 - Enhanced CFX is not an active automation target while it remains in early access. Add a dedicated gate after it becomes the supported production runtime.
 
 Historical local enhanced-CFX results remain useful development evidence, but stock FXServer defines the current runtime contract. Treat a future enhanced build as uncertified until a new focused gate passes.

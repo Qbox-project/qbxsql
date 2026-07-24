@@ -22,12 +22,15 @@ describe('containerized Linux FXServer gate', () => {
     expect(script).toContain("'--docker-network'");
     expect(script).toContain("'--env',\n  'CFX_LICENSE_KEY'");
     expect(script).toContain("'--env',\n  'QBXSQL_TEST_CONNECTION_STRING'");
+    expect(script).toContain("'--env',\n  'QBXSQL_TEST_POSTGRES_CONNECTION_STRING'");
     expect(script).not.toContain('--license-key');
     expect(localRunner).toContain(
       '4d55acd1306651aecf8457699485c736d08aae37b075c493a66dacd623402631',
     );
     expect(localRunner).toContain("'.cache',\n    'fxserver'");
     expect(localRunner).toContain("const DATABASE_IMAGE = 'mariadb:11.4';");
+    expect(localRunner).toContain("const POSTGRES_IMAGE = 'postgres:16-alpine';");
+    expect(localRunner).toContain("'POSTGRES_PASSWORD=root'");
     expect(localRunner).toContain("'network', 'create'");
     expect(localRunner).toContain('await readLocalCfxKey(repositoryRoot)');
     expect(localRunner).toContain('await promptCfxKey()');
@@ -37,6 +40,7 @@ describe('containerized Linux FXServer gate', () => {
     expect(keyStore).toContain('CFX license key (hidden):');
     expect(keyStore).toContain('mode: 0o600');
     expect(fxserverGate).toContain('const licenseKey = process.env.CFX_LICENSE_KEY;');
+    expect(fxserverGate).toContain('process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING');
     expect(fxserverGate).toContain('createSecretSafeWriter');
     expect(fxserverGate).not.toContain("option('--license-key'");
     expect(JSON.parse(packageJson).scripts['test:fxserver']).toBe(

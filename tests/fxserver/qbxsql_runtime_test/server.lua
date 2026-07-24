@@ -20,6 +20,40 @@ local schema = {
     }
 }
 
+local postgresSchema = {
+    version = 1,
+    tables = {
+        fxsql_postgres_values = {
+            columns = {
+                id = {
+                    type = 'bigint',
+                    identity = 'byDefault',
+                    primary = true
+                },
+                owner = { type = 'varchar', length = 100 },
+                amount = { type = 'numeric', precision = 20, scale = 2, default = 0 },
+                payload = { type = 'jsonb', nullable = true },
+                created_at = {
+                    type = 'timestamptz',
+                    defaultExpression = 'CURRENT_TIMESTAMP'
+                }
+            },
+            checks = {
+                {
+                    name = 'fxsql_postgres_amount_check',
+                    expression = 'amount >= 0'
+                }
+            },
+            indexes = {
+                {
+                    name = 'fxsql_postgres_owner_idx',
+                    columns = { 'owner' }
+                }
+            }
+        }
+    }
+}
+
 local function callbackAwait(invoke)
     local response = promise.new()
     invoke(function(result, err)
@@ -37,7 +71,7 @@ end
 local function runTests()
     assertEqual(GetResourceState('qbxsql'), 'started', 'qbxsql resource state')
     assertEqual(GetResourceMetadata('oxmysql', 'version', 0), '2.14.1', 'oxmysql compatibility version')
-    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.3.2', 'qbxsql version')
+    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.4.0', 'qbxsql version')
     assert(LoadResourceFile('oxmysql', 'lib/MySQL.lua'), '@oxmysql/lib/MySQL.lua did not resolve')
     assert(LoadResourceFile('mysql-async', 'lib/MySQL.lua'), '@mysql-async/lib/MySQL.lua did not resolve')
 
@@ -45,6 +79,12 @@ local function runTests()
     assertEqual(status.state, 'ready', 'native health state')
     assert(status.databaseVersion, 'native health status omitted database version')
     assert(status.totals and type(status.totals.queries) == 'number', 'native health totals are invalid')
+    local postgresStatus = exports.qbxsql:getStatus('postgresql')
+    assertEqual(postgresStatus.state, 'ready', 'PostgreSQL health state')
+    assertEqual(postgresStatus.dialect, 'postgresql', 'PostgreSQL health dialect')
+    local statuses = exports.qbxsql:getStatuses()
+    assertEqual(statuses.mysql.state, 'ready', 'MySQL status collection')
+    assertEqual(statuses.postgresql.state, 'ready', 'PostgreSQL status collection')
 
     QBXSQL.Schema.ensure.await(schema)
 
@@ -181,6 +221,57 @@ local function runTests()
         return true
     end)
     assertEqual(callbackTransaction, true, 'callback transaction result')
+
+    Postgres.Schema.ensure.await(postgresSchema)
+    local postgresId = Postgres.scalar.await(
+        'INSERT INTO fxsql_postgres_values (owner, amount, payload) VALUES ($1, $2, $3) RETURNING id',
+        { 'postgres-owner', '9007199254740993.25', { source = 'fxserver' } }
+    )
+    assert(type(postgresId) == 'string', 'PostgreSQL bigint identity did not retain precision')
+    local postgresRow = Postgres.single.await(
+        'SELECT owner, amount, payload, created_at FROM fxsql_postgres_values WHERE id = $1',
+        { postgresId }
+    )
+    assertEqual(postgresRow.owner, 'postgres-owner', 'PostgreSQL native query')
+    assertEqual(postgresRow.amount, '9007199254740993.25', 'PostgreSQL numeric precision')
+    assertEqual(postgresRow.payload.source, 'fxserver', 'PostgreSQL JSONB conversion')
+    assert(type(postgresRow.created_at) == 'number', 'PostgreSQL timestamp conversion')
+
+    local postgresExecute = Postgres.execute.await(
+        'UPDATE fxsql_postgres_values SET owner = $1 WHERE id = $2 RETURNING owner',
+        { 'postgres-updated', postgresId }
+    )
+    assertEqual(postgresExecute.command, 'UPDATE', 'PostgreSQL execute command')
+    assertEqual(postgresExecute.rowCount, 1, 'PostgreSQL execute row count')
+    assertEqual(postgresExecute.rows[1].owner, 'postgres-updated', 'PostgreSQL execute rows')
+
+    local postgresTransaction = Postgres.transaction.await({
+        {
+            query = 'UPDATE fxsql_postgres_values SET amount = $1 WHERE id = $2 RETURNING amount',
+            parameters = { '42.50', postgresId }
+        },
+        {
+            query = 'SELECT amount FROM fxsql_postgres_values WHERE id = $1',
+            parameters = { postgresId }
+        }
+    })
+    assertEqual(#postgresTransaction, 2, 'PostgreSQL transaction result count')
+    assertEqual(postgresTransaction[2].rows[1].amount, '42.50', 'PostgreSQL transaction contents')
+
+    local postgresCallbackTransaction = Postgres.startTransaction.await(function(query)
+        local inserted = query(
+            'INSERT INTO fxsql_postgres_values (owner, amount) VALUES ($1, $2) RETURNING id',
+            { 'postgres-callback', '10.00' }
+        )
+        assert(type(inserted[1].id) == 'string', 'PostgreSQL callback transaction insert')
+        local selected = query(
+            'SELECT owner FROM fxsql_postgres_values WHERE id = $1',
+            { inserted[1].id }
+        )
+        assertEqual(selected[1].owner, 'postgres-callback', 'PostgreSQL callback transaction query')
+        return true
+    end)
+    assertEqual(postgresCallbackTransaction, true, 'PostgreSQL callback transaction result')
 
     print('QBXSQL_RUNTIME_TEST_PASS')
 end

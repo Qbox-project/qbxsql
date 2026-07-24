@@ -13,7 +13,7 @@ describe('qbxsql compatibility metadata and providers', () => {
     const manifest = await fixture('fxmanifest.lua');
 
     expect(manifest).toContain("version '2.14.1'");
-    expect(manifest).toContain("qbxsql_version '0.3.2'");
+    expect(manifest).toContain("qbxsql_version '0.4.0'");
     expect(manifest).toContain("provide 'oxmysql'");
     expect(manifest).toContain("provide 'mysql-async'");
     expect(manifest).toContain("provide 'ghmattimysql'");
@@ -40,6 +40,22 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(wrapper).toContain("adopt = 'adoptSchema'");
     expect(wrapper).toContain("planAdoption = 'planSchemaAdoption'");
     expect(wrapper).toContain('adoptionAwait(method, schema, baselineVersion)');
+  });
+
+  test('exposes the PostgreSQL-native API and schema facade', async () => {
+    const wrapper = await fixture('lib/Postgres.lua');
+    const manifest = await fixture('tests/fxserver/qbxsql_runtime_test/fxmanifest.lua');
+    const server = await fixture('tests/fxserver/qbxsql_runtime_test/server.lua');
+
+    expect(wrapper).toContain('local Postgres = Postgres or {}');
+    expect(wrapper).toContain("query = 'postgresQuery'");
+    expect(wrapper).toContain("execute = 'postgresExecute'");
+    expect(wrapper).toContain("ensure = 'postgresEnsureSchema'");
+    expect(wrapper).toContain("adopt = 'postgresAdoptSchema'");
+    expect(wrapper).not.toContain('Await(adapter.postgresStartTransaction');
+    expect(manifest).toContain("'@qbxsql/lib/Postgres.lua'");
+    expect(server).toContain('Postgres.Schema.ensure.await');
+    expect(server).toContain('Postgres.transaction.await');
   });
 
   test('rejects a concurrently active real oxmysql resource', async () => {
@@ -78,7 +94,7 @@ describe('qbxsql compatibility metadata and providers', () => {
     const core = await fixture('src/index.ts');
     const compatibility = await fixture('src/api/compatibility.ts');
 
-    expect(core).toContain('registerCompatibilityExports(database, undefined, {');
+    expect(core).toContain('registerCompatibilityExports(mysqlDatabase, undefined, compatibilityOptions)');
     expect(core).toContain('legacyProviders: true');
     expect(compatibility).toContain("runtime.addProviderExport('oxmysql'");
     expect(compatibility).toContain("runtime.addProviderExport('mysql-async'");

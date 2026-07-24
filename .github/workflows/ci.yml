@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: Tests, build, and MariaDB 11.4
+    name: Tests, build, MariaDB 11.4, and PostgreSQL 16
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -27,6 +27,17 @@ jobs:
           - 3306/tcp
         options: >-
           --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
@@ -50,4 +61,5 @@ jobs:
       - name: Run integration suite
         env:
           QBXSQL_TEST_ADMIN_URL: mysql://root:root@127.0.0.1:${{ job.services.database.ports['3306'] }}
+          QBXSQL_TEST_POSTGRES_ADMIN_URL: postgresql://postgres:root@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
         run: bun run test:integration

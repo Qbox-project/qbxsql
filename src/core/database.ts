@@ -17,7 +17,8 @@ export type LifecycleEvent = 'ready' | 'disconnected' | 'reconnected';
 
 export interface DatabaseStatus {
   state: ConnectionState;
-  databaseFamily: 'MariaDB' | 'MySQL' | 'unknown';
+  dialect: DatabaseDriver['dialect'];
+  databaseFamily: 'MariaDB' | 'MySQL' | 'PostgreSQL' | 'unknown';
   databaseVersion: string | null;
   databaseName: string | null;
   pool: PoolStatus;
@@ -136,13 +137,16 @@ export class DatabaseService {
   public getStatus(): DatabaseStatus {
     const serverVersion = this.driver.serverVersion;
     const memory = process.memoryUsage();
-    const databaseFamily = !serverVersion
+    const databaseFamily = this.driver.dialect === 'postgresql'
+      ? 'PostgreSQL'
+      : !serverVersion
       ? 'unknown'
       : /mariadb/i.test(serverVersion)
         ? 'MariaDB'
         : 'MySQL';
     return {
       state: this.connectionState,
+      dialect: this.driver.dialect,
       databaseFamily,
       databaseVersion: serverVersion,
       databaseName: this.driver.databaseName,
@@ -190,6 +194,9 @@ export class DatabaseService {
     sql: string,
     parameters?: SqlParameters,
   ): [query: string, parameters: SqlParameter[]] {
+    if (this.driver.normalizeParameters) {
+      return this.driver.normalizeParameters(sql, parameters);
+    }
     return normalizeParameters(sql, parameters, this.driver.namedPlaceholders !== false);
   }
 
@@ -240,6 +247,14 @@ export class DatabaseService {
     options: QueryOptions = {},
   ): Promise<number | null> {
     return (await this.run(sql, parameters, options)).affectedRows;
+  }
+
+  public async executeResult(
+    sql: string,
+    parameters?: SqlParameters,
+    options: QueryOptions = {},
+  ): Promise<DriverResult> {
+    return this.run(sql, parameters, options);
   }
 
   public async prepare(
@@ -323,26 +338,45 @@ export class DatabaseService {
     }
   }
 
-  public async startTransaction(
+  public async transactionResults(
+    statements: readonly TransactionStatement[],
+    invokingResource = 'unknown',
+  ): Promise<DriverResult[]> {
+    await this.awaitConnection();
+    const connection = await this.driver.acquire();
+    const results: DriverResult[] = [];
+
+    try {
+      await connection.beginTransaction();
+      for (const statement of statements) {
+        const [query, parameters] = this.normalize(statement.query, statement.parameters);
+        results.push(
+          await this.measureQuery(query, invokingResource, () =>
+            connection.query(query, parameters),
+          ),
+        );
+      }
+      await connection.commit();
+      return results;
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error(`[qbxsql] rollback failed for ${invokingResource}`, rollbackError);
+      }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  public async withTransaction(
     work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
     invokingResource = 'unknown',
-    onError?: (error: unknown) => void,
   ): Promise<boolean> {
     if (typeof work !== 'function') throw new TypeError('Transaction callback must be a function.');
-    let connection: DatabaseConnection;
-    try {
-      await this.awaitConnection();
-      connection = await this.driver.acquire();
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
-      try {
-        onError?.(error);
-      } catch (listenerError) {
-        console.error('[qbxsql] callback transaction error listener failed', listenerError);
-      }
-      return false;
-    }
+    await this.awaitConnection();
+    const connection = await this.driver.acquire();
     let closed = false;
     let timedOut = false;
     let rejectTimeout: ((error: Error) => void) | null = null;
@@ -371,6 +405,7 @@ export class DatabaseService {
             )
           ).rows;
         } catch (error) {
+          if (this.driver.dialect === 'postgresql') throw error;
           const reason = error instanceof Error ? error.message : String(error);
           throw new Error(`Query: ${statement}\n${JSON.stringify(values)}\n${reason}`);
         }
@@ -391,6 +426,23 @@ export class DatabaseService {
           // The original transaction error is more useful than a secondary rollback failure.
         }
       }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      rejectTimeout = null;
+      closed = true;
+      connection.release();
+    }
+  }
+
+  public async startTransaction(
+    work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
+    invokingResource = 'unknown',
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
+    try {
+      return await this.withTransaction(work, invokingResource);
+    } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
       try {
@@ -399,11 +451,6 @@ export class DatabaseService {
         console.error('[qbxsql] callback transaction error listener failed', listenerError);
       }
       return false;
-    } finally {
-      clearTimeout(timeout);
-      rejectTimeout = null;
-      closed = true;
-      connection.release();
     }
   }
 
@@ -458,7 +505,7 @@ export class DatabaseService {
     const rows = (result as DriverResult).rows;
     if (!Array.isArray(rows) || rows.length < warning) return;
     console.warn(
-      `[qbxsql] ${resource} returned ${rows.length} rows for a query; mysql_resultset_warning is ${warning}.\n${query}`,
+      `[qbxsql] ${resource} returned ${rows.length} rows for a query; qbxsql_resultset_warning is ${warning}.\n${query}`,
     );
   }
 

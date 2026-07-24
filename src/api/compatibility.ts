@@ -20,6 +20,8 @@ export interface RuntimeBindings {
 export interface CompatibilityRegistrationOptions {
   legacyProviders?: boolean;
   oxmysqlProvider?: boolean;
+  getStatus?: (dialect?: string) => unknown;
+  getStatuses?: () => unknown;
 }
 
 function errorMessage(error: unknown): string {
@@ -265,7 +267,8 @@ export function registerCompatibilityExports(
       await database.awaitConnection();
       return true;
     },
-    getStatus: () => database.getStatus(),
+    getStatus: (dialect?: string) => options.getStatus?.(dialect) ?? database.getStatus(),
+    getStatuses: () => options.getStatuses?.() ?? { mysql: database.getStatus(), postgresql: null },
     query: queryMethod('query'),
     single: queryMethod('single'),
     scalar: queryMethod('scalar'),
@@ -431,7 +434,7 @@ export function registerCompatibilityExports(
     runtime.addExport(name, method);
     if (oxmysqlProvider) runtime.addProviderExport('oxmysql', name, method);
 
-    if (!['isReady', 'awaitConnection', 'getStatus', 'store', 'startTransaction'].includes(name)) {
+    if (!['isReady', 'awaitConnection', 'getStatus', 'getStatuses', 'store', 'startTransaction'].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
       runtime.addExport(`${name}Sync`, promiseMethod);
@@ -492,4 +495,87 @@ export function registerCompatibilityExports(
   }
 
   return api;
+}
+
+export function registerMySqlUnavailableExports(
+  bindings: RuntimeBindings | null = createRuntimeBindings(),
+  options: CompatibilityRegistrationOptions = {},
+): void {
+  const runtime = bindings;
+  if (!runtime) return;
+  const message =
+    'MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string.';
+  const error = () => Object.assign(new Error(message), { code: 'QBXSQL_MYSQL_NOT_CONFIGURED' });
+  const provider = options.legacyProviders === true && options.oxmysqlProvider !== false;
+  const unavailable: ExportFunction = (...args: unknown[]) => {
+    const callback = [...args].reverse().find((entry) => typeof entry === 'function') as
+      | CfxCallback
+      | undefined;
+    console.error(`[qbxsql] ${message}`);
+    if (callback) {
+      callback(null, message);
+      return;
+    }
+    throw error();
+  };
+  const promiseUnavailable = async () => {
+    throw error();
+  };
+  const store: ExportFunction = (query: string, callback?: CfxCallback) => {
+    callback?.(query);
+    return query;
+  };
+  const methods = [
+    'query',
+    'single',
+    'scalar',
+    'insert',
+    'update',
+    'prepare',
+    'rawExecute',
+    'transaction',
+    'startTransaction',
+    'execute',
+    'fetch',
+  ];
+
+  runtime.addExport('isReady', () => false);
+  runtime.addExport('awaitConnection', promiseUnavailable);
+  runtime.addExport('getStatus', (dialect?: string) => options.getStatus?.(dialect) ?? null);
+  runtime.addExport('getStatuses', () => options.getStatuses?.() ?? { mysql: null, postgresql: null });
+  runtime.addExport('store', store);
+  for (const name of methods) {
+    runtime.addExport(name, unavailable);
+    runtime.addExport(`${name}_async`, promiseUnavailable);
+    runtime.addExport(`${name}Sync`, promiseUnavailable);
+    if (provider) {
+      runtime.addProviderExport('oxmysql', name, unavailable);
+      runtime.addProviderExport('oxmysql', `${name}_async`, promiseUnavailable);
+      runtime.addProviderExport('oxmysql', `${name}Sync`, promiseUnavailable);
+    }
+  }
+  if (provider) {
+    runtime.addProviderExport('oxmysql', 'isReady', () => false);
+    runtime.addProviderExport('oxmysql', 'awaitConnection', promiseUnavailable);
+    runtime.addProviderExport('oxmysql', 'store', store);
+  }
+
+  if (options.legacyProviders) {
+    for (const name of [
+      'mysql_fetch_all',
+      'mysql_fetch_scalar',
+      'mysql_execute',
+      'mysql_insert',
+      'mysql_transaction',
+    ]) {
+      runtime.addProviderExport('mysql-async', name, unavailable);
+    }
+    runtime.addProviderExport('mysql-async', 'mysql_store', store);
+    for (const name of ['execute', 'scalar', 'insert', 'transaction']) {
+      runtime.addProviderExport('ghmattimysql', name, unavailable);
+      runtime.addProviderExport('ghmattimysql', `${name}Sync`, promiseUnavailable);
+    }
+    runtime.addProviderExport('ghmattimysql', 'store', store);
+    runtime.addProviderExport('ghmattimysql', 'storeSync', store);
+  }
 }

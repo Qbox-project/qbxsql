@@ -18,6 +18,7 @@ export interface DriverResult {
   insertId: number | string | null;
   warningStatus: number | null;
   hasResultSetHeader: boolean;
+  command?: string;
 }
 
 export interface QueryOptions {
@@ -50,6 +51,10 @@ export interface DatabaseDriver {
   readonly ready: boolean;
   readonly namedPlaceholders?: boolean;
 
+  normalizeParameters?(
+    sql: string,
+    parameters?: SqlParameters,
+  ): [query: string, parameters: SqlParameter[]];
   connect(): Promise<void>;
   close(): Promise<void>;
   query(sql: string, parameters?: readonly unknown[]): Promise<DriverResult>;

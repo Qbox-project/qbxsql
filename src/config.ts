@@ -4,24 +4,43 @@ export type TransactionIsolationLevel =
   | 'REPEATABLE READ'
   | 'SERIALIZABLE';
 
+export type SchemaMode = 'auto' | 'plan' | 'off';
+export type DatabaseDebug = boolean | readonly string[];
+
+/**
+ * Runtime configuration consumed by one database service. This remains the
+ * public construction type used by tests and embedders.
+ */
 export interface QbxSqlConfig {
   connectionString: string;
   connectionLimit: number;
   connectTimeout: number;
   slowQueryWarning: number;
   resultsetWarning?: number;
-  debug: boolean | readonly string[];
+  debug: DatabaseDebug;
   transactionIsolationLevel: TransactionIsolationLevel;
   connectionWaitTimeout: number;
   connectionQueueLimit: number;
   healthInterval: number;
   connectionRetryMax: number;
   transactionTimeout: number;
-  schemaMode: 'auto' | 'plan' | 'off';
+  schemaMode: SchemaMode;
   schemaAllowBlocking: boolean;
   schemaConnectionString?: string;
+  schemaLockTimeout?: number;
   connectionLimitExplicit?: boolean;
   connectTimeoutExplicit?: boolean;
+}
+
+export interface PostgresSqlConfig extends QbxSqlConfig {
+  minimumServerVersion: number;
+}
+
+export interface QbxSqlRuntimeConfig {
+  mysql?: QbxSqlConfig;
+  postgres?: PostgresSqlConfig;
+  schemaMode: SchemaMode;
+  schemaAllowBlocking: boolean;
 }
 
 const unsetConvar = '__qbxsql_convar_not_set__';
@@ -36,35 +55,38 @@ function readOptionalConvar(name: string): string | undefined {
   return value;
 }
 
-function preferredConvar(nativeName: string, legacyName?: string): string | undefined {
-  return readOptionalConvar(nativeName) ?? (legacyName ? readOptionalConvar(legacyName) : undefined);
+function firstConvar(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = readOptionalConvar(name);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function integerOption(
-  nativeName: string,
+  names: readonly string[],
   fallback: number,
   minimum: number,
-  legacyName?: string,
 ): { value: number; explicit: boolean } {
-  const raw = preferredConvar(nativeName, legacyName);
+  const raw = firstConvar(...names);
   if (raw === undefined) return { value: fallback, explicit: false };
 
   if (!/^-?\d+$/.test(raw.trim())) {
-    console.warn(`[qbxsql] Ignoring invalid integer convar ${nativeName}.`);
+    console.warn(`[qbxsql] Ignoring invalid integer convar ${names[0]}.`);
     return { value: fallback, explicit: false };
   }
 
   const value = Number.parseInt(raw, 10);
   if (!Number.isSafeInteger(value) || value < minimum) {
-    console.warn(`[qbxsql] Ignoring out-of-range convar ${nativeName}; minimum is ${minimum}.`);
+    console.warn(`[qbxsql] Ignoring out-of-range convar ${names[0]}; minimum is ${minimum}.`);
     return { value: fallback, explicit: false };
   }
 
   return { value, explicit: true };
 }
 
-function debugOption(): boolean | readonly string[] {
-  const raw = preferredConvar('qbxsql_debug', 'mysql_debug');
+function debugOption(): DatabaseDebug {
+  const raw = firstConvar('qbxsql_debug', 'mysql_debug');
   if (raw === undefined) return false;
 
   const normalized = raw.trim().toLowerCase();
@@ -94,7 +116,7 @@ function booleanConvar(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
-function schemaMode(): QbxSqlConfig['schemaMode'] {
+function schemaMode(): SchemaMode {
   const raw = readOptionalConvar('qbxsql_schema_mode')?.trim().toLowerCase();
   if (!raw) return 'auto';
   if (raw === 'auto' || raw === 'plan' || raw === 'off') return raw;
@@ -103,7 +125,7 @@ function schemaMode(): QbxSqlConfig['schemaMode'] {
 }
 
 function isolationOption(): TransactionIsolationLevel {
-  const raw = preferredConvar(
+  const raw = firstConvar(
     'qbxsql_transaction_isolation_level',
     'mysql_transaction_isolation_level',
   );
@@ -126,41 +148,139 @@ function isolationOption(): TransactionIsolationLevel {
   return 'READ COMMITTED';
 }
 
-export function loadConfig(): QbxSqlConfig {
-  const connectionLimit = integerOption('qbxsql_connection_limit', 10, 1);
-  const connectTimeout = integerOption('qbxsql_connect_timeout', 60_000, 1_000);
+interface DatabaseConfigOptions {
+  dialect: 'mysql' | 'postgresql';
+  connectionString: string;
+  schemaConnectionString?: string;
+  mode: SchemaMode;
+  allowBlocking: boolean;
+}
 
-  const schemaConnectionString = readOptionalConvar('qbxsql_schema_connection_string');
+function databaseConfig(options: DatabaseConfigOptions): QbxSqlConfig {
+  const prefix =
+    options.dialect === 'mysql' ? 'qbxsql_mysql_' : 'qbxsql_postgres_';
+  const connectionLimit = integerOption(
+    [`${prefix}connection_limit`, 'qbxsql_connection_limit'],
+    10,
+    1,
+  );
+  const connectTimeout = integerOption(
+    [`${prefix}connect_timeout`, 'qbxsql_connect_timeout'],
+    60_000,
+    1_000,
+  );
+
   return {
-    connectionString:
-      preferredConvar('qbxsql_connection_string', 'mysql_connection_string') ??
-      process.env.DB_CONNECTION ??
-      'mysql://root@127.0.0.1/qbxsql',
+    connectionString: options.connectionString,
     connectionLimit: connectionLimit.value,
     connectionLimitExplicit: connectionLimit.explicit,
     connectTimeout: connectTimeout.value,
     connectTimeoutExplicit: connectTimeout.explicit,
     slowQueryWarning: integerOption(
-      'qbxsql_slow_query_warning',
+      [`${prefix}slow_query_warning`, 'qbxsql_slow_query_warning', 'mysql_slow_query_warning'],
       200,
       0,
-      'mysql_slow_query_warning',
     ).value,
     resultsetWarning: integerOption(
-      'qbxsql_resultset_warning',
+      [`${prefix}resultset_warning`, 'qbxsql_resultset_warning', 'mysql_resultset_warning'],
       1_000,
       0,
-      'mysql_resultset_warning',
     ).value,
     debug: debugOption(),
     transactionIsolationLevel: isolationOption(),
-    connectionWaitTimeout: integerOption('qbxsql_connection_wait_timeout', 30_000, 1).value,
-    connectionQueueLimit: integerOption('qbxsql_connection_queue_limit', 1_000, 1).value,
-    healthInterval: integerOption('qbxsql_health_interval', 10_000, 1_000).value,
-    connectionRetryMax: integerOption('qbxsql_connection_retry_max', 30_000, 250).value,
-    transactionTimeout: integerOption('qbxsql_transaction_timeout', 30_000, 1).value,
-    schemaMode: schemaMode(),
-    schemaAllowBlocking: booleanConvar('qbxsql_schema_allow_blocking', false),
-    ...(schemaConnectionString ? { schemaConnectionString } : {}),
+    connectionWaitTimeout: integerOption(
+      [`${prefix}connection_wait_timeout`, 'qbxsql_connection_wait_timeout'],
+      30_000,
+      1,
+    ).value,
+    connectionQueueLimit: integerOption(
+      [`${prefix}connection_queue_limit`, 'qbxsql_connection_queue_limit'],
+      1_000,
+      1,
+    ).value,
+    healthInterval: integerOption(
+      [`${prefix}health_interval`, 'qbxsql_health_interval'],
+      10_000,
+      1_000,
+    ).value,
+    connectionRetryMax: integerOption(
+      [`${prefix}connection_retry_max`, 'qbxsql_connection_retry_max'],
+      30_000,
+      250,
+    ).value,
+    transactionTimeout: integerOption(
+      [`${prefix}transaction_timeout`, 'qbxsql_transaction_timeout'],
+      30_000,
+      1,
+    ).value,
+    schemaMode: options.mode,
+    schemaAllowBlocking: options.allowBlocking,
+    schemaLockTimeout: integerOption(
+      [`${prefix}schema_lock_timeout`, 'qbxsql_schema_lock_timeout'],
+      options.dialect === 'postgresql' ? 2_000 : 30_000,
+      1,
+    ).value,
+    ...(options.schemaConnectionString
+      ? { schemaConnectionString: options.schemaConnectionString }
+      : {}),
+  };
+}
+
+export function loadConfig(): QbxSqlRuntimeConfig {
+  const mode = schemaMode();
+  const allowBlocking = booleanConvar('qbxsql_schema_allow_blocking', false);
+  const postgresConnectionString = readOptionalConvar('qbxsql_postgres_connection_string');
+  const mysqlConnectionString = firstConvar(
+    'qbxsql_mysql_connection_string',
+    'qbxsql_connection_string',
+    'mysql_connection_string',
+  );
+
+  if (!mysqlConnectionString && !postgresConnectionString) {
+    throw new Error(
+      '[qbxsql] No database configured. Set mysql_connection_string, qbxsql_mysql_connection_string, or qbxsql_postgres_connection_string.',
+    );
+  }
+
+  const mysqlSchemaConnectionString = firstConvar(
+    'qbxsql_mysql_schema_connection_string',
+    'qbxsql_schema_connection_string',
+  );
+  const postgresSchemaConnectionString = readOptionalConvar(
+    'qbxsql_postgres_schema_connection_string',
+  );
+
+  return {
+    schemaMode: mode,
+    schemaAllowBlocking: allowBlocking,
+    ...(mysqlConnectionString
+      ? {
+          mysql: databaseConfig({
+            dialect: 'mysql',
+            connectionString: mysqlConnectionString,
+            mode,
+            allowBlocking,
+            ...(mysqlSchemaConnectionString
+              ? { schemaConnectionString: mysqlSchemaConnectionString }
+              : {}),
+          }),
+        }
+      : {}),
+    ...(postgresConnectionString
+      ? {
+          postgres: {
+            ...databaseConfig({
+              dialect: 'postgresql',
+              connectionString: postgresConnectionString,
+              mode,
+              allowBlocking,
+              ...(postgresSchemaConnectionString
+                ? { schemaConnectionString: postgresSchemaConnectionString }
+                : {}),
+            }),
+            minimumServerVersion: 160_000,
+          },
+        }
+      : {}),
   };
 }

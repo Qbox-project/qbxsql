@@ -1,5 +1,12 @@
 # Declarative schema operations
 
+qbxsql has separate dialect-native schema facades:
+
+- `QBXSQL.Schema` manages MySQL/MariaDB declarations.
+- `Postgres.Schema` manages PostgreSQL declarations.
+
+They share the policy model, ownership concepts, adoption workflow, and structured plan fields, but never translate definitions across dialects. PostgreSQL resources must load `@qbxsql/lib/Postgres.lua`; MySQL resources load `@qbxsql/lib/Schema.lua`.
+
 ## Modes
 
 - `auto` applies only actions that are both data-safe and database-enforced online, plus explicitly authorized migrations.
@@ -11,6 +18,8 @@ Plans preserve the original fields and add `dataSafe`, `onlineSafe`, `automatic`
 In `plan` mode, callback callers receive `nil, { code = 'QBXSQL_SCHEMA_PENDING_CHANGES', message = ..., result = plan }`; `.await` rejects with the same structured table. DDL that requires an explicit migration similarly returns `QBXSQL_SCHEMA_MIGRATION_REQUIRED` with its plan. Call the explicit planning APIs when normal control flow should return a plan instead of rejecting.
 
 qbxsql requests `ALGORITHM=INSTANT` or `ALGORITHM=INPLACE, LOCK=NONE` based on database/version capability. A server rejection becomes a migration-required plan. There is no automatic fallback to blocking DDL.
+
+For PostgreSQL, ordinary safe DDL is transactional. Indexes on existing tables are built with `CREATE INDEX CONCURRENTLY`; checks and foreign keys are added `NOT VALID` and validated separately. Lock timeout, statement failure, or an invalid interrupted concurrent index becomes a migration-required result and can be safely reconciled on the next ensure.
 
 ## Migrations
 
@@ -28,11 +37,15 @@ Data-loss operations require `allowDataLoss = true`. Blocking or unknown DDL req
 
 DDL is journaled because MySQL/MariaDB implicitly commits many schema statements. Successful idempotent operations can resume after interruption; failed raw SQL requires manual inspection.
 
+PostgreSQL migrations additionally support `addCheck`, `dropConstraint`, and `validateConstraint`. Table/index/check/foreign-key definitions support PostgreSQL-native identity columns, JSONB, UUID, partial and included-column indexes, index methods, deferrable foreign keys, and comments. MySQL-only options are rejected. See [POSTGRESQL.md](POSTGRESQL.md).
+
 ## Ownership
 
 Only one resource can own a table. Ownership follows a successful rename and is removed only after a successful drop. A declaration cannot silently abandon a table; use `releaseTable` with `allowOwnershipTransfer = true`.
 
 Introspection is limited to declared, owned, and migration-source tables. Drift detection covers columns (including enums and `ON UPDATE CURRENT_TIMESTAMP`), primary keys, indexes, foreign keys, engine, charset, and collation. Undeclared columns/indexes/foreign keys are reported but never silently removed.
+
+PostgreSQL introspection is likewise scoped and covers formatted column types, nullability, defaults, identity mode, comments, primary keys, index definition/validity, checks, and foreign keys. Managed application tables are in `public`; internal state is isolated in `qbxsql_internal`.
 
 ## Adoption
 
@@ -44,3 +57,10 @@ local adopted = QBXSQL.Schema.adopt.await(schema, baselineVersion)
 ```
 
 Callback forms take the same schema/baseline followed by a callback. Adoption refuses already-owned/conflicting tables and invalid baselines. The baseline is recorded before migrations above it, allowing a failed adoption to resume safely. qbxsql reconciles the final declaration and claims final tables only after convergence.
+
+The PostgreSQL equivalents are:
+
+```lua
+local plan = Postgres.Schema.planAdoption.await(schema, baselineVersion)
+local adopted = Postgres.Schema.adopt.await(schema, baselineVersion)
+```

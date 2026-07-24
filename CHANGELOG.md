@@ -4,9 +4,17 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
+- Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
+
+## 0.4.0 - 2026-07-24
+
+- Added an independent PostgreSQL 16+ lane using the pure-JavaScript `pg` driver. PostgreSQL-only and simultaneous MySQL/PostgreSQL deployments are supported with separate pools, reconnect lifecycles, queues, health status, events, and schema credentials.
+- Added the `Postgres` Lua facade with callback and `.await` query/single/scalar/execute methods, statement-list and callback transactions, `$1` parameter validation, structured PostgreSQL errors, and precision-safe CFX value conversion.
+- Added `Postgres.Schema` with PostgreSQL-native types, identity columns, JSONB, UUID, checks, foreign keys, partial/include/method indexes, comments, plan/auto/off modes, advisory locking, action journals, ownership, adoption, separate credentials, transactional DDL, concurrent indexes, and `NOT VALID` constraint rollout.
+- Kept all oxmysql, mysql-async, and ghmattimysql names routed exclusively to MySQL/MariaDB; qbxsql performs no SQL translation and no cross-database transactions.
+- Extended the lean hosted CI and local packaged stock-Linux FXServer gate to exercise MariaDB 11.4 and PostgreSQL 16 together.
 - Added support for an explicitly marked physical `oxmysql` bridge resource for scripts that refuse CFX `provide` aliases.
 - Added `ghmattimysql` `insert` and `insertSync` provider exports for resources that use the extended legacy insert helpers.
-- Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
 ## 0.3.2 - 2026-07-24
 
