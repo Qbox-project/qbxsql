@@ -20346,9 +20346,10 @@ function normalizeParameters(query, parameters) {
     if (count === 1 && !Object.keys(record).some((key) => /^\d+$/.test(key))) {
       return [query, [record]];
     }
+    const base = Object.hasOwn(record, "0") ? 0 : 1;
     const positional = Array.from({ length: count });
     for (let index = 0; index < count; index += 1) {
-      positional[index] = record[String(index + 1)] ?? record[String(index)] ?? null;
+      positional[index] = record[String(index + base)] ?? null;
     }
     return [query, positional];
   }
@@ -21010,19 +21011,11 @@ function typeCast(field, next) {
       const value = field.string();
       return value ? (/* @__PURE__ */ new Date(`${value} 00:00:00`)).getTime() : null;
     }
-    case "TINY": {
-      if (field.length !== 1) return next();
-      const value = field.string();
-      if (value === "0") return false;
-      if (value === "1") return true;
-      return next();
-    }
+    case "TINY":
+      return field.length === 1 ? field.string() === "1" : next();
     case "BIT": {
       const value = field.buffer();
-      if (!value || value.length !== 1) return next();
-      if (value[0] === 0) return false;
-      if (value[0] === 1) return true;
-      return next();
+      return field.length === 1 ? value?.[0] === 1 : value?.[0];
     }
     default:
       return next();

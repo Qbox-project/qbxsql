@@ -191,7 +191,7 @@ export function parseMySqlConnectionString(
   return options as ConnectionOptions;
 }
 
-function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
+export function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
   switch (field.type) {
     case 'DATETIME':
     case 'DATETIME2':
@@ -205,19 +205,11 @@ function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
       const value = field.string();
       return value ? new Date(`${value} 00:00:00`).getTime() : null;
     }
-    case 'TINY': {
-      if (field.length !== 1) return next();
-      const value = field.string();
-      if (value === '0') return false;
-      if (value === '1') return true;
-      return next();
-    }
+    case 'TINY':
+      return field.length === 1 ? field.string() === '1' : next();
     case 'BIT': {
       const value = field.buffer();
-      if (!value || value.length !== 1) return next();
-      if (value[0] === 0) return false;
-      if (value[0] === 1) return true;
-      return next();
+      return field.length === 1 ? value?.[0] === 1 : value?.[0];
     }
     default:
       return next();

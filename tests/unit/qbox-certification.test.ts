@@ -27,7 +27,7 @@ async function completedCertification() {
     await readFile(path.join(root, 'docs', 'qbox-certification.template.json'), 'utf8'),
   );
   const checksum = (
-    await readFile(path.join(root, 'release', 'qbxsql-0.3.0.zip.sha256'), 'utf8')
+    await readFile(path.join(root, 'release', 'qbxsql-0.3.1.zip.sha256'), 'utf8')
   ).split(/\s+/)[0];
   certification.metadata = {
     operator: 'Release operator',
@@ -36,7 +36,7 @@ async function completedCertification() {
     clientArtifact: 'FiveM production client 2026-07-22',
     qboxVersion: 'Qbox commit 0123456789abcdef',
     databaseVersion: 'MariaDB 11.4.12',
-    qbxsqlVersion: '0.3.0',
+    qbxsqlVersion: '0.3.1',
     compatibilityTarget: '2.14.1',
     qbxsqlSha256: checksum,
     evidenceBundle: 'evidence/qbox-certification/',
@@ -76,7 +76,7 @@ describe('Qbox real-client certification gate', () => {
     expect(result.exitCode).toBe(0);
     const summary = JSON.parse(await readFile(output, 'utf8'));
     expect(summary.passedChecks).toHaveLength(21);
-    expect(summary.release.version).toBe('0.3.0');
+    expect(summary.release.version).toBe('0.3.1');
     expect(summary.release.compatibilityTarget).toBe('2.14.1');
     expect(summary.release.sha256).toMatch(/^[a-f0-9]{64}$/);
   });

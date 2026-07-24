@@ -10,6 +10,28 @@ describe('SQL parameter normalization', () => {
     expect(normalizeParameters('SELECT ?, ?', [42])).toEqual(['SELECT ?, ?', [42, null]]);
   });
 
+  test('preserves holes in one-based CFX parameter records', () => {
+    expect(
+      normalizeParameters('VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', {
+        1: 'withdraw',
+        3: 'XGX73T89',
+        6: 3250,
+        7: 'Bank withdraw',
+        8: 'XGX73T89',
+      }),
+    ).toEqual([
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['withdraw', null, 'XGX73T89', null, null, 3250, 'Bank withdraw', 'XGX73T89', null],
+    ]);
+  });
+
+  test('preserves holes in zero-based parameter records', () => {
+    expect(normalizeParameters('VALUES (?, ?, ?)', { 0: 'first', 2: 'third' })).toEqual([
+      'VALUES (?, ?, ?)',
+      ['first', null, 'third'],
+    ]);
+  });
+
   test('rejects excess positional values', () => {
     expect(() => normalizeParameters('SELECT ?', [1, 2])).toThrow(
       'Expected 1 parameters, but received 2.',
@@ -39,4 +61,3 @@ describe('SQL parameter normalization', () => {
     ]);
   });
 });
-

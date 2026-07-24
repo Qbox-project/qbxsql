@@ -162,9 +162,10 @@ export function normalizeParameters(
       return [query, [record]];
     }
 
+    const base = Object.hasOwn(record, '0') ? 0 : 1;
     const positional = Array.from<SqlParameter>({ length: count });
     for (let index = 0; index < count; index += 1) {
-      positional[index] = record[String(index + 1)] ?? record[String(index)] ?? null;
+      positional[index] = record[String(index + base)] ?? null;
     }
     return [query, positional];
   }

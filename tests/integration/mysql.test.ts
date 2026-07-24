@@ -111,8 +111,19 @@ describe('MySQL driver integration', () => {
     expect(rows).toEqual([{ name: 'Ada' }]);
   });
 
+  test('handles non-boolean values stored in TINYINT(1) columns', async () => {
+    const id = await database.insert(
+      'INSERT INTO values_test (name, enabled) VALUES (?, ?)',
+      ['Legacy tiny value', 2],
+    );
+    const row = (await database.single('SELECT enabled FROM values_test WHERE id = ?', [
+      id,
+    ])) as Record<string, unknown>;
+    expect(row.enabled).toBe(false);
+  });
+
   test('returns scalar and affected-row results', async () => {
-    expect(await database.scalar('SELECT COUNT(*) FROM values_test')).toBe(1);
+    expect(await database.scalar('SELECT COUNT(*) FROM values_test')).toBe(2);
     expect(await database.update('UPDATE values_test SET name = ? WHERE name = ?', ['Grace', 'Ada'])).toBe(
       1,
     );

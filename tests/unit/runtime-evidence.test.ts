@@ -53,7 +53,7 @@ describe('runtime release evidence', () => {
     expect(evidence.schemaVersion).toBe(1);
     expect(evidence.runtime.flavor).toBe('stock');
     expect(evidence.fxserver.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(evidence.qbxsql.version).toBe('0.3.0');
+    expect(evidence.qbxsql.version).toBe('0.3.1');
     expect(evidence.qbxsql.compatibilityTarget).toBe('2.14.1');
     expect(evidence.ci.commit).toBe('0123456789abcdef');
     expect(raw).not.toContain('secret-user');
