@@ -5,7 +5,12 @@
     "exports": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/index.ts",
     "lua": "https://github.com/overextended/oxmysql/blob/v2.14.1/lib/MySQL.lua",
     "ghmattimysql": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/compatibility/ghmattimysql.ts",
-    "mysqlAsync": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/compatibility/mysql-async.ts"
+    "mysqlAsync": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/compatibility/mysql-async.ts",
+    "typeCast": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/utils/typeCast.ts",
+    "parameters": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/utils/parseArguments.ts",
+    "prepared": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/utils/parseExecute.ts",
+    "transactions": "https://github.com/overextended/oxmysql/blob/v2.14.1/src/utils/parseTransaction.ts",
+    "patches": "https://github.com/overextended/oxmysql/tree/v2.14.1/patches"
   },
   "queryMethods": [
     "query",

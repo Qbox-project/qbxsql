@@ -61,6 +61,7 @@ describe('MySQL driver integration', () => {
         enabled TINYINT(1) NOT NULL,
         happened_at DATETIME NULL,
         payload BLOB NULL,
+        bit_value BIT(1) NULL,
         note TEXT NULL
       )
     `);
@@ -122,8 +123,51 @@ describe('MySQL driver integration', () => {
     expect(row.enabled).toBe(false);
   });
 
+  test('matches text and prepared protocol casting including binary BLOB nulls', async () => {
+    const id = await database.insert(
+      "INSERT INTO values_test (name, enabled, payload, bit_value, note) VALUES (?, ?, NULL, b'1', NULL)",
+      ['Protocol casts', 2],
+    );
+
+    const queried = (await database.single(
+      'SELECT enabled, payload, bit_value, note FROM values_test WHERE id = ?',
+      [id],
+    )) as Record<string, unknown>;
+    expect(queried).toEqual({
+      enabled: false,
+      payload: [null],
+      bit_value: true,
+      note: null,
+    });
+
+    expect(
+      await database.prepare(
+        'SELECT enabled, payload, bit_value, note FROM values_test WHERE id = ?',
+        [id],
+      ),
+    ).toEqual({
+      enabled: 2,
+      payload: null,
+      bit_value: [1],
+      note: null,
+    });
+    expect(
+      await database.rawExecute(
+        'SELECT enabled, payload, bit_value, note FROM values_test WHERE id = ?',
+        [id],
+      ),
+    ).toEqual([
+      {
+        enabled: 2,
+        payload: null,
+        bit_value: [1],
+        note: null,
+      },
+    ]);
+  });
+
   test('returns scalar and affected-row results', async () => {
-    expect(await database.scalar('SELECT COUNT(*) FROM values_test')).toBe(2);
+    expect(await database.scalar('SELECT COUNT(*) FROM values_test')).toBe(3);
     expect(await database.update('UPDATE values_test SET name = ? WHERE name = ?', ['Grace', 'Ada'])).toBe(
       1,
     );
@@ -215,12 +259,26 @@ describe('MySQL driver integration', () => {
       [{ value: 3 }],
       [{ value: 4 }],
     ]);
+    expect(
+      await database.rawExecute(
+        'SELECT ? AS value UNION ALL SELECT ? AS value',
+        [[10, 11], [12, 13]],
+      ),
+    ).toEqual([{ value: 10 }, { value: 11 }, { value: 12 }, { value: 13 }]);
+    expect(
+      await database.prepare('SELECT ? AS value', { 1: [14], 2: [15] }),
+    ).toEqual([[{ value: 14 }], [{ value: 15 }]]);
     const id = (await database.prepare(
       'INSERT INTO values_test (name, enabled, payload) VALUES (?, ?, ?)',
       ['Prepared buffer', true, Buffer.from([8, 9])],
     )) as number;
     expect(id).not.toBeNull();
     expect(await database.scalar('SELECT COUNT(*) FROM values_test WHERE id = ?', [id])).toBe(1);
+  });
+
+  test('returns null when insert or update helpers receive a row result', async () => {
+    expect(await database.insert('SELECT 1 AS value')).toBeNull();
+    expect(await database.update('SELECT 1 AS value')).toBeNull();
   });
 
   test('registers oxmysql, mysql-async, and ghmattimysql compatibility exports', () => {

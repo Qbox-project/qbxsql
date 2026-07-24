@@ -162,6 +162,91 @@ async function runConflictGate() {
   }
 }
 
+async function runExactIdentityGate() {
+  const identityRoot = path.join(temporaryRoot, 'identity');
+  const identityResources = path.join(identityRoot, 'resources');
+  await mkdir(identityResources, { recursive: true });
+  await cp(path.join(releaseRoot, 'qbxsql'), path.join(identityResources, 'oxmysql'), {
+    recursive: true,
+  });
+  await cp(
+    path.join(repositoryRoot, 'tests', 'fxserver', 'oxmysql_identity_test'),
+    path.join(identityResources, 'oxmysql_identity_test'),
+    { recursive: true },
+  );
+
+  const identityConfig = [
+    `sv_licenseKey "${licenseKey.replaceAll('"', '')}"`,
+    'sv_hostname "qbxsql exact identity gate"',
+    'sv_maxclients 1',
+    `endpoint_add_tcp "127.0.0.1:${port + 2}"`,
+    `endpoint_add_udp "127.0.0.1:${port + 2}"`,
+    `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
+    'ensure oxmysql',
+    'ensure oxmysql_identity_test',
+  ].join('\n');
+  await writeFile(path.join(identityRoot, 'server.cfg'), `${identityConfig}\n`, { mode: 0o600 });
+
+  const identityServer = spawn(path.resolve(binary), ['+exec', 'server.cfg'], {
+    cwd: identityRoot,
+    env: {
+      ...process.env,
+      TXHOST_DATA_PATH: identityRoot,
+      TXHOST_PROVIDER_NAME: 'qbxsql exact identity gate',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const safeIdentityStdout = createSecretSafeWriter(process.stdout, sensitiveValues);
+  const safeIdentityStderr = createSecretSafeWriter(process.stderr, sensitiveValues);
+  let identityOutput = '';
+  const identityFinished = new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`FXServer exact-identity gate timed out after ${timeout}ms.`)),
+      timeout,
+    );
+    const consume = (chunk, safeWriter) => {
+      const text = chunk.toString();
+      identityOutput += text;
+      safeWriter.push(text);
+      if (identityOutput.includes('QBXSQL_OXMYSQL_IDENTITY_FAIL')) {
+        clearTimeout(timer);
+        reject(new Error('The exact oxmysql identity fixture reported a failure.'));
+      }
+      if (identityOutput.includes('QBXSQL_OXMYSQL_IDENTITY_PASS')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    };
+    identityServer.stdout.on('data', (chunk) => consume(chunk, safeIdentityStdout));
+    identityServer.stderr.on('data', (chunk) => consume(chunk, safeIdentityStderr));
+    identityServer.stdout.on('end', () => safeIdentityStdout.flush());
+    identityServer.stderr.on('end', () => safeIdentityStderr.flush());
+    identityServer.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    identityServer.on('exit', (code, signal) => {
+      if (!identityOutput.includes('QBXSQL_OXMYSQL_IDENTITY_PASS')) {
+        clearTimeout(timer);
+        reject(
+          new Error(
+            `FXServer exact-identity gate exited with ${signal ?? `code ${code}`} before the fixture passed.`,
+          ),
+        );
+      }
+    });
+  });
+
+  try {
+    await identityFinished;
+  } finally {
+    await closeServer(identityServer);
+    safeIdentityStdout.flush();
+    safeIdentityStderr.flush();
+  }
+}
+
 try {
   await mkdir(resources, { recursive: true });
   await cp(path.join(releaseRoot, 'qbxsql'), path.join(resources, 'qbxsql'), {
@@ -299,6 +384,7 @@ try {
   }
 
   await runConflictGate();
+  await runExactIdentityGate();
   console.log(`[qbxsql] ${flavor} FXServer gate passed with ${release.zipName}.`);
 } finally {
   await cleanup();

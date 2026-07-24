@@ -38,6 +38,10 @@ describe('SQL parameter normalization', () => {
     );
   });
 
+  test('accepts unused values when the query has no placeholders like oxmysql', () => {
+    expect(normalizeParameters('SELECT 1', [99])).toEqual(['SELECT 1', [99]]);
+  });
+
   test('supports colon and at-sign named placeholders', () => {
     expect(
       normalizeParameters(
@@ -52,6 +56,13 @@ describe('SQL parameter normalization', () => {
 
   test('turns absent named values into null', () => {
     expect(normalizeParameters('SELECT :missing', {})).toEqual(['SELECT ?', [null]]);
+  });
+
+  test('leaves named placeholders untouched when connection conversion is disabled', () => {
+    expect(normalizeParameters('SELECT :value', { value: 7 }, false)).toEqual([
+      'SELECT :value',
+      [],
+    ]);
   });
 
   test('wraps an object for mysqljs SET syntax', () => {

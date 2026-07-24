@@ -19,6 +19,7 @@ const result: DriverResult = {
   changedRows: 0,
   insertId: 0,
   warningStatus: 0,
+  hasResultSetHeader: false,
 };
 
 const config: QbxSqlConfig = {
@@ -194,6 +195,27 @@ describe('database connection lifecycle', () => {
       totals: { queries: 1, errors: 0, slowQueries: 0, reconnects: 0 },
     });
     expect(JSON.stringify(database.getStatus())).not.toContain('mysql://test');
+  });
+
+  test('warns on large result sets using the oxmysql convar threshold', async () => {
+    const driver = new FakeDriver();
+    driver.query = async () => ({ ...result, rows: [{ id: 1 }, { id: 2 }] });
+    const database = new DatabaseService(driver, { ...config, resultsetWarning: 2 });
+    databases.push(database);
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    try {
+      await database.query('SELECT id FROM large_table', undefined, {
+        invokingResource: 'large-resource',
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('large-resource returned 2 rows');
+    expect(warnings[0]).toContain('SELECT id FROM large_table');
   });
 
   test('destroys a pinned connection when a callback transaction times out', async () => {

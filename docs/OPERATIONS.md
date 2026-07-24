@@ -13,6 +13,7 @@
 | `qbxsql_connection_retry_max` | `30000` | Maximum reconnect backoff (ms) |
 | `qbxsql_transaction_timeout` | `30000` | Callback transaction limit (ms) |
 | `qbxsql_slow_query_warning` / `mysql_slow_query_warning` | `200` | Slow-query threshold (ms), `0` disables |
+| `qbxsql_resultset_warning` / `mysql_resultset_warning` | `1000` | Warn when a query returns at least this many rows, `0` disables |
 | `qbxsql_debug` / `mysql_debug` | `false` | Boolean or JSON resource-name array |
 | `qbxsql_transaction_isolation_level` / legacy name | `READ COMMITTED` | Session transaction isolation |
 | `qbxsql_schema_mode` | `auto` | `auto`, `plan`, or `off` |

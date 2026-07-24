@@ -20203,6 +20203,12 @@ function loadConfig() {
       0,
       "mysql_slow_query_warning"
     ).value,
+    resultsetWarning: integerOption(
+      "qbxsql_resultset_warning",
+      1e3,
+      0,
+      "mysql_resultset_warning"
+    ).value,
     debug: debugOption(),
     transactionIsolationLevel: isolationOption(),
     connectionWaitTimeout: integerOption("qbxsql_connection_wait_timeout", 3e4, 1).value,
@@ -20325,7 +20331,7 @@ function countPlaceholders(sql) {
   return scanSql(sql, false).positionalCount;
 }
 __name(countPlaceholders, "countPlaceholders");
-function normalizeParameters(query, parameters) {
+function normalizeParameters(query, parameters, convertNamedPlaceholders = true) {
   if (typeof query !== "string") {
     throw new TypeError(`Expected query to be a string but received ${typeof query}.`);
   }
@@ -20335,7 +20341,7 @@ function normalizeParameters(query, parameters) {
   }
   if (!Array.isArray(parameters)) {
     const record = parameterRecord(parameters);
-    const namedScan = scanSql(query, true);
+    const namedScan = scanSql(query, convertNamedPlaceholders);
     if (namedScan.names.length > 0) {
       return [
         namedScan.sql,
@@ -20355,7 +20361,7 @@ function normalizeParameters(query, parameters) {
   }
   const values = [...parameters];
   const expected = countPlaceholders(query);
-  if (values.length > expected) {
+  if (expected > 0 && values.length > expected) {
     throw new Error(`Expected ${expected} parameters, but received ${values.length}.`);
   }
   while (values.length < expected) values.push(null);
@@ -20490,6 +20496,18 @@ var DatabaseService = class {
     const result = await this.run(sql, parameters, options);
     return result.rows;
   }
+  normalize(sql, parameters) {
+    return normalizeParameters(sql, parameters, this.driver.namedPlaceholders !== false);
+  }
+  normalizePrepared(sql, parameters) {
+    let normalizedQuery = sql;
+    const parameterSets = this.parameterSets(parameters).map((parameterSet) => {
+      const [query, values] = this.normalize(sql, parameterSet);
+      normalizedQuery = query;
+      return values;
+    });
+    return [normalizedQuery, parameterSets];
+  }
   async single(sql, parameters, options = {}) {
     const rows = await this.query(sql, parameters, options);
     return Array.isArray(rows) ? rows[0] ?? null : null;
@@ -20512,8 +20530,15 @@ var DatabaseService = class {
     return this.parsePreparedResponse(sql, results);
   }
   async rawExecute(sql, parameters, options = {}) {
-    const results = (await this.executePreparedBatch(sql, this.parameterSets(parameters), options)).map((result) => result.rows);
-    return results.length === 1 ? results[0] : results;
+    const response = [];
+    for (const result of await this.executePreparedBatch(sql, this.parameterSets(parameters), options)) {
+      if (Array.isArray(result.rows) && result.rows.length > 1) {
+        response.push(...result.rows);
+      } else {
+        response.push(result.rows);
+      }
+    }
+    return response.length === 1 ? response[0] : response;
   }
   async executePreparedBatch(sql, parameterSets, options) {
     if (parameterSets.length === 1) {
@@ -20527,7 +20552,7 @@ var DatabaseService = class {
     const results = [];
     try {
       for (const parameters of parameterSets) {
-        const [query, values] = normalizeParameters(sql, parameters);
+        const [query, values] = this.normalize(sql, parameters);
         results.push(
           await this.measureQuery(query, resource, () => connection.execute(query, values))
         );
@@ -20543,7 +20568,7 @@ var DatabaseService = class {
     try {
       await connection.beginTransaction();
       for (const statement of statements) {
-        const [query, parameters] = normalizeParameters(statement.query, statement.parameters);
+        const [query, parameters] = this.normalize(statement.query, statement.parameters);
         await this.measureQuery(query, invokingResource, () => connection.query(query, parameters));
       }
       await connection.commit();
@@ -20559,10 +20584,22 @@ var DatabaseService = class {
       connection.release();
     }
   }
-  async startTransaction(work, invokingResource = "unknown") {
+  async startTransaction(work, invokingResource = "unknown", onError) {
     if (typeof work !== "function") throw new TypeError("Transaction callback must be a function.");
-    await this.awaitConnection();
-    const connection = await this.driver.acquire();
+    let connection;
+    try {
+      await this.awaitConnection();
+      connection = await this.driver.acquire();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      try {
+        onError?.(error);
+      } catch (listenerError) {
+        console.error("[qbxsql] callback transaction error listener failed", listenerError);
+      }
+      return false;
+    }
     let closed = false;
     let timedOut = false;
     let rejectTimeout = null;
@@ -20582,7 +20619,7 @@ var DatabaseService = class {
       await connection.beginTransaction();
       const query = /* @__PURE__ */ __name(async (sql, parameters) => {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
-        const [statement, values] = normalizeParameters(sql, parameters);
+        const [statement, values] = this.normalize(sql, parameters);
         try {
           return (await this.measureQuery(
             statement,
@@ -20613,6 +20650,11 @@ ${reason}`);
       }
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      try {
+        onError?.(error);
+      } catch (listenerError) {
+        console.error("[qbxsql] callback transaction error listener failed", listenerError);
+      }
       return false;
     } finally {
       clearTimeout(timeout);
@@ -20623,7 +20665,7 @@ ${reason}`);
   }
   async run(sql, parameters, options = {}) {
     await this.awaitConnection();
-    const [query, values] = normalizeParameters(sql, parameters);
+    const [query, values] = options.normalized ? [sql, parameters ?? []] : this.normalize(sql, parameters);
     return this.measureQuery(
       query,
       options.invokingResource ?? "unknown",
@@ -20634,7 +20676,9 @@ ${reason}`);
     const started = import_node_perf_hooks.performance.now();
     this.queryTotal += 1;
     try {
-      return await operation();
+      const result = await operation();
+      this.validateResultSet(query, resource, result);
+      return result;
     } catch (error) {
       this.errorTotal += 1;
       throw error;
@@ -20648,6 +20692,16 @@ ${reason}`);
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
+  }
+  validateResultSet(query, resource, result) {
+    const warning = this.config.resultsetWarning ?? 1e3;
+    if (warning <= 0 || !result || typeof result !== "object" || !("rows" in result)) return;
+    const rows = result.rows;
+    if (!Array.isArray(rows) || rows.length < warning) return;
+    console.warn(
+      `[qbxsql] ${resource} returned ${rows.length} rows for a query; mysql_resultset_warning is ${warning}.
+${query}`
+    );
   }
   ensureConnectionLoop() {
     if (this.connectionState === "closing" || this.connectionState === "ready" && this.driver.ready || this.connectionTask) {
@@ -20771,9 +20825,9 @@ ${reason}`);
         continue;
       }
       if (operation === "INSERT" || operation === "REPLACE") {
-        response.push(result.insertId ?? null);
+        response.push(result.hasResultSetHeader ? result.insertId : null);
       } else if (operation === "UPDATE" || operation === "DELETE") {
-        response.push(result.affectedRows);
+        response.push(result.hasResultSetHeader ? result.affectedRows : null);
       } else {
         response.push(result.rows);
       }
@@ -20790,10 +20844,24 @@ ${reason}`);
     return values.length === 1 ? values[0] ?? null : first;
   }
   parameterSets(parameters) {
-    const batch = Array.isArray(parameters) && parameters.length > 0 && parameters.every(
-      (entry) => Array.isArray(entry) || entry !== null && typeof entry === "object" && !Buffer.isBuffer(entry) && !(entry instanceof Date)
-    );
-    return batch ? parameters : [parameters];
+    let candidate = parameters;
+    if (candidate && !Array.isArray(candidate) && typeof candidate === "object") {
+      const entries = Object.entries(candidate);
+      if (entries.length > 0 && entries.every(([key]) => /^\d+$/.test(key))) {
+        const base = Object.hasOwn(candidate, "0") ? 0 : 1;
+        const highest = Math.max(...entries.map(([key]) => Number(key)));
+        const ordered = Array.from(
+          { length: highest - base + 1 },
+          (_, index) => candidate[String(index + base)]
+        );
+        if (ordered.every((entry) => this.isParameterContainer(entry))) candidate = ordered;
+      }
+    }
+    const batch = Array.isArray(candidate) && candidate.length > 0 && candidate.every((entry) => this.isParameterContainer(entry));
+    return batch ? candidate : [parameters];
+  }
+  isParameterContainer(value) {
+    return Array.isArray(value) || value !== null && typeof value === "object" && !Buffer.isBuffer(value) && !(value instanceof Date);
   }
 };
 
@@ -20864,6 +20932,24 @@ function integerOption2(value, key, minimum) {
   return parsed;
 }
 __name(integerOption2, "integerOption");
+function jsonOption(value, key) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`Connection-string option '${key}' must be valid JSON.`);
+  }
+  if (key === "flags" && (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string"))) {
+    throw new Error("Connection-string option 'flags' must be a JSON array of strings.");
+  }
+  if (key === "dateStrings" && typeof parsed !== "boolean" && typeof parsed !== "string" && (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string"))) {
+    throw new Error(
+      "Connection-string option 'dateStrings' must be a boolean, string, or JSON array of strings."
+    );
+  }
+  return parsed;
+}
+__name(jsonOption, "jsonOption");
 function warnMultipleStatements(enabled, warn) {
   if (enabled) {
     warn(
@@ -20910,6 +20996,9 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
         }
       } else if (normalized === "charset" || normalized === "timezone" || normalized === "socketpath") {
         options2[normalized === "socketpath" ? "socketPath" : normalized] = value;
+      } else if (normalized === "flags" || normalized === "datestrings") {
+        const key = normalized === "flags" ? "flags" : "dateStrings";
+        options2[key] = jsonOption(value, key);
       } else if (normalized === "ssl") {
         try {
           options2.ssl = JSON.parse(value);
@@ -20984,6 +21073,9 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
       if (key === "multipleStatements") warnMultipleStatements(options[key], warn);
     } else if (sourceKey === "charset" || sourceKey === "timezone" || sourceKey === "socketpath") {
       options[sourceKey === "socketpath" ? "socketPath" : sourceKey] = value;
+    } else if (sourceKey === "flags" || sourceKey === "datestrings") {
+      const key = sourceKey === "flags" ? "flags" : "dateStrings";
+      options[key] = jsonOption(value, key);
     } else if (sourceKey === "ssl") {
       try {
         options.ssl = JSON.parse(value);
@@ -21022,24 +21114,79 @@ function typeCast(field, next) {
   }
 }
 __name(typeCast, "typeCast");
-function normalizeDriverResult(rows) {
+function typeCastExecute(field, next) {
+  switch (field.type) {
+    case "DATETIME":
+    case "DATETIME2":
+    case "TIMESTAMP":
+    case "TIMESTAMP2":
+    case "NEWDATE": {
+      const value = field.string();
+      return value ? new Date(value).getTime() : null;
+    }
+    case "DATE": {
+      const value = field.string();
+      return value ? (/* @__PURE__ */ new Date(`${value} 00:00:00`)).getTime() : null;
+    }
+    default:
+      return next();
+  }
+}
+__name(typeCastExecute, "typeCastExecute");
+var binaryCharset = 63;
+var blobColumnTypes = /* @__PURE__ */ new Set([249, 250, 251, 252]);
+function replaceNullBinaryBlobs(rows, fields) {
+  if (!Array.isArray(rows) || !Array.isArray(fields) || fields.length === 0) return rows;
+  if (Array.isArray(fields[0])) {
+    return rows.map(
+      (result, index) => replaceNullBinaryBlobs(result, fields[index] ?? [])
+    );
+  }
+  const binaryBlobNames = fields.filter(
+    (field) => field.characterSet === binaryCharset && blobColumnTypes.has(field.type ?? -1)
+  ).map((field) => field.name);
+  if (binaryBlobNames.length === 0) return rows;
+  return rows.map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+    const source = row;
+    let result = null;
+    for (const name of binaryBlobNames) {
+      if (source[name] !== null) continue;
+      result ??= { ...source };
+      result[name] = [null];
+    }
+    return result ?? row;
+  });
+}
+__name(replaceNullBinaryBlobs, "replaceNullBinaryBlobs");
+function normalizeDriverResult(rows, fields = [], prepared) {
   const header = !Array.isArray(rows) ? rows : null;
+  const serializedRows = serializeForRuntime(rows);
   return {
-    rows: serializeForRuntime(rows),
-    fields: [],
-    affectedRows: header?.affectedRows ?? 0,
-    changedRows: header?.changedRows ?? 0,
-    insertId: header?.insertId ?? 0,
-    warningStatus: header?.warningStatus ?? 0
+    rows: prepared ? serializedRows : replaceNullBinaryBlobs(serializedRows, fields),
+    fields: (Array.isArray(fields[0]) ? fields.flat() : fields).map((field) => ({
+      name: field.name,
+      ...field.table ? { table: field.table } : {},
+      ...field.schema ? { schema: field.schema } : {},
+      ...field.type === void 0 ? {} : { columnType: field.type },
+      ...field.characterSet === void 0 ? {} : { characterSet: field.characterSet }
+    })),
+    affectedRows: header?.affectedRows ?? null,
+    changedRows: header?.changedRows ?? null,
+    insertId: header?.insertId ?? null,
+    warningStatus: header?.warningStatus ?? null,
+    hasResultSetHeader: header !== null
   };
 }
 __name(normalizeDriverResult, "normalizeDriverResult");
 async function runQuery(connection, sql, parameters, prepared) {
   const executor = connection;
   scheduleResourceTick();
-  const [rows] = prepared ? await executor.execute(sql, parameters) : await executor.query(sql, parameters);
+  const [rows, fields] = prepared ? await executor.execute({ sql, typeCast: typeCastExecute }, parameters) : await executor.query(sql, parameters);
   return normalizeDriverResult(
-    rows
+    rows,
+    fields,
+    prepared
   );
 }
 __name(runQuery, "runQuery");
@@ -21107,6 +21254,8 @@ var MySqlConnection = class {
 var MySqlDriver = class {
   constructor(config2) {
     this.config = config2;
+    this.parsedOptions = parseMySqlConnectionString(config2.connectionString);
+    this.namedPlaceholders = this.parsedOptions.namedPlaceholders !== false;
   }
   config;
   static {
@@ -21116,17 +21265,19 @@ var MySqlDriver = class {
   databaseName = null;
   serverVersion = null;
   ready = false;
+  namedPlaceholders;
   pool = null;
   fatalErrorListener = null;
+  parsedOptions;
   async connect() {
     if (this.ready) return;
-    const parsedOptions = parseMySqlConnectionString(this.config.connectionString);
+    const parsedOptions = this.parsedOptions;
     const options = {
       supportBigNumbers: true,
       jsonStrings: true,
-      namedPlaceholders: false,
       trace: false,
       ...parsedOptions,
+      namedPlaceholders: false,
       connectionLimit: parsedOptions.connectionLimit ?? this.config.connectionLimit,
       connectTimeout: parsedOptions.connectTimeout ?? this.config.connectTimeout,
       typeCast
@@ -21215,7 +21366,7 @@ var MySqlDriver = class {
 
 // src/api/compatibility.ts
 function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : String(error).replace(/SCRIPT ERROR: citizen:[\w/\\.]+:\d+[:\s]+/, "");
 }
 __name(errorMessage, "errorMessage");
 function extractCallback(parameters, callback) {
@@ -21227,9 +21378,23 @@ function queryResource(explicit, bindings) {
   return typeof explicit === "string" && explicit.length > 0 ? explicit : bindings.invokingResource();
 }
 __name(queryResource, "queryResource");
+function orderedArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || !entries.every(([key]) => /^\d+$/.test(key))) return null;
+  const base = Object.hasOwn(value, "0") ? 0 : 1;
+  const highest = Math.max(...entries.map(([key]) => Number(key)));
+  return Array.from(
+    { length: highest - base + 1 },
+    (_, index) => value[String(index + base)]
+  );
+}
+__name(orderedArray, "orderedArray");
 function normalizeTransactionStatements(input, sharedParameters) {
-  if (!Array.isArray(input)) throw new TypeError("Transaction queries must be an array.");
-  return input.map((entry, index) => {
+  const queries = orderedArray(input);
+  if (!queries) throw new TypeError("Transaction queries must be an array.");
+  return queries.map((entry, index) => {
     if (typeof entry === "string") {
       const statement2 = { query: entry };
       if (sharedParameters !== void 0) statement2.parameters = sharedParameters;
@@ -21237,6 +21402,16 @@ function normalizeTransactionStatements(input, sharedParameters) {
     }
     if (!entry || typeof entry !== "object") {
       throw new TypeError(`Transaction query at index ${index} is invalid.`);
+    }
+    const tuple = orderedArray(entry);
+    if (tuple && typeof tuple[0] === "string") {
+      const parameters2 = tuple[1];
+      if (!parameters2 || typeof parameters2 !== "object") {
+        throw new TypeError(
+          `Transaction parameters at index ${index} must be an array or object.`
+        );
+      }
+      return { query: tuple[0], parameters: parameters2 };
     }
     const legacy = entry;
     if (typeof legacy.query !== "string") {
@@ -21283,6 +21458,32 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
+  const qbxsqlProvider = options.qbxsqlProvider === true;
+  function normalize(query, parameters) {
+    const normalizer = database2.normalize;
+    return typeof normalizer === "function" ? normalizer.call(database2, query, parameters) : [query, parameters ?? []];
+  }
+  __name(normalize, "normalize");
+  function normalizePrepared(query, parameters) {
+    const normalizer = database2.normalizePrepared;
+    return typeof normalizer === "function" ? normalizer.call(database2, query, parameters) : [query, parameters ?? []];
+  }
+  __name(normalizePrepared, "normalizePrepared");
+  function invokeCallback(callback, resource, ...args) {
+    if (!callback) return;
+    try {
+      callback(...args);
+    } catch (error) {
+      if (typeof error !== "string") {
+        console.error(`[qbxsql] callback from ${resource} threw`, error);
+      } else if (error.includes("SCRIPT ERROR:")) {
+        console.log(error);
+      } else {
+        console.log(`^1SCRIPT ERROR in invoking resource ${resource}: ${error}^0`);
+      }
+    }
+  }
+  __name(invokeCallback, "invokeCallback");
   function operationError(error, callback, returnCallbackErrors, resource, query, parameters, includeParameters = false) {
     const message = errorMessage(error);
     const output = `${resource} was unable to execute a query!${query ? `
@@ -21297,14 +21498,15 @@ ${message}`;
       resource
     });
     if (callback && returnCallbackErrors) {
-      callback(null, output);
+      invokeCallback(callback, resource, null, output);
       return;
     }
     console.error(output);
   }
   __name(operationError, "operationError");
   function callbackOperation(operation, callback, resource, returnCallbackErrors, query, parameters, includeParameters = false) {
-    void operation.then((result) => callback?.(result)).catch(
+    void operation.then(
+      (result) => invokeCallback(callback, resource, result),
       (error) => operationError(
         error,
         callback,
@@ -21321,13 +21523,32 @@ ${message}`;
     return (query, parameters = [], callback, explicitResource, returnCallbackErrors = false) => {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalize(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values,
+          true
+        );
+        return;
+      }
       callbackOperation(
-        database2[method](query, values, { invokingResource: resource }),
+        database2[method](normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values,
+        normalizedQuery,
+        normalizedValues,
         true
       );
     };
@@ -21348,25 +21569,55 @@ ${message}`;
     prepare(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalizePrepared(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values
+        );
+        return;
+      }
       callbackOperation(
-        database2.prepare(query, values, { invokingResource: resource }),
+        database2.prepare(normalizedQuery, normalizedValues, { invokingResource: resource }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values
+        normalizedQuery,
+        normalizedValues
       );
     },
     rawExecute(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalizePrepared(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values
+        );
+        return;
+      }
       callbackOperation(
-        database2.rawExecute(query, values, { invokingResource: resource }),
+        database2.rawExecute(normalizedQuery, normalizedValues, { invokingResource: resource }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values
+        normalizedQuery,
+        normalizedValues
       );
     },
     transaction(queries, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
@@ -21375,6 +21626,10 @@ ${message}`;
       let statements;
       try {
         statements = normalizeTransactionStatements(queries, sharedParameters);
+        statements = statements.map((statement) => {
+          const [query, parameters2] = normalize(statement.query, statement.parameters);
+          return { query, parameters: parameters2 };
+        });
       } catch (error) {
         operationError(
           error,
@@ -21386,30 +21641,42 @@ ${message}`;
         );
         return;
       }
-      void database2.transaction(statements, resource).then((result) => resolvedCallback?.(result)).catch((error) => {
-        const message = errorMessage(error);
-        const failedQuery = typeof error === "object" && error && "sql" in error ? String(error.sql ?? "") : statements.map((statement) => statement.query).join("; ");
-        runtime.emitEvent?.("oxmysql:transaction-error", {
-          query: failedQuery,
-          parameters: sharedParameters,
-          message,
-          err: error,
-          resource
-        });
-        console.error(
-          `${resource} was unable to complete a transaction!
+      void database2.transaction(statements, resource).then(
+        (result) => invokeCallback(resolvedCallback, resource, result),
+        (error) => {
+          const message = errorMessage(error);
+          const failedQuery = typeof error === "object" && error && "sql" in error ? String(error.sql ?? "") : statements.map((statement) => statement.query).join("; ");
+          runtime.emitEvent?.("oxmysql:transaction-error", {
+            query: failedQuery,
+            parameters: sharedParameters,
+            message,
+            err: error,
+            resource
+          });
+          console.error(
+            `${resource} was unable to complete a transaction!
 ${failedQuery}
 ${message}`
-        );
-        resolvedCallback?.(false);
-      });
+          );
+          invokeCallback(resolvedCallback, resource, false);
+        }
+      );
     },
     store(query, callback) {
-      callback?.(query);
+      invokeCallback(callback, queryResource(void 0, runtime), query);
       return query;
     },
     startTransaction(work, explicitResource) {
-      return database2.startTransaction(work, queryResource(explicitResource, runtime));
+      const resource = queryResource(explicitResource, runtime);
+      return database2.startTransaction(work, resource, (error) => {
+        runtime.emitEvent?.("oxmysql:error", {
+          query: void 0,
+          parameters: void 0,
+          message: errorMessage(error),
+          err: error,
+          resource
+        });
+      });
     }
   };
   api.execute = api.query;
@@ -21431,6 +21698,7 @@ ${message}`
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
     if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
+    if (qbxsqlProvider) runtime.addProviderExport("qbxsql", name, method);
     if (!["isReady", "awaitConnection", "getStatus", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
@@ -21439,7 +21707,26 @@ ${message}`
         runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
         runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
       }
+      if (qbxsqlProvider) {
+        runtime.addProviderExport("qbxsql", `${name}_async`, promiseMethod);
+        runtime.addProviderExport("qbxsql", `${name}Sync`, promiseMethod);
+      }
     }
+  }
+  const lifecycleAliases = {
+    isReady_async: /* @__PURE__ */ __name(async () => api.isReady(), "isReady_async"),
+    isReadySync: /* @__PURE__ */ __name(async () => api.isReady(), "isReadySync"),
+    awaitConnection_async: api.awaitConnection,
+    awaitConnectionSync: api.awaitConnection,
+    store_async: /* @__PURE__ */ __name(async (query) => api.store(query), "store_async"),
+    storeSync: /* @__PURE__ */ __name(async (query) => api.store(query), "storeSync"),
+    startTransaction_async: api.startTransaction,
+    startTransactionSync: api.startTransaction
+  };
+  for (const [name, method] of Object.entries(lifecycleAliases)) {
+    runtime.addExport(name, method);
+    if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
+    if (qbxsqlProvider) runtime.addProviderExport("qbxsql", name, method);
   }
   const mysqlAsyncAliases = {
     mysql_fetch_all: api.query,
@@ -23419,7 +23706,7 @@ function errorPayload(error) {
   return { code: "QBXSQL_SCHEMA_ERROR", message };
 }
 __name(errorPayload, "errorPayload");
-function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
+function registerSchemaExports(manager, bindings = createRuntimeBindings(), options = {}) {
   const runtime = bindings ?? {
     addExport() {
     },
@@ -23465,35 +23752,40 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   };
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
+    if (options.providerResource) {
+      runtime.addProviderExport(options.providerResource, name, callback);
+    }
     if (name === "adoptSchema" || name === "planSchemaAdoption") {
-      runtime.addExport(
-        `${name}_async`,
-        (schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
-          callback(
-            schema,
-            baselineVersion,
-            (result, error) => {
-              if (error) reject(error);
-              else resolve(result);
-            },
-            explicitResource
-          );
-        })
-      );
+      const asyncCallback = /* @__PURE__ */ __name((schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
+        callback(
+          schema,
+          baselineVersion,
+          (result, error) => {
+            if (error) reject(error);
+            else resolve(result);
+          },
+          explicitResource
+        );
+      }), "asyncCallback");
+      runtime.addExport(`${name}_async`, asyncCallback);
+      if (options.providerResource) {
+        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
+      }
     } else {
-      runtime.addExport(
-        `${name}_async`,
-        (schema, explicitResource) => new Promise((resolve, reject) => {
-          callback(
-            schema,
-            (result, error) => {
-              if (error) reject(error);
-              else resolve(result);
-            },
-            explicitResource
-          );
-        })
-      );
+      const asyncCallback = /* @__PURE__ */ __name((schema, explicitResource) => new Promise((resolve, reject) => {
+        callback(
+          schema,
+          (result, error) => {
+            if (error) reject(error);
+            else resolve(result);
+          },
+          explicitResource
+        );
+      }), "asyncCallback");
+      runtime.addExport(`${name}_async`, asyncCallback);
+      if (options.providerResource) {
+        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
+      }
     }
   }
   return api;
@@ -23514,6 +23806,7 @@ var schemas = new SchemaManager(schemaDatabase, {
   applicationDatabase: database
 });
 function isConcreteOxmysqlInstalled() {
+  if (resourceName2 === "oxmysql") return false;
   if (typeof GetNumResources !== "function" || typeof GetResourceByFindIndex !== "function") {
     return false;
   }
@@ -23546,8 +23839,15 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
-  registerCompatibilityExports(database, void 0, { legacyProviders: true });
-  registerSchemaExports(schemas);
+  registerCompatibilityExports(database, void 0, {
+    legacyProviders: true,
+    qbxsqlProvider: resourceName2 === "oxmysql"
+  });
+  registerSchemaExports(
+    schemas,
+    void 0,
+    resourceName2 === "oxmysql" ? { providerResource: "qbxsql" } : {}
+  );
   database.onLifecycle((event, status) => {
     if (event === "ready" || event === "reconnected") {
       console.log(
@@ -23571,7 +23871,7 @@ if (isConcreteOxmysqlActive()) {
 }
 if (typeof on === "function") {
   on("onResourceStart", (startedResource) => {
-    if (startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
+    if (resourceName2 === "oxmysql" || startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
     reportOxmysqlConflict();
     if (typeof StopResource === "function") StopResource(resourceName2);
   });

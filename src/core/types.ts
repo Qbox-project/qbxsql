@@ -1,5 +1,5 @@
 export type SqlPrimitive = string | number | boolean | bigint | null | Date | Buffer;
-export type SqlParameter = SqlPrimitive | readonly SqlPrimitive[] | Record<string, unknown>;
+export type SqlParameter = SqlPrimitive | readonly SqlParameter[] | Record<string, unknown>;
 export type SqlParameters = readonly SqlParameter[] | Record<string, SqlParameter> | undefined;
 
 export interface FieldMetadata {
@@ -13,15 +13,17 @@ export interface FieldMetadata {
 export interface DriverResult {
   rows: unknown;
   fields: FieldMetadata[];
-  affectedRows: number;
-  changedRows: number;
-  insertId: number | string;
-  warningStatus: number;
+  affectedRows: number | null;
+  changedRows: number | null;
+  insertId: number | string | null;
+  warningStatus: number | null;
+  hasResultSetHeader: boolean;
 }
 
 export interface QueryOptions {
   invokingResource?: string;
   prepared?: boolean;
+  normalized?: boolean;
 }
 
 export interface DatabaseConnection {
@@ -46,6 +48,7 @@ export interface DatabaseDriver {
   readonly databaseName: string | null;
   readonly serverVersion: string | null;
   readonly ready: boolean;
+  readonly namedPlaceholders?: boolean;
 
   connect(): Promise<void>;
   close(): Promise<void>;

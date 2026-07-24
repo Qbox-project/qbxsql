@@ -10,7 +10,8 @@ local schema = {
                     primary = true
                 },
                 name = { type = 'varchar', length = 100 },
-                enabled = { type = 'boolean', default = true }
+                enabled = { type = 'boolean', default = true },
+                payload = { type = 'blob', nullable = true }
             },
             indexes = {
                 { name = 'fxsql_values_name_idx', columns = { 'name' } }
@@ -36,7 +37,7 @@ end
 local function runTests()
     assertEqual(GetResourceState('qbxsql'), 'started', 'qbxsql resource state')
     assertEqual(GetResourceMetadata('oxmysql', 'version', 0), '2.14.1', 'oxmysql compatibility version')
-    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.3.1', 'qbxsql version')
+    assertEqual(GetResourceMetadata('qbxsql', 'qbxsql_version', 0), '0.3.2', 'qbxsql version')
     assert(LoadResourceFile('oxmysql', 'lib/MySQL.lua'), '@oxmysql/lib/MySQL.lua did not resolve')
     assert(LoadResourceFile('mysql-async', 'lib/MySQL.lua'), '@mysql-async/lib/MySQL.lua did not resolve')
 
@@ -81,14 +82,28 @@ local function runTests()
     MySQL.update.await('DELETE FROM fxsql_values')
 
     local insertId = MySQL.insert.await(
-        'INSERT INTO fxsql_values (name, enabled) VALUES (@name, @enabled)',
-        { name = 'modern', enabled = true }
+        'INSERT INTO fxsql_values (name, enabled, payload) VALUES (@name, @enabled, @payload)',
+        { name = 'modern', enabled = true, payload = nil }
     )
     assert(type(insertId) == 'number', 'modern insert did not return an id')
 
-    local modern = MySQL.single.await('SELECT name, enabled FROM fxsql_values WHERE id = ?', { insertId })
+    local modern = MySQL.single.await('SELECT name, enabled, payload FROM fxsql_values WHERE id = ?', { insertId })
     assertEqual(modern.name, 'modern', 'modern query')
     assertEqual(modern.enabled, true, 'boolean type conversion')
+    assertEqual(type(modern.payload), 'table', 'NULL binary BLOB query conversion')
+
+    MySQL.update.await('UPDATE fxsql_values SET enabled = 2 WHERE id = ?', { insertId })
+    assertEqual(
+        MySQL.scalar.await('SELECT enabled FROM fxsql_values WHERE id = ?', { insertId }),
+        false,
+        'legacy non-boolean query conversion'
+    )
+    local preparedTypes = MySQL.prepare.await(
+        'SELECT enabled, payload FROM fxsql_values WHERE id = ?',
+        { insertId }
+    )
+    assertEqual(preparedTypes.enabled, 2, 'prepared TINYINT native conversion')
+    assertEqual(preparedTypes.payload, nil, 'prepared NULL BLOB conversion')
 
     local oxScalar = callbackAwait(function(callback)
         exports.oxmysql:scalar('SELECT 41 + 1 AS value', {}, callback)
@@ -105,6 +120,7 @@ local function runTests()
     end)
     assertEqual(legacyAsyncScalar, 45, 'MySQL.Async compatibility')
     assertEqual(MySQL.Sync.fetchScalar('SELECT 46 AS value'), 46, 'MySQL.Sync compatibility')
+    assertEqual(MySQL.scalar.await('SELECT 49 AS value', { 999 }), 49, 'unused parameter compatibility')
 
     local ghmattiRows = callbackAwait(function(callback)
         exports.ghmattimysql:execute('SELECT 44 AS value', {}, callback)
@@ -127,8 +143,23 @@ local function runTests()
         'transaction contents'
     )
 
+    local tupleTransaction = MySQL.transaction.await({
+        {
+            'UPDATE fxsql_values SET enabled = ? WHERE name = ?',
+            { true, 'transaction' }
+        }
+    })
+    assertEqual(tupleTransaction, true, 'tuple transaction result')
+
     local prepared = MySQL.prepare.await('SELECT name FROM fxsql_values WHERE id = ?', { insertId })
     assertEqual(prepared, 'modern', 'prepared query')
+
+    local batch = MySQL.rawExecute.await(
+        'SELECT ? AS value UNION ALL SELECT ? AS value',
+        { { 1, 2 }, { 3, 4 } }
+    )
+    assertEqual(#batch, 4, 'raw execute multi-row batch flattening')
+    assertEqual(batch[4].value, 4, 'raw execute batch contents')
 
     local callbackTransaction = MySQL.startTransaction(function(query)
         local rows = query('SELECT 48 AS value')

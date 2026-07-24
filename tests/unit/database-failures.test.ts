@@ -19,6 +19,7 @@ const success: DriverResult = {
   changedRows: 0,
   insertId: 0,
   warningStatus: 0,
+  hasResultSetHeader: false,
 };
 
 const config: QbxSqlConfig = {
@@ -198,6 +199,28 @@ describe('database failure handling', () => {
     );
     expect(database.state).toBe('ready');
     expect(database.getStatus().pool).toEqual({ total: 1, free: 0, acquired: 1, queued: 1 });
+  });
+
+  test('resolves callback transactions false and reports pool-acquisition failures', async () => {
+    const driver = new FailureDriver();
+    driver.failAcquire = new Error('pool exhausted');
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+    const errors: unknown[] = [];
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await expect(
+        database.startTransaction(async () => true, 'pool-resource', (error) =>
+          errors.push(error),
+        ),
+      ).resolves.toBe(false);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ message: 'pool exhausted' });
   });
 
   test('preserves a deadlock error when rollback also fails and releases the connection', async () => {

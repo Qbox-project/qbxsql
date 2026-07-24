@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { TypeCastField, TypeCastNext } from 'mysql2';
-import { typeCast } from '../../src/drivers/mysql.js';
+import { typeCast, typeCastExecute } from '../../src/drivers/mysql.js';
 
 interface CastProbe {
   result: unknown;
@@ -14,6 +14,7 @@ function castProbe(
   length: number,
   stringValue: string | null,
   bufferValue: Buffer | null,
+  caster = typeCast,
 ): CastProbe {
   let bufferReads = 0;
   let stringReads = 0;
@@ -37,7 +38,7 @@ function castProbe(
   }) as TypeCastNext;
 
   return {
-    result: typeCast(field, next),
+    result: caster(field, next),
     bufferReads,
     stringReads,
     nextCalls,
@@ -96,5 +97,21 @@ describe('MySQL result type casting', () => {
       stringReads: 0,
       nextCalls: 0,
     });
+  });
+
+  test('keeps prepared TINY and BIT values native while still casting dates', () => {
+    const tiny = castProbe('TINY', 1, '1', null, typeCastExecute);
+    expect(typeof tiny.result).toBe('symbol');
+    expect(tiny.nextCalls).toBe(1);
+    expect(tiny.stringReads).toBe(0);
+
+    const bit = castProbe('BIT', 1, null, Buffer.from([1]), typeCastExecute);
+    expect(typeof bit.result).toBe('symbol');
+    expect(bit.nextCalls).toBe(1);
+    expect(bit.bufferReads).toBe(0);
+
+    expect(
+      castProbe('DATETIME', 19, '2026-07-24 10:00:00', null, typeCastExecute).result,
+    ).toBe(new Date('2026-07-24 10:00:00').getTime());
   });
 });

@@ -1,10 +1,12 @@
 import { performance } from 'node:perf_hooks';
 import type { QbxSqlConfig } from '../config.js';
 import type {
+  DatabaseConnection,
   DatabaseDriver,
   DriverResult,
   PoolStatus,
   QueryOptions,
+  SqlParameter,
   SqlParameters,
   TransactionStatement,
 } from './types.js';
@@ -184,6 +186,26 @@ export class DatabaseService {
     return result.rows;
   }
 
+  public normalize(
+    sql: string,
+    parameters?: SqlParameters,
+  ): [query: string, parameters: SqlParameter[]] {
+    return normalizeParameters(sql, parameters, this.driver.namedPlaceholders !== false);
+  }
+
+  public normalizePrepared(
+    sql: string,
+    parameters?: SqlParameters,
+  ): [query: string, parameterSets: SqlParameter[][]] {
+    let normalizedQuery = sql;
+    const parameterSets = this.parameterSets(parameters).map((parameterSet) => {
+      const [query, values] = this.normalize(sql, parameterSet);
+      normalizedQuery = query;
+      return values;
+    });
+    return [normalizedQuery, parameterSets];
+  }
+
   public async single(
     sql: string,
     parameters?: SqlParameters,
@@ -216,7 +238,7 @@ export class DatabaseService {
     sql: string,
     parameters?: SqlParameters,
     options: QueryOptions = {},
-  ): Promise<number> {
+  ): Promise<number | null> {
     return (await this.run(sql, parameters, options)).affectedRows;
   }
 
@@ -235,10 +257,15 @@ export class DatabaseService {
     parameters?: SqlParameters,
     options: QueryOptions = {},
   ): Promise<unknown> {
-    const results = (
-      await this.executePreparedBatch(sql, this.parameterSets(parameters), options)
-    ).map((result) => result.rows);
-    return results.length === 1 ? results[0] : results;
+    const response: unknown[] = [];
+    for (const result of await this.executePreparedBatch(sql, this.parameterSets(parameters), options)) {
+      if (Array.isArray(result.rows) && result.rows.length > 1) {
+        response.push(...result.rows);
+      } else {
+        response.push(result.rows);
+      }
+    }
+    return response.length === 1 ? response[0] : response;
   }
 
   private async executePreparedBatch(
@@ -258,7 +285,7 @@ export class DatabaseService {
     const results: DriverResult[] = [];
     try {
       for (const parameters of parameterSets) {
-        const [query, values] = normalizeParameters(sql, parameters);
+        const [query, values] = this.normalize(sql, parameters);
         results.push(
           await this.measureQuery(query, resource, () => connection.execute(query, values)),
         );
@@ -279,7 +306,7 @@ export class DatabaseService {
     try {
       await connection.beginTransaction();
       for (const statement of statements) {
-        const [query, parameters] = normalizeParameters(statement.query, statement.parameters);
+        const [query, parameters] = this.normalize(statement.query, statement.parameters);
         await this.measureQuery(query, invokingResource, () => connection.query(query, parameters));
       }
       await connection.commit();
@@ -299,10 +326,23 @@ export class DatabaseService {
   public async startTransaction(
     work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
     invokingResource = 'unknown',
+    onError?: (error: unknown) => void,
   ): Promise<boolean> {
     if (typeof work !== 'function') throw new TypeError('Transaction callback must be a function.');
-    await this.awaitConnection();
-    const connection = await this.driver.acquire();
+    let connection: DatabaseConnection;
+    try {
+      await this.awaitConnection();
+      connection = await this.driver.acquire();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      try {
+        onError?.(error);
+      } catch (listenerError) {
+        console.error('[qbxsql] callback transaction error listener failed', listenerError);
+      }
+      return false;
+    }
     let closed = false;
     let timedOut = false;
     let rejectTimeout: ((error: Error) => void) | null = null;
@@ -323,7 +363,7 @@ export class DatabaseService {
       await connection.beginTransaction();
       const query = async (sql: string, parameters?: SqlParameters): Promise<unknown> => {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
-        const [statement, values] = normalizeParameters(sql, parameters);
+        const [statement, values] = this.normalize(sql, parameters);
         try {
           return (
             await this.measureQuery(statement, invokingResource, () =>
@@ -353,6 +393,11 @@ export class DatabaseService {
       }
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`[qbxsql] callback transaction failed [${invokingResource}]: ${reason}`);
+      try {
+        onError?.(error);
+      } catch (listenerError) {
+        console.error('[qbxsql] callback transaction error listener failed', listenerError);
+      }
       return false;
     } finally {
       clearTimeout(timeout);
@@ -368,7 +413,9 @@ export class DatabaseService {
     options: QueryOptions = {},
   ): Promise<DriverResult> {
     await this.awaitConnection();
-    const [query, values] = normalizeParameters(sql, parameters);
+    const [query, values] = options.normalized
+      ? [sql, (parameters ?? []) as SqlParameter[]]
+      : this.normalize(sql, parameters);
     return this.measureQuery(query, options.invokingResource ?? 'unknown', () =>
       options.prepared
         ? this.driver.execute(query, values)
@@ -385,7 +432,9 @@ export class DatabaseService {
     this.queryTotal += 1;
 
     try {
-      return await operation();
+      const result = await operation();
+      this.validateResultSet(query, resource, result);
+      return result;
     } catch (error) {
       this.errorTotal += 1;
       throw error;
@@ -401,6 +450,16 @@ export class DatabaseService {
         console.log(`[qbxsql] ${level} (${duration.toFixed(2)}ms) [${resource}] ${query}`);
       }
     }
+  }
+
+  private validateResultSet(query: string, resource: string, result: unknown): void {
+    const warning = this.config.resultsetWarning ?? 1_000;
+    if (warning <= 0 || !result || typeof result !== 'object' || !('rows' in result)) return;
+    const rows = (result as DriverResult).rows;
+    if (!Array.isArray(rows) || rows.length < warning) return;
+    console.warn(
+      `[qbxsql] ${resource} returned ${rows.length} rows for a query; mysql_resultset_warning is ${warning}.\n${query}`,
+    );
   }
 
   private ensureConnectionLoop(): void {
@@ -547,9 +606,9 @@ export class DatabaseService {
       }
 
       if (operation === 'INSERT' || operation === 'REPLACE') {
-        response.push(result.insertId ?? null);
+        response.push(result.hasResultSetHeader ? result.insertId : null);
       } else if (operation === 'UPDATE' || operation === 'DELETE') {
-        response.push(result.affectedRows);
+        response.push(result.hasResultSetHeader ? result.affectedRows : null);
       } else {
         response.push(result.rows);
       }
@@ -569,17 +628,33 @@ export class DatabaseService {
   }
 
   private parameterSets(parameters?: SqlParameters): Array<SqlParameters | undefined> {
+    let candidate: unknown = parameters;
+    if (candidate && !Array.isArray(candidate) && typeof candidate === 'object') {
+      const entries = Object.entries(candidate);
+      if (entries.length > 0 && entries.every(([key]) => /^\d+$/.test(key))) {
+        const base = Object.hasOwn(candidate, '0') ? 0 : 1;
+        const highest = Math.max(...entries.map(([key]) => Number(key)));
+        const ordered = Array.from({ length: highest - base + 1 }, (_, index) =>
+          (candidate as Record<string, unknown>)[String(index + base)],
+        );
+        if (ordered.every((entry) => this.isParameterContainer(entry))) candidate = ordered;
+      }
+    }
+
     const batch =
-      Array.isArray(parameters) &&
-      parameters.length > 0 &&
-      parameters.every(
-        (entry) =>
-          Array.isArray(entry) ||
-          (entry !== null &&
-            typeof entry === 'object' &&
-            !Buffer.isBuffer(entry) &&
-            !(entry instanceof Date)),
-      );
-    return batch ? (parameters as Array<SqlParameters>) : [parameters];
+      Array.isArray(candidate) &&
+      candidate.length > 0 &&
+      candidate.every((entry) => this.isParameterContainer(entry));
+    return batch ? (candidate as Array<SqlParameters>) : [parameters];
+  }
+
+  private isParameterContainer(value: unknown): boolean {
+    return (
+      Array.isArray(value) ||
+      (value !== null &&
+        typeof value === 'object' &&
+        !Buffer.isBuffer(value) &&
+        !(value instanceof Date))
+    );
   }
 }

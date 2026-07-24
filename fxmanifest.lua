@@ -5,7 +5,7 @@ name 'qbxsql'
 author 'ChatDisabled'
 description 'Database adapter, compatibility layer, and schema manager for FiveM'
 version '2.14.1'
-qbxsql_version '0.3.1'
+qbxsql_version '0.3.2'
 license 'MIT'
 
 node_version '22'
@@ -17,5 +17,6 @@ files {
 }
 
 provide 'oxmysql'
+provide 'qbxsql'
 provide 'mysql-async'
 provide 'ghmattimysql'

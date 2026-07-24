@@ -6,6 +6,14 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 - Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
+## 0.3.2 - 2026-07-24
+
+- Matched oxmysql's distinct text- and prepared-protocol casting: query `TINYINT(1)`/`BIT` values retain legacy booleans, prepared values remain mysql2-native, dates remain epoch milliseconds, binary BLOBs become byte arrays, and a NULL binary BLOB from a text query becomes `[null]`.
+- Added tuple transactions, numeric-key CFX prepared batches, multi-row raw-execute flattening, placeholder-free extra-parameter tolerance, SELECT misuse returning `nil` from insert/update helpers, and normalized error-event parameters.
+- Isolated consumer callbacks so thrown callback errors never cause duplicate invocation or false database-error events; callback-transaction failures now emit `oxmysql:error` while resolving `false`.
+- Added functional lifecycle/store/start-transaction `_async` and `Sync` aliases, `mysql_resultset_warning`, `namedPlaceholders=false`, and validated `flags`/`dateStrings` connection options.
+- Added an alternative exact-identity `-as-oxmysql.zip` containing the same single resource under `oxmysql/` for legacy literal resource-state checks. No mysql2 or named-placeholder dependency patch is required.
+
 ## 0.3.1 - 2026-07-24
 
 - Fixed sparse one-based CFX parameter records so optional `nil` values remain SQL `NULL` instead of duplicating the preceding argument.

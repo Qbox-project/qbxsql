@@ -21,6 +21,7 @@ describe('connector configuration', () => {
     expect(config.healthInterval).toBe(10_000);
     expect(config.connectionRetryMax).toBe(30_000);
     expect(config.transactionTimeout).toBe(30_000);
+    expect(config.resultsetWarning).toBe(1_000);
     expect(config.schemaMode).toBe('auto');
     expect(config.schemaAllowBlocking).toBe(false);
   });
@@ -31,6 +32,8 @@ describe('connector configuration', () => {
       mysql_connection_string: 'mysql://legacy/qbox',
       qbxsql_slow_query_warning: '900',
       mysql_slow_query_warning: '100',
+      qbxsql_resultset_warning: '700',
+      mysql_resultset_warning: '100',
       qbxsql_transaction_isolation_level: 'serializable',
       mysql_transaction_isolation_level: '1',
     });
@@ -38,6 +41,7 @@ describe('connector configuration', () => {
 
     expect(config.connectionString).toBe('mysql://native/qbox');
     expect(config.slowQueryWarning).toBe(900);
+    expect(config.resultsetWarning).toBe(700);
     expect(config.transactionIsolationLevel).toBe('SERIALIZABLE');
   });
 

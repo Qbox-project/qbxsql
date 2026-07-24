@@ -44,6 +44,18 @@ describe('legacy transaction normalization', () => {
     ]);
   });
 
+  test('accepts tuple statements and CFX numeric-key tuple tables', () => {
+    expect(
+      normalizeTransactionStatements([
+        ['SELECT ?', [1]],
+        { 1: 'SELECT ?', 2: { 1: 2 } },
+      ]),
+    ).toEqual([
+      { query: 'SELECT ?', parameters: [1] },
+      { query: 'SELECT ?', parameters: { 1: 2 } },
+    ]);
+  });
+
   test('rejects malformed transaction entries', () => {
     expect(() => normalizeTransactionStatements([{}])).toThrow('missing a query string');
   });
@@ -59,6 +71,19 @@ describe('compatibility provider registration', () => {
     });
 
     expect(providers).toEqual([]);
+  });
+
+  test('routes native exports through qbxsql in exact oxmysql identity mode', () => {
+    const providers: string[] = [];
+    registerCompatibilityExports({} as DatabaseService, {
+      addExport() {},
+      addProviderExport: (resource, name) => providers.push(`${resource}:${name}`),
+      invokingResource: () => 'test-resource',
+    }, { qbxsqlProvider: true });
+
+    expect(providers).toContain('qbxsql:getStatus');
+    expect(providers).toContain('qbxsql:query');
+    expect(providers).toContain('qbxsql:query_async');
   });
 });
 
@@ -114,6 +139,29 @@ describe('oxmysql error semantics', () => {
     expect(result[1]).toContain('["private-probe-value"]');
   });
 
+  test('emits normalized query parameters on database errors', async () => {
+    const { direct, events } = compatibilityHarness({
+      normalize: () => ['SELECT ?, ?', ['first', null]],
+      query: async () => {
+        throw new Error('normalized failure');
+      },
+    });
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      direct.get('query')!('SELECT ?, ?', { 1: 'first' });
+      await deferred();
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(events[0]?.payload).toMatchObject({
+      query: 'SELECT ?, ?',
+      parameters: ['first', null],
+      message: 'normalized failure',
+    });
+  });
+
   test('omits parameters from prepared execution callback errors like oxmysql', async () => {
     const { direct } = compatibilityHarness({
       prepare: async () => {
@@ -144,6 +192,62 @@ describe('oxmysql error semantics', () => {
     });
 
     await expect(direct.get('query_async')!('SELECT broken')).rejects.toThrow('promise failure');
+  });
+
+  test('isolates thrown callbacks without a second invocation or database error event', async () => {
+    const { direct, events } = compatibilityHarness({
+      query: async () => [{ value: 1 }],
+    });
+    let calls = 0;
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      direct.get('query')!('SELECT 1', [], () => {
+        calls += 1;
+        throw new Error('consumer callback failed');
+      });
+      await deferred();
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(calls).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  test('emits oxmysql:error when a callback transaction fails and still resolves false', async () => {
+    const { direct, events } = compatibilityHarness({
+      startTransaction: async (_work, _resource, onError) => {
+        onError?.(new Error('callback transaction deadlock'));
+        return false;
+      },
+    });
+
+    await expect(direct.get('startTransaction')!(async () => true)).resolves.toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      name: 'oxmysql:error',
+      payload: {
+        message: 'callback transaction deadlock',
+        resource: 'test-resource',
+      },
+    });
+  });
+
+  test('registers functional lifecycle, store, and callback-transaction aliases', () => {
+    const { direct } = compatibilityHarness({});
+    for (const name of [
+      'isReady_async',
+      'isReadySync',
+      'awaitConnection_async',
+      'awaitConnectionSync',
+      'store_async',
+      'storeSync',
+      'startTransaction_async',
+      'startTransactionSync',
+    ]) {
+      expect(direct.has(name)).toBe(true);
+    }
   });
 
   test('resolves failed statement-list transactions as false and emits the compatibility event', async () => {

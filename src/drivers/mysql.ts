@@ -45,6 +45,33 @@ function integerOption(value: string, key: string, minimum: number): number {
   return parsed;
 }
 
+function jsonOption(value: string, key: 'dateStrings' | 'flags'): unknown {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`Connection-string option '${key}' must be valid JSON.`);
+  }
+
+  if (
+    key === 'flags' &&
+    (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string'))
+  ) {
+    throw new Error("Connection-string option 'flags' must be a JSON array of strings.");
+  }
+  if (
+    key === 'dateStrings' &&
+    typeof parsed !== 'boolean' &&
+    typeof parsed !== 'string' &&
+    (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string'))
+  ) {
+    throw new Error(
+      "Connection-string option 'dateStrings' must be a boolean, string, or JSON array of strings.",
+    );
+  }
+  return parsed;
+}
+
 function warnMultipleStatements(enabled: boolean, warn: (message: string) => void): void {
   if (enabled) {
     warn(
@@ -98,6 +125,9 @@ export function parseMySqlConnectionString(
         normalized === 'socketpath'
       ) {
         options[normalized === 'socketpath' ? 'socketPath' : normalized] = value;
+      } else if (normalized === 'flags' || normalized === 'datestrings') {
+        const key = normalized === 'flags' ? 'flags' : 'dateStrings';
+        options[key] = jsonOption(value, key);
       } else if (normalized === 'ssl') {
         try {
           options.ssl = JSON.parse(value);
@@ -178,6 +208,9 @@ export function parseMySqlConnectionString(
       if (key === 'multipleStatements') warnMultipleStatements(options[key] as boolean, warn);
     } else if (sourceKey === 'charset' || sourceKey === 'timezone' || sourceKey === 'socketpath') {
       options[sourceKey === 'socketpath' ? 'socketPath' : sourceKey] = value;
+    } else if (sourceKey === 'flags' || sourceKey === 'datestrings') {
+      const key = sourceKey === 'flags' ? 'flags' : 'dateStrings';
+      options[key] = jsonOption(value, key);
     } else if (sourceKey === 'ssl') {
       try {
         options.ssl = JSON.parse(value);
@@ -216,17 +249,79 @@ export function typeCast(field: TypeCastField, next: TypeCastNext): unknown {
   }
 }
 
+export function typeCastExecute(field: TypeCastField, next: TypeCastNext): unknown {
+  switch (field.type) {
+    case 'DATETIME':
+    case 'DATETIME2':
+    case 'TIMESTAMP':
+    case 'TIMESTAMP2':
+    case 'NEWDATE': {
+      const value = field.string();
+      return value ? new Date(value).getTime() : null;
+    }
+    case 'DATE': {
+      const value = field.string();
+      return value ? new Date(`${value} 00:00:00`).getTime() : null;
+    }
+    default:
+      return next();
+  }
+}
+
+const binaryCharset = 63;
+const blobColumnTypes = new Set([249, 250, 251, 252]);
+
+function replaceNullBinaryBlobs(rows: unknown, fields: FieldPacket[] | FieldPacket[][]): unknown {
+  if (!Array.isArray(rows) || !Array.isArray(fields) || fields.length === 0) return rows;
+  if (Array.isArray(fields[0])) {
+    return rows.map((result, index) =>
+      replaceNullBinaryBlobs(result, (fields as FieldPacket[][])[index] ?? []),
+    );
+  }
+
+  const binaryBlobNames = (fields as FieldPacket[])
+    .filter(
+      (field) =>
+        field.characterSet === binaryCharset &&
+        blobColumnTypes.has(field.type ?? -1),
+    )
+    .map((field) => field.name);
+  if (binaryBlobNames.length === 0) return rows;
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+    const source = row as Record<string, unknown>;
+    let result: Record<string, unknown> | null = null;
+    for (const name of binaryBlobNames) {
+      if (source[name] !== null) continue;
+      result ??= { ...source };
+      result[name] = [null];
+    }
+    return result ?? row;
+  });
+}
+
 function normalizeDriverResult(
   rows: RowDataPacket[] | RowDataPacket[][] | ResultSetHeader | ResultSetHeader[],
+  fields: FieldPacket[] | FieldPacket[][] = [],
+  prepared: boolean,
 ): DriverResult {
   const header = !Array.isArray(rows) ? rows : null;
+  const serializedRows = serializeForRuntime(rows);
   return {
-    rows: serializeForRuntime(rows),
-    fields: [],
-    affectedRows: header?.affectedRows ?? 0,
-    changedRows: header?.changedRows ?? 0,
-    insertId: header?.insertId ?? 0,
-    warningStatus: header?.warningStatus ?? 0,
+    rows: prepared ? serializedRows : replaceNullBinaryBlobs(serializedRows, fields),
+    fields: (Array.isArray(fields[0]) ? fields.flat() : fields as FieldPacket[]).map((field) => ({
+      name: field.name,
+      ...(field.table ? { table: field.table } : {}),
+      ...(field.schema ? { schema: field.schema } : {}),
+      ...(field.type === undefined ? {} : { columnType: field.type }),
+      ...(field.characterSet === undefined ? {} : { characterSet: field.characterSet }),
+    })),
+    affectedRows: header?.affectedRows ?? null,
+    changedRows: header?.changedRows ?? null,
+    insertId: header?.insertId ?? null,
+    warningStatus: header?.warningStatus ?? null,
+    hasResultSetHeader: header !== null,
   };
 }
 
@@ -238,15 +333,20 @@ async function runQuery(
 ): Promise<DriverResult> {
   const executor = connection as unknown as {
     query(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
-    execute(sql: string, values: readonly unknown[]): Promise<[unknown, FieldPacket[]]>;
+    execute(
+      options: { sql: string; typeCast: typeof typeCastExecute },
+      values: readonly unknown[],
+    ): Promise<[unknown, FieldPacket[]]>;
   };
   scheduleResourceTick();
-  const [rows] = prepared
-    ? await executor.execute(sql, parameters)
+  const [rows, fields] = prepared
+    ? await executor.execute({ sql, typeCast: typeCastExecute }, parameters)
     : await executor.query(sql, parameters);
 
   return normalizeDriverResult(
     rows as RowDataPacket[] | RowDataPacket[][] | ResultSetHeader | ResultSetHeader[],
+    fields as FieldPacket[] | FieldPacket[][],
+    prepared,
   );
 }
 
@@ -323,22 +423,27 @@ export class MySqlDriver implements DatabaseDriver {
   public databaseName: string | null = null;
   public serverVersion: string | null = null;
   public ready = false;
+  public readonly namedPlaceholders: boolean;
 
   private pool: Pool | null = null;
   private fatalErrorListener: ((error: unknown) => void) | null = null;
+  private readonly parsedOptions: ConnectionOptions;
 
-  public constructor(private readonly config: QbxSqlConfig) {}
+  public constructor(private readonly config: QbxSqlConfig) {
+    this.parsedOptions = parseMySqlConnectionString(config.connectionString);
+    this.namedPlaceholders = this.parsedOptions.namedPlaceholders !== false;
+  }
 
   public async connect(): Promise<void> {
     if (this.ready) return;
 
-    const parsedOptions = parseMySqlConnectionString(this.config.connectionString);
+    const parsedOptions = this.parsedOptions;
     const options: ConnectionOptions = {
       supportBigNumbers: true,
       jsonStrings: true,
-      namedPlaceholders: false,
       trace: false,
       ...parsedOptions,
+      namedPlaceholders: false,
       connectionLimit: parsedOptions.connectionLimit ?? this.config.connectionLimit,
       connectTimeout: parsedOptions.connectTimeout ?? this.config.connectTimeout,
       typeCast,

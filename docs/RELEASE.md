@@ -23,7 +23,7 @@ bun run release
 bun run release:validate
 ```
 
-The output contains `qbxsql/`, `qbxsql-<qbxsql_version>.zip`, and `qbxsql-<qbxsql_version>.zip.sha256`. The validator compares the package and `qbxsql_version`, the compatibility-facing manifest `version`, provider declarations, allowlisted contents, built server output, unpacked resource, ZIP CRCs, and SHA-256. A second build must produce the same checksum.
+The output contains `qbxsql/`, `qbxsql-<qbxsql_version>.zip`, `qbxsql-<qbxsql_version>-as-oxmysql.zip`, and checksums for both archives. The second archive is an alternative single-resource layout for literal oxmysql state checks; users install one archive, never both. The validator compares the package and `qbxsql_version`, the compatibility-facing manifest `version`, provider declarations, allowlisted contents, built server output, unpacked resource, ZIP CRCs, and both SHA-256 values. A second build must produce the same checksums.
 
 Required evidence before an RC can become stable:
 

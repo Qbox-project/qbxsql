@@ -136,6 +136,7 @@ export function countPlaceholders(sql: string): number {
 export function normalizeParameters(
   query: string,
   parameters?: SqlParameters,
+  convertNamedPlaceholders = true,
 ): [query: string, parameters: SqlParameter[]] {
   if (typeof query !== 'string') {
     throw new TypeError(`Expected query to be a string but received ${typeof query}.`);
@@ -148,7 +149,7 @@ export function normalizeParameters(
 
   if (!Array.isArray(parameters)) {
     const record = parameterRecord(parameters as Record<string, SqlParameter>);
-    const namedScan = scanSql(query, true);
+    const namedScan = scanSql(query, convertNamedPlaceholders);
 
     if (namedScan.names.length > 0) {
       return [
@@ -173,7 +174,7 @@ export function normalizeParameters(
   const values = [...parameters] as SqlParameter[];
   const expected = countPlaceholders(query);
 
-  if (values.length > expected) {
+  if (expected > 0 && values.length > expected) {
     throw new Error(`Expected ${expected} parameters, but received ${values.length}.`);
   }
 

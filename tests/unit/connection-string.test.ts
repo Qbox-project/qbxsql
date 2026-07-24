@@ -70,4 +70,20 @@ describe('legacy MySQL connection strings', () => {
     expect(warnings).toEqual(["[qbxsql] Ignoring unknown connection-string option 'madeUp'."]);
     expect(warnings[0]).not.toContain('sensitive');
   });
+
+  test('parses oxmysql flags, dateStrings, and named-placeholder options', () => {
+    expect(
+      parseMySqlConnectionString(
+        'mysql://root@localhost/qbox?flags=%5B%22FOUND_ROWS%22%5D&dateStrings=%5B%22DATE%22%5D&namedPlaceholders=false',
+      ),
+    ).toMatchObject({
+      flags: ['FOUND_ROWS'],
+      dateStrings: ['DATE'],
+      namedPlaceholders: false,
+    });
+    expect(() => parseMySqlConnectionString('flags={bad-json}')).toThrow('valid JSON');
+    expect(() => parseMySqlConnectionString('dateStrings=42')).toThrow(
+      'boolean, string, or JSON array',
+    );
+  });
 });

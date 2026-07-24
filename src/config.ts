@@ -9,6 +9,7 @@ export interface QbxSqlConfig {
   connectionLimit: number;
   connectTimeout: number;
   slowQueryWarning: number;
+  resultsetWarning?: number;
   debug: boolean | readonly string[];
   transactionIsolationLevel: TransactionIsolationLevel;
   connectionWaitTimeout: number;
@@ -144,6 +145,12 @@ export function loadConfig(): QbxSqlConfig {
       200,
       0,
       'mysql_slow_query_warning',
+    ).value,
+    resultsetWarning: integerOption(
+      'qbxsql_resultset_warning',
+      1_000,
+      0,
+      'mysql_resultset_warning',
     ).value,
     debug: debugOption(),
     transactionIsolationLevel: isolationOption(),

@@ -19,10 +19,13 @@ export interface RuntimeBindings {
 
 export interface CompatibilityRegistrationOptions {
   legacyProviders?: boolean;
+  qbxsqlProvider?: boolean;
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error
+    ? error.message
+    : String(error).replace(/SCRIPT ERROR: citizen:[\w/\\.]+:\d+[:\s]+/, '');
 }
 
 function extractCallback(
@@ -37,13 +40,26 @@ function queryResource(explicit: unknown, bindings: RuntimeBindings): string {
   return typeof explicit === 'string' && explicit.length > 0 ? explicit : bindings.invokingResource();
 }
 
+function orderedArray(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || !entries.every(([key]) => /^\d+$/.test(key))) return null;
+  const base = Object.hasOwn(value, '0') ? 0 : 1;
+  const highest = Math.max(...entries.map(([key]) => Number(key)));
+  return Array.from({ length: highest - base + 1 }, (_, index) =>
+    (value as Record<string, unknown>)[String(index + base)],
+  );
+}
+
 export function normalizeTransactionStatements(
   input: unknown,
   sharedParameters?: SqlParameters,
 ): TransactionStatement[] {
-  if (!Array.isArray(input)) throw new TypeError('Transaction queries must be an array.');
+  const queries = orderedArray(input);
+  if (!queries) throw new TypeError('Transaction queries must be an array.');
 
-  return input.map((entry, index) => {
+  return queries.map((entry, index) => {
     if (typeof entry === 'string') {
       const statement: TransactionStatement = { query: entry };
       if (sharedParameters !== undefined) statement.parameters = sharedParameters;
@@ -52,6 +68,17 @@ export function normalizeTransactionStatements(
 
     if (!entry || typeof entry !== 'object') {
       throw new TypeError(`Transaction query at index ${index} is invalid.`);
+    }
+
+    const tuple = orderedArray(entry);
+    if (tuple && typeof tuple[0] === 'string') {
+      const parameters = tuple[1];
+      if (!parameters || typeof parameters !== 'object') {
+        throw new TypeError(
+          `Transaction parameters at index ${index} must be an array or object.`,
+        );
+      }
+      return { query: tuple[0], parameters: parameters as SqlParameters };
     }
 
     const legacy = entry as LegacyTransactionStatement;
@@ -102,6 +129,42 @@ export function registerCompatibilityExports(
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
+  const qbxsqlProvider = options.qbxsqlProvider === true;
+
+  function normalize(
+    query: string,
+    parameters?: SqlParameters,
+  ): [string, SqlParameters] {
+    const normalizer = (database as Partial<DatabaseService>).normalize;
+    return typeof normalizer === 'function'
+      ? normalizer.call(database, query, parameters)
+      : [query, parameters ?? []];
+  }
+
+  function normalizePrepared(
+    query: string,
+    parameters?: SqlParameters,
+  ): [string, SqlParameters] {
+    const normalizer = (database as Partial<DatabaseService>).normalizePrepared;
+    return typeof normalizer === 'function'
+      ? normalizer.call(database, query, parameters)
+      : [query, parameters ?? []];
+  }
+
+  function invokeCallback(callback: CfxCallback | undefined, resource: string, ...args: unknown[]): void {
+    if (!callback) return;
+    try {
+      callback(...(args as [unknown, string?]));
+    } catch (error) {
+      if (typeof error !== 'string') {
+        console.error(`[qbxsql] callback from ${resource} threw`, error);
+      } else if (error.includes('SCRIPT ERROR:')) {
+        console.log(error);
+      } else {
+        console.log(`^1SCRIPT ERROR in invoking resource ${resource}: ${error}^0`);
+      }
+    }
+  }
 
   function operationError(
     error: unknown,
@@ -124,7 +187,7 @@ export function registerCompatibilityExports(
     });
 
     if (callback && returnCallbackErrors) {
-      callback(null, output);
+      invokeCallback(callback, resource, null, output);
       return;
     }
 
@@ -140,9 +203,9 @@ export function registerCompatibilityExports(
     parameters?: SqlParameters,
     includeParameters = false,
   ): void {
-    void operation
-      .then((result) => callback?.(result))
-      .catch((error: unknown) =>
+    void operation.then(
+      (result) => invokeCallback(callback, resource, result),
+      (error: unknown) =>
         operationError(
           error,
           callback,
@@ -165,13 +228,32 @@ export function registerCompatibilityExports(
     ): void => {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalize(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values,
+          true,
+        );
+        return;
+      }
       callbackOperation(
-        database[method](query, values, { invokingResource: resource }),
+        database[method](normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true,
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values,
+        normalizedQuery,
+        normalizedValues,
         true,
       );
     };
@@ -198,13 +280,28 @@ export function registerCompatibilityExports(
     ) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues: SqlParameters = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalizePrepared(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values,
+        );
+        return;
+      }
       callbackOperation(
-        database.prepare(query, values, { invokingResource: resource }),
+        database.prepare(normalizedQuery, normalizedValues, { invokingResource: resource }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values,
+        normalizedQuery,
+        normalizedValues,
       );
     },
     rawExecute(
@@ -216,13 +313,28 @@ export function registerCompatibilityExports(
     ) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
       const resource = queryResource(explicitResource, runtime);
+      let normalizedQuery = query;
+      let normalizedValues: SqlParameters = values;
+      try {
+        [normalizedQuery, normalizedValues] = normalizePrepared(query, values);
+      } catch (error) {
+        operationError(
+          error,
+          resolvedCallback,
+          returnCallbackErrors,
+          resource,
+          query,
+          values,
+        );
+        return;
+      }
       callbackOperation(
-        database.rawExecute(query, values, { invokingResource: resource }),
+        database.rawExecute(normalizedQuery, normalizedValues, { invokingResource: resource }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
-        query,
-        values,
+        normalizedQuery,
+        normalizedValues,
       );
     },
     transaction(
@@ -237,6 +349,10 @@ export function registerCompatibilityExports(
       let statements: TransactionStatement[];
       try {
         statements = normalizeTransactionStatements(queries, sharedParameters);
+        statements = statements.map((statement) => {
+          const [query, parameters] = normalize(statement.query, statement.parameters);
+          return { query, parameters };
+        });
       } catch (error) {
         operationError(
           error,
@@ -248,10 +364,9 @@ export function registerCompatibilityExports(
         );
         return;
       }
-      void database
-        .transaction(statements, resource)
-        .then((result) => resolvedCallback?.(result))
-        .catch((error: unknown) => {
+      void database.transaction(statements, resource).then(
+        (result) => invokeCallback(resolvedCallback, resource, result),
+        (error: unknown) => {
           const message = errorMessage(error);
           const failedQuery =
             typeof error === 'object' && error && 'sql' in error
@@ -268,18 +383,28 @@ export function registerCompatibilityExports(
           console.error(
             `${resource} was unable to complete a transaction!\n${failedQuery}\n${message}`,
           );
-          resolvedCallback?.(false);
-        });
+          invokeCallback(resolvedCallback, resource, false);
+        },
+      );
     },
     store(query: string, callback?: CfxCallback) {
-      callback?.(query);
+      invokeCallback(callback, queryResource(undefined, runtime), query);
       return query;
     },
     startTransaction(
       work: (query: (sql: string, parameters?: SqlParameters) => Promise<unknown>) => Promise<unknown>,
       explicitResource?: string,
     ) {
-      return database.startTransaction(work, queryResource(explicitResource, runtime));
+      const resource = queryResource(explicitResource, runtime);
+      return database.startTransaction(work, resource, (error) => {
+        runtime.emitEvent?.('oxmysql:error', {
+          query: undefined,
+          parameters: undefined,
+          message: errorMessage(error),
+          err: error,
+          resource,
+        });
+      });
     },
   };
 
@@ -305,6 +430,7 @@ export function registerCompatibilityExports(
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
     if (legacyProviders) runtime.addProviderExport('oxmysql', name, method);
+    if (qbxsqlProvider) runtime.addProviderExport('qbxsql', name, method);
 
     if (!['isReady', 'awaitConnection', 'getStatus', 'store', 'startTransaction'].includes(name)) {
       const promiseMethod = asyncExport(method);
@@ -314,7 +440,27 @@ export function registerCompatibilityExports(
         runtime.addProviderExport('oxmysql', `${name}_async`, promiseMethod);
         runtime.addProviderExport('oxmysql', `${name}Sync`, promiseMethod);
       }
+      if (qbxsqlProvider) {
+        runtime.addProviderExport('qbxsql', `${name}_async`, promiseMethod);
+        runtime.addProviderExport('qbxsql', `${name}Sync`, promiseMethod);
+      }
     }
+  }
+
+  const lifecycleAliases: Record<string, ExportFunction> = {
+    isReady_async: async () => api.isReady!(),
+    isReadySync: async () => api.isReady!(),
+    awaitConnection_async: api.awaitConnection!,
+    awaitConnectionSync: api.awaitConnection!,
+    store_async: async (query: string) => api.store!(query),
+    storeSync: async (query: string) => api.store!(query),
+    startTransaction_async: api.startTransaction!,
+    startTransactionSync: api.startTransaction!,
+  };
+  for (const [name, method] of Object.entries(lifecycleAliases)) {
+    runtime.addExport(name, method);
+    if (legacyProviders) runtime.addProviderExport('oxmysql', name, method);
+    if (qbxsqlProvider) runtime.addProviderExport('qbxsql', name, method);
   }
 
   const mysqlAsyncAliases: Record<string, ExportFunction> = {

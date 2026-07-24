@@ -19,7 +19,9 @@ ensure qbxsql
 
 Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses the conflict and leaves its connector inactive if a real resource named `oxmysql` is already running.
 
-The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.3.1'`.
+The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.3.2'`.
+
+Most servers should install the normal `qbxsql-<version>.zip`. A few legacy resources ignore `provide` and literally inspect `GetResourceState('oxmysql')`. For those servers, install the alternative `qbxsql-<version>-as-oxmysql.zip` instead and use `ensure oxmysql`. Both archives contain the same single resource; never install both.
 
 ## Imports and calls
 
@@ -40,10 +42,12 @@ qbxsql-native convars take precedence over their legacy names. In particular:
 
 - `qbxsql_connection_string` overrides `mysql_connection_string`.
 - `qbxsql_slow_query_warning` overrides `mysql_slow_query_warning`.
+- `qbxsql_resultset_warning` overrides `mysql_resultset_warning`.
 - `qbxsql_debug` overrides `mysql_debug`.
 - `qbxsql_transaction_isolation_level` overrides `mysql_transaction_isolation_level`.
 
 Connection-string options override connector defaults unless a qbxsql option was explicitly set. Unknown options are ignored with a warning; values and credentials are never printed.
+`namedPlaceholders=false`, JSON `flags`, and JSON/boolean `dateStrings` retain their oxmysql meanings.
 
 ## Declarative schema adoption
 

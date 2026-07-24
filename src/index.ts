@@ -22,6 +22,7 @@ const schemas = new SchemaManager(schemaDatabase, {
 });
 
 function isConcreteOxmysqlInstalled(): boolean {
+  if (resourceName === 'oxmysql') return false;
   if (
     typeof GetNumResources !== 'function' ||
     typeof GetResourceByFindIndex !== 'function'
@@ -62,8 +63,15 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
-  registerCompatibilityExports(database, undefined, { legacyProviders: true });
-  registerSchemaExports(schemas);
+  registerCompatibilityExports(database, undefined, {
+    legacyProviders: true,
+    qbxsqlProvider: resourceName === 'oxmysql',
+  });
+  registerSchemaExports(
+    schemas,
+    undefined,
+    resourceName === 'oxmysql' ? { providerResource: 'qbxsql' } : {},
+  );
 
   database.onLifecycle((event, status) => {
     if (event === 'ready' || event === 'reconnected') {
@@ -91,7 +99,11 @@ if (isConcreteOxmysqlActive()) {
 
 if (typeof on === 'function') {
   on('onResourceStart', (startedResource: string) => {
-    if (startedResource !== 'oxmysql' || !isConcreteOxmysqlInstalled()) return;
+    if (
+      resourceName === 'oxmysql' ||
+      startedResource !== 'oxmysql' ||
+      !isConcreteOxmysqlInstalled()
+    ) return;
     reportOxmysqlConflict();
     if (typeof StopResource === 'function') StopResource(resourceName);
   });

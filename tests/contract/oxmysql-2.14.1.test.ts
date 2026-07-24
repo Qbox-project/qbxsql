@@ -60,6 +60,12 @@ describe(`${contract.target} compatibility contract`, () => {
     expect(direct.has('store')).toBe(true);
     expect(direct.has('startTransaction')).toBe(true);
     expect(direct.has('awaitConnection')).toBe(true);
+    for (const method of ['isReady', 'awaitConnection', 'store', 'startTransaction']) {
+      expect(direct.has(`${method}_async`)).toBe(true);
+      expect(direct.has(`${method}Sync`)).toBe(true);
+      expect(oxmysql.has(`${method}_async`)).toBe(true);
+      expect(oxmysql.has(`${method}Sync`)).toBe(true);
+    }
   });
 
   test('registers mysql-async and ghmattimysql aliases from the tag', () => {

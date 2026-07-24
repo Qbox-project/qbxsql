@@ -20,6 +20,10 @@ interface SchemaApiError {
 
 type SchemaCallback = (result: unknown, error?: SchemaApiError) => void;
 
+interface SchemaRegistrationOptions {
+  providerResource?: string;
+}
+
 function errorPayload(error: unknown): SchemaApiError {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SchemaPendingChangesError) {
@@ -37,6 +41,7 @@ function errorPayload(error: unknown): SchemaApiError {
 export function registerSchemaExports(
   manager: SchemaManager,
   bindings: RuntimeBindings | null = createRuntimeBindings(),
+  options: SchemaRegistrationOptions = {},
 ): Record<string, ExportFunction> {
   const runtime: RuntimeBindings = bindings ?? {
     addExport() {},
@@ -119,10 +124,15 @@ export function registerSchemaExports(
 
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
+    if (options.providerResource) {
+      runtime.addProviderExport(options.providerResource, name, callback);
+    }
     if (name === 'adoptSchema' || name === 'planSchemaAdoption') {
-      runtime.addExport(
-        `${name}_async`,
-        (schema: ResourceSchema, baselineVersion: number, explicitResource?: string) =>
+      const asyncCallback = (
+        schema: ResourceSchema,
+        baselineVersion: number,
+        explicitResource?: string,
+      ) =>
           new Promise((resolve, reject) => {
             callback(
               schema,
@@ -133,10 +143,13 @@ export function registerSchemaExports(
               },
               explicitResource,
             );
-          }),
-      );
+          });
+      runtime.addExport(`${name}_async`, asyncCallback);
+      if (options.providerResource) {
+        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
+      }
     } else {
-      runtime.addExport(`${name}_async`, (schema: ResourceSchema, explicitResource?: string) =>
+      const asyncCallback = (schema: ResourceSchema, explicitResource?: string) =>
         new Promise((resolve, reject) => {
           callback(
             schema,
@@ -146,8 +159,11 @@ export function registerSchemaExports(
             },
             explicitResource,
           );
-        }),
-      );
+        });
+      runtime.addExport(`${name}_async`, asyncCallback);
+      if (options.providerResource) {
+        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
+      }
     }
   }
 
