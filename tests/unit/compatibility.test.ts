@@ -73,18 +73,6 @@ describe('compatibility provider registration', () => {
     expect(providers).toEqual([]);
   });
 
-  test('routes native exports through qbxsql in exact oxmysql identity mode', () => {
-    const providers: string[] = [];
-    registerCompatibilityExports({} as DatabaseService, {
-      addExport() {},
-      addProviderExport: (resource, name) => providers.push(`${resource}:${name}`),
-      invokingResource: () => 'test-resource',
-    }, { qbxsqlProvider: true });
-
-    expect(providers).toContain('qbxsql:getStatus');
-    expect(providers).toContain('qbxsql:query');
-    expect(providers).toContain('qbxsql:query_async');
-  });
 });
 
 describe('oxmysql error semantics', () => {

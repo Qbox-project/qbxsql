@@ -21,8 +21,6 @@ Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses th
 
 The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.3.2'`.
 
-Most servers should install the normal `qbxsql-<version>.zip`. A few legacy resources ignore `provide` and literally inspect `GetResourceState('oxmysql')`. For those servers, install the alternative `qbxsql-<version>-as-oxmysql.zip` instead and use `ensure oxmysql`. Both archives contain the same single resource; never install both.
-
 ## Imports and calls
 
 Existing imports remain valid through qbxsql's provider aliases:

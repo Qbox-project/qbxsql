@@ -107,7 +107,7 @@ bun run test:fxserver
 
 GitHub Actions intentionally contains only `CI`: one hosted job for typechecking, unit/contract tests, the build, and MariaDB 11.4 integration tests on pushes to `main` and pull requests. FXServer execution is deliberately local because it requires each tester's own CFX key.
 
-The deterministic builder produces `release/qbxsql/`, the normal versioned ZIP, an alternative `-as-oxmysql.zip`, and SHA-256 checksums. Install exactly one. The normal archive is recommended. Use the `-as-oxmysql` archive only for legacy resources that literally require `GetResourceState('oxmysql') == 'started'`; it is the same single connector installed under the `oxmysql/` directory name and must not be installed alongside `qbxsql/`. Development servers can consume the verified normal artifact through a guarded junction:
+The deterministic builder produces `release/qbxsql/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through a guarded junction:
 
 ```sh
 bun run install:dev -- --resources C:\path\to\server\resources

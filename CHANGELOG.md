@@ -12,7 +12,7 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 - Added tuple transactions, numeric-key CFX prepared batches, multi-row raw-execute flattening, placeholder-free extra-parameter tolerance, SELECT misuse returning `nil` from insert/update helpers, and normalized error-event parameters.
 - Isolated consumer callbacks so thrown callback errors never cause duplicate invocation or false database-error events; callback-transaction failures now emit `oxmysql:error` while resolving `false`.
 - Added functional lifecycle/store/start-transaction `_async` and `Sync` aliases, `mysql_resultset_warning`, `namedPlaceholders=false`, and validated `flags`/`dateStrings` connection options.
-- Added an alternative exact-identity `-as-oxmysql.zip` containing the same single resource under `oxmysql/` for legacy literal resource-state checks. No mysql2 or named-placeholder dependency patch is required.
+- No mysql2 or named-placeholder dependency patch is required for these compatibility behaviors.
 
 ## 0.3.1 - 2026-07-24
 

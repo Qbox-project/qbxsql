@@ -5,19 +5,6 @@ import { SchemaPendingChangesError } from '../../src/schema/manager.js';
 import type { SchemaEnsureResult } from '../../src/schema/types.js';
 
 describe('schema exports', () => {
-  test('routes schema exports through a native provider alias when requested', () => {
-    const providers: string[] = [];
-    registerSchemaExports({} as never, {
-      addExport() {},
-      addProviderExport: (resource, name) => providers.push(`${resource}:${name}`),
-      invokingResource: () => 'housing',
-    }, { providerResource: 'qbxsql' });
-
-    expect(providers).toContain('qbxsql:ensureSchema');
-    expect(providers).toContain('qbxsql:ensureSchema_async');
-    expect(providers).toContain('qbxsql:adoptSchema_async');
-  });
-
   test('binds schema ownership to the invoking resource', async () => {
     const calls: Array<{ resource: string; dryRun: boolean }> = [];
     const result: SchemaEnsureResult = {

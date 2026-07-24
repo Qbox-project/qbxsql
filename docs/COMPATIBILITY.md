@@ -23,8 +23,6 @@ Compatibility fixtures also cover the less obvious 2.14.1 behavior:
 - callback exceptions are isolated, promise calls reject database errors, failed statement-list transactions resolve `false`, and callback-transaction failures emit `oxmysql:error`;
 - `_async`, `Sync`, `Async`, stored-query, mysql-async, and ghmattimysql aliases are registered.
 
-The normal resource uses CFX `provide` aliases. For resources that incorrectly require a literal started resource named `oxmysql`, use the alternative `-as-oxmysql.zip`. It is the same single resource under a different directory name, not a second compatibility resource.
-
 ## Database release target
 
 Routine CI uses MariaDB 11.4 as the representative integration target. MariaDB 10.11/11.8 and MySQL 8.0/8.4 remain supported lines and should be rerun locally when query serialization, schema introspection, or DDL behavior changes. They are not separate jobs on every push.

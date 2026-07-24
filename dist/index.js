@@ -21458,7 +21458,6 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
   };
   const runtime = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
-  const qbxsqlProvider = options.qbxsqlProvider === true;
   function normalize(query, parameters) {
     const normalizer = database2.normalize;
     return typeof normalizer === "function" ? normalizer.call(database2, query, parameters) : [query, parameters ?? []];
@@ -21698,7 +21697,6 @@ ${message}`
   for (const [name, method] of Object.entries(api)) {
     runtime.addExport(name, method);
     if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
-    if (qbxsqlProvider) runtime.addProviderExport("qbxsql", name, method);
     if (!["isReady", "awaitConnection", "getStatus", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
       runtime.addExport(`${name}_async`, promiseMethod);
@@ -21706,10 +21704,6 @@ ${message}`
       if (legacyProviders) {
         runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
         runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
-      }
-      if (qbxsqlProvider) {
-        runtime.addProviderExport("qbxsql", `${name}_async`, promiseMethod);
-        runtime.addProviderExport("qbxsql", `${name}Sync`, promiseMethod);
       }
     }
   }
@@ -21726,7 +21720,6 @@ ${message}`
   for (const [name, method] of Object.entries(lifecycleAliases)) {
     runtime.addExport(name, method);
     if (legacyProviders) runtime.addProviderExport("oxmysql", name, method);
-    if (qbxsqlProvider) runtime.addProviderExport("qbxsql", name, method);
   }
   const mysqlAsyncAliases = {
     mysql_fetch_all: api.query,
@@ -23706,7 +23699,7 @@ function errorPayload(error) {
   return { code: "QBXSQL_SCHEMA_ERROR", message };
 }
 __name(errorPayload, "errorPayload");
-function registerSchemaExports(manager, bindings = createRuntimeBindings(), options = {}) {
+function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   const runtime = bindings ?? {
     addExport() {
     },
@@ -23752,9 +23745,6 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings(), opti
   };
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
-    if (options.providerResource) {
-      runtime.addProviderExport(options.providerResource, name, callback);
-    }
     if (name === "adoptSchema" || name === "planSchemaAdoption") {
       const asyncCallback = /* @__PURE__ */ __name((schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
         callback(
@@ -23768,9 +23758,6 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings(), opti
         );
       }), "asyncCallback");
       runtime.addExport(`${name}_async`, asyncCallback);
-      if (options.providerResource) {
-        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
-      }
     } else {
       const asyncCallback = /* @__PURE__ */ __name((schema, explicitResource) => new Promise((resolve, reject) => {
         callback(
@@ -23783,9 +23770,6 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings(), opti
         );
       }), "asyncCallback");
       runtime.addExport(`${name}_async`, asyncCallback);
-      if (options.providerResource) {
-        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
-      }
     }
   }
   return api;
@@ -23806,7 +23790,6 @@ var schemas = new SchemaManager(schemaDatabase, {
   applicationDatabase: database
 });
 function isConcreteOxmysqlInstalled() {
-  if (resourceName2 === "oxmysql") return false;
   if (typeof GetNumResources !== "function" || typeof GetResourceByFindIndex !== "function") {
     return false;
   }
@@ -23839,15 +23822,8 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
-  registerCompatibilityExports(database, void 0, {
-    legacyProviders: true,
-    qbxsqlProvider: resourceName2 === "oxmysql"
-  });
-  registerSchemaExports(
-    schemas,
-    void 0,
-    resourceName2 === "oxmysql" ? { providerResource: "qbxsql" } : {}
-  );
+  registerCompatibilityExports(database, void 0, { legacyProviders: true });
+  registerSchemaExports(schemas);
   database.onLifecycle((event, status) => {
     if (event === "ready" || event === "reconnected") {
       console.log(
@@ -23871,7 +23847,7 @@ if (isConcreteOxmysqlActive()) {
 }
 if (typeof on === "function") {
   on("onResourceStart", (startedResource) => {
-    if (resourceName2 === "oxmysql" || startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
+    if (startedResource !== "oxmysql" || !isConcreteOxmysqlInstalled()) return;
     reportOxmysqlConflict();
     if (typeof StopResource === "function") StopResource(resourceName2);
   });

@@ -20,10 +20,6 @@ interface SchemaApiError {
 
 type SchemaCallback = (result: unknown, error?: SchemaApiError) => void;
 
-interface SchemaRegistrationOptions {
-  providerResource?: string;
-}
-
 function errorPayload(error: unknown): SchemaApiError {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SchemaPendingChangesError) {
@@ -41,7 +37,6 @@ function errorPayload(error: unknown): SchemaApiError {
 export function registerSchemaExports(
   manager: SchemaManager,
   bindings: RuntimeBindings | null = createRuntimeBindings(),
-  options: SchemaRegistrationOptions = {},
 ): Record<string, ExportFunction> {
   const runtime: RuntimeBindings = bindings ?? {
     addExport() {},
@@ -124,9 +119,6 @@ export function registerSchemaExports(
 
   for (const [name, callback] of Object.entries(api)) {
     runtime.addExport(name, callback);
-    if (options.providerResource) {
-      runtime.addProviderExport(options.providerResource, name, callback);
-    }
     if (name === 'adoptSchema' || name === 'planSchemaAdoption') {
       const asyncCallback = (
         schema: ResourceSchema,
@@ -145,9 +137,6 @@ export function registerSchemaExports(
             );
           });
       runtime.addExport(`${name}_async`, asyncCallback);
-      if (options.providerResource) {
-        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
-      }
     } else {
       const asyncCallback = (schema: ResourceSchema, explicitResource?: string) =>
         new Promise((resolve, reject) => {
@@ -161,9 +150,6 @@ export function registerSchemaExports(
           );
         });
       runtime.addExport(`${name}_async`, asyncCallback);
-      if (options.providerResource) {
-        runtime.addProviderExport(options.providerResource, `${name}_async`, asyncCallback);
-      }
     }
   }
 

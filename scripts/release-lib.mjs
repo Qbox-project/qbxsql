@@ -158,7 +158,6 @@ export async function validateSourceVersions() {
 
   const coreManifest = await readFile(path.join(repositoryRoot, 'fxmanifest.lua'), 'utf8');
   for (const declaration of [
-    "provide 'qbxsql'",
     "provide 'oxmysql'",
     "provide 'mysql-async'",
     "provide 'ghmattimysql'",
@@ -269,27 +268,7 @@ export async function buildRelease() {
   await writeFile(path.join(releaseRoot, zipName), zip);
   const sha256 = createHash('sha256').update(zip).digest('hex');
   await writeFile(path.join(releaseRoot, `${zipName}.sha256`), `${sha256}  ${zipName}\n`);
-
-  const oxmysqlZipName = `qbxsql-${versions.coreVersion}-as-oxmysql.zip`;
-  const oxmysqlEntries = zipEntries.map((entry) => ({
-    name: entry.name.replace(/^qbxsql\//, 'oxmysql/'),
-    data: entry.data,
-  }));
-  const oxmysqlZip = deterministicZip(oxmysqlEntries);
-  await writeFile(path.join(releaseRoot, oxmysqlZipName), oxmysqlZip);
-  const oxmysqlSha256 = createHash('sha256').update(oxmysqlZip).digest('hex');
-  await writeFile(
-    path.join(releaseRoot, `${oxmysqlZipName}.sha256`),
-    `${oxmysqlSha256}  ${oxmysqlZipName}\n`,
-  );
-  return {
-    ...versions,
-    zipName,
-    sha256,
-    oxmysqlZipName,
-    oxmysqlSha256,
-    entries: zipEntries.map((entry) => entry.name).sort(),
-  };
+  return { ...versions, zipName, sha256, entries: zipEntries.map((entry) => entry.name).sort() };
 }
 
 export async function parseStoredZip(buffer) {
@@ -358,35 +337,5 @@ export async function validateBuiltRelease() {
     throw new Error('Packaged server build is empty.');
   }
 
-  const oxmysqlZipName = `qbxsql-${versions.coreVersion}-as-oxmysql.zip`;
-  const oxmysqlZip = await readFile(path.join(releaseRoot, oxmysqlZipName));
-  const oxmysqlChecksumLine = await readFile(
-    path.join(releaseRoot, `${oxmysqlZipName}.sha256`),
-    'utf8',
-  );
-  const oxmysqlExpectedChecksum = oxmysqlChecksumLine.trim().split(/\s+/)[0];
-  const oxmysqlSha256 = createHash('sha256').update(oxmysqlZip).digest('hex');
-  if (oxmysqlExpectedChecksum !== oxmysqlSha256) {
-    throw new Error('Exact-identity oxmysql ZIP SHA-256 checksum mismatch.');
-  }
-  const oxmysqlEntries = await parseStoredZip(oxmysqlZip);
-  const expectedOxmysqlEntries = expected.core.map((entry) => `oxmysql/${entry}`).sort();
-  if (JSON.stringify([...oxmysqlEntries.keys()].sort()) !== JSON.stringify(expectedOxmysqlEntries)) {
-    throw new Error('Exact-identity oxmysql ZIP contents do not match the resource allowlist.');
-  }
-  for (const sourcePath of expected.core) {
-    const source = await readFile(path.join(repositoryRoot, sourcePath));
-    if (!source.equals(oxmysqlEntries.get(`oxmysql/${sourcePath}`))) {
-      throw new Error(`Exact-identity ZIP is stale for source file: ${sourcePath}`);
-    }
-  }
-
-  return {
-    ...versions,
-    zipName,
-    sha256: actualChecksum,
-    oxmysqlZipName,
-    oxmysqlSha256,
-    entries: actualEntries,
-  };
+  return { ...versions, zipName, sha256: actualChecksum, entries: actualEntries };
 }

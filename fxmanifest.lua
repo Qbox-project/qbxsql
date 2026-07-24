@@ -17,6 +17,5 @@ files {
 }
 
 provide 'oxmysql'
-provide 'qbxsql'
 provide 'mysql-async'
 provide 'ghmattimysql'

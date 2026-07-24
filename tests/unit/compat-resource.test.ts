@@ -15,7 +15,6 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(manifest).toContain("version '2.14.1'");
     expect(manifest).toContain("qbxsql_version '0.3.2'");
     expect(manifest).toContain("provide 'oxmysql'");
-    expect(manifest).toContain("provide 'qbxsql'");
     expect(manifest).toContain("provide 'mysql-async'");
     expect(manifest).toContain("provide 'ghmattimysql'");
     expect(manifest).not.toContain('server_only');
@@ -32,21 +31,7 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(wrapper).toContain('MySQL.Async = setmetatable');
     expect(wrapper).toContain('local MySQL = setmetatable');
     expect(wrapper).toContain('qbxsql.awaitConnection()');
-    expect(wrapper).toContain("GetResourceState('oxmysql') == 'started'");
-  });
-
-  test('supports a one-resource exact oxmysql identity install', async () => {
-    const core = await fixture('src/index.ts');
-    const releaseBuilder = await fixture('scripts/release-lib.mjs');
-    const exactIdentityProbe = await fixture('tests/fxserver/oxmysql_identity_test/server.lua');
-    const runner = await fixture('scripts/run-fxserver-gate.mjs');
-
-    expect(core).toContain("if (resourceName === 'oxmysql') return false");
-    expect(releaseBuilder).toContain('-as-oxmysql.zip');
-    expect(releaseBuilder).toContain("entry.name.replace(/^qbxsql\\//, 'oxmysql/')");
-    expect(exactIdentityProbe).toContain("GetResourceState('oxmysql') == 'started'");
-    expect(exactIdentityProbe).toContain('QBXSQL_OXMYSQL_IDENTITY_PASS');
-    expect(runner).toContain('async function runExactIdentityGate()');
+    expect(wrapper).toContain('local qbxsql = exports.qbxsql');
   });
 
   test('exposes callback and await schema adoption helpers', async () => {
@@ -75,9 +60,9 @@ describe('qbxsql compatibility metadata and providers', () => {
     const core = await fixture('src/index.ts');
     const compatibility = await fixture('src/api/compatibility.ts');
 
-    expect(core).toContain('legacyProviders: true');
-    expect(core).toContain("qbxsqlProvider: resourceName === 'oxmysql'");
-    expect(core).toContain("providerResource: 'qbxsql'");
+    expect(core).toContain(
+      'registerCompatibilityExports(database, undefined, { legacyProviders: true })',
+    );
     expect(compatibility).toContain("runtime.addProviderExport('oxmysql'");
     expect(compatibility).toContain("runtime.addProviderExport('mysql-async'");
     expect(compatibility).toContain("runtime.addProviderExport('ghmattimysql'");

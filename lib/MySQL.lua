@@ -60,10 +60,7 @@ local function safeArgs(query, parameters, callback, transaction)
     return query, parameters, callback
 end
 
--- A release may be installed under the qbxsql name, or under oxmysql for
--- resources that perform literal GetResourceState('oxmysql') checks.
-local connectorName = GetResourceState('oxmysql') == 'started' and 'oxmysql' or 'qbxsql'
-local qbxsql = exports[connectorName]
+local qbxsql = exports.qbxsql
 
 local function await(method, query, parameters)
     local response = promise.new()
