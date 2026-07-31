@@ -145,23 +145,32 @@ local function finiteNumber(value, label)
     return value
 end
 
-function Postgres.vector(values)
-    assert(type(values) == 'table', 'Postgres.vector expects an array')
+--- `vector` and `halfvec` share a wire format and differ only in the precision
+--- the server stores, so both encode through here. The label is threaded in so
+--- a bad halfvec reports halfvec rather than vector.
+local function encodeDenseVector(values, label)
+    assert(type(values) == 'table', label .. ' expects an array')
     local length = #values
-    assert(length > 0, 'Postgres.vector expects at least one value')
+    assert(length > 0, label .. ' expects at least one value')
     local encoded = {}
     for key in pairs(values) do
         if type(key) ~= 'number' or key < 1 or key > length or key % 1 ~= 0 then
-            error('Postgres.vector expects a dense numeric array')
+            error(label .. ' expects a dense numeric array')
         end
     end
     for index = 1, length do
-        encoded[index] = tostring(finiteNumber(values[index], 'Postgres.vector'))
+        encoded[index] = tostring(finiteNumber(values[index], label))
     end
     return ('[%s]'):format(table.concat(encoded, ','))
 end
 
-Postgres.halfvec = Postgres.vector
+function Postgres.vector(values)
+    return encodeDenseVector(values, 'Postgres.vector')
+end
+
+function Postgres.halfvec(values)
+    return encodeDenseVector(values, 'Postgres.halfvec')
+end
 
 function Postgres.sparsevec(dimensions, values)
     assert(type(dimensions) == 'number' and dimensions % 1 == 0 and dimensions > 0,

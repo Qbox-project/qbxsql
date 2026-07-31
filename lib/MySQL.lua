@@ -186,10 +186,20 @@ MySQL.ready = setmetatable({ await = onReady }, {
     end
 })
 
-function MySQL.startTransaction(callback)
+local function startTransaction(callback)
     assert(isCallback(callback), 'Transaction callback must be a function')
 
+    -- CFX awaits a Promise returned across the runtime boundary before handing
+    -- control back to Lua, so the direct call already blocks. `.await` is
+    -- offered for symmetry with the other methods and with Postgres.lua, and
+    -- resolves to the same thing.
     return qbxsql:startTransaction(callback, resourceName)
 end
+
+MySQL.startTransaction = setmetatable({ await = startTransaction }, {
+    __call = function(_, callback)
+        return startTransaction(callback)
+    end
+})
 
 _ENV.MySQL = MySQL
