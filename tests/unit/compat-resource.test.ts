@@ -85,6 +85,12 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(manifest).toContain("qbxsql_bridge 'true'");
     expect(manifest).toContain("dependency 'qbxsql'");
     expect(bridge).toContain("exports(exportName");
+    // Vendored oxmysql shims pass resource and throwError themselves; dropping
+    // them leaves the caller's callback uninvoked on error.
+    expect(bridge).toContain(
+      'function(query, parameters, callback, explicitResource, returnCallbackErrors)',
+    );
+    expect(bridge).toContain('returnCallbackErrors == nil');
     expect(loader).toContain("LoadResourceFile('qbxsql', 'lib/MySQL.lua')");
     expect(runner).toContain("path.join(resources, 'oxmysql')");
     expect(runner).toContain(".replace(\n    /^provide 'oxmysql'");
