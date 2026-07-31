@@ -259,6 +259,16 @@ export class PostgresSchemaManager {
         ...migrationPlanActions(migrations, this.allowBlocking),
         ...drift.actions,
       ],
+      // Drift is diffed against the database as it stands now, not against the
+      // state the pending migrations will leave behind, so one change can be
+      // described twice. ensure() does not have this overlap because it applies
+      // migrations first and then re-plans.
+      warnings: migrations.length > 0
+        ? [
+            ...drift.warnings,
+            `${migrations.length} pending migration(s) have not run yet; drift actions below were computed against the current database and may restate or overlap what those migrations will do.`,
+          ]
+        : drift.warnings,
       extensions: extensionReport,
       checksum,
       dryRun: true,
