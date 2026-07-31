@@ -129,7 +129,15 @@ export function normalizePostgresParameters(
     return [query, new Array<SqlParameter>(expected).fill(null)];
   }
 
-  if (!Array.isArray(parameters)) {
+  // Scalars, Buffers, and Dates bind as one value rather than being read as a
+  // record of positional keys.
+  const isRecord =
+    !Array.isArray(parameters) &&
+    typeof parameters === 'object' &&
+    !Buffer.isBuffer(parameters) &&
+    !(parameters instanceof Date);
+
+  if (isRecord) {
     const record = parameters as Record<string, SqlParameter>;
     const numeric = numericRecord(record, expected);
     if (numeric) return [query, numeric];
@@ -139,7 +147,9 @@ export function normalizePostgresParameters(
     );
   }
 
-  const values = [...parameters] as SqlParameter[];
+  const values = (
+    Array.isArray(parameters) ? [...parameters] : [parameters]
+  ) as SqlParameter[];
   if (values.length > expected) {
     throw new Error(`Expected ${expected} PostgreSQL parameters, but received ${values.length}.`);
   }

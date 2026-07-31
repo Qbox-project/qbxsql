@@ -31065,7 +31065,8 @@ function normalizeParameters(query, parameters, convertNamedPlaceholders = true)
     const count = countPlaceholders(query);
     return [query, new Array(count).fill(null)];
   }
-  if (!Array.isArray(parameters)) {
+  const isRecord = !Array.isArray(parameters) && typeof parameters === "object" && !Buffer.isBuffer(parameters) && !(parameters instanceof Date);
+  if (isRecord) {
     const record = parameterRecord(parameters);
     const namedScan = scanSql(query, convertNamedPlaceholders);
     if (namedScan.names.length > 0) {
@@ -31085,7 +31086,7 @@ function normalizeParameters(query, parameters, convertNamedPlaceholders = true)
     }
     return [query, positional];
   }
-  const values = [...parameters];
+  const values = Array.isArray(parameters) ? [...parameters] : [parameters];
   const expected = countPlaceholders(query);
   if (expected > 0 && values.length > expected) {
     throw new Error(`Expected ${expected} parameters, but received ${values.length}.`);
@@ -32249,7 +32250,8 @@ function normalizePostgresParameters(query, parameters) {
   if (parameters === void 0 || parameters === null) {
     return [query, new Array(expected).fill(null)];
   }
-  if (!Array.isArray(parameters)) {
+  const isRecord = !Array.isArray(parameters) && typeof parameters === "object" && !Buffer.isBuffer(parameters) && !(parameters instanceof Date);
+  if (isRecord) {
     const record = parameters;
     const numeric = numericRecord(record, expected);
     if (numeric) return [query, numeric];
@@ -32258,7 +32260,7 @@ function normalizePostgresParameters(query, parameters) {
       "PostgreSQL queries use $1, $2 positional parameters; named parameter objects are not supported."
     );
   }
-  const values = [...parameters];
+  const values = Array.isArray(parameters) ? [...parameters] : [parameters];
   if (values.length > expected) {
     throw new Error(`Expected ${expected} PostgreSQL parameters, but received ${values.length}.`);
   }

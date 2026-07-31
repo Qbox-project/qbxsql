@@ -147,7 +147,16 @@ export function normalizeParameters(
     return [query, new Array<SqlParameter>(count).fill(null)];
   }
 
-  if (!Array.isArray(parameters)) {
+  // A bare scalar, Buffer, or Date binds as one value. Without this they reach
+  // parameterRecord(), whose Object.entries() yields nothing, and the query runs
+  // with an empty object bound instead of the value.
+  const isRecord =
+    !Array.isArray(parameters) &&
+    typeof parameters === 'object' &&
+    !Buffer.isBuffer(parameters) &&
+    !(parameters instanceof Date);
+
+  if (isRecord) {
     const record = parameterRecord(parameters as Record<string, SqlParameter>);
     const namedScan = scanSql(query, convertNamedPlaceholders);
 
@@ -171,7 +180,9 @@ export function normalizeParameters(
     return [query, positional];
   }
 
-  const values = [...parameters] as SqlParameter[];
+  const values = (
+    Array.isArray(parameters) ? [...parameters] : [parameters]
+  ) as SqlParameter[];
   const expected = countPlaceholders(query);
 
   if (expected > 0 && values.length > expected) {

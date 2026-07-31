@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { countPlaceholders, normalizeParameters } from '../../src/core/parameters.js';
+import { normalizePostgresParameters } from '../../src/core/postgres-parameters.js';
 
 describe('SQL parameter normalization', () => {
   test('counts value and identifier placeholders outside literals and comments', () => {
@@ -69,6 +70,33 @@ describe('SQL parameter normalization', () => {
     expect(normalizeParameters('INSERT INTO users SET ?', { name: 'Ada' })).toEqual([
       'INSERT INTO users SET ?',
       [{ name: 'Ada' }],
+    ]);
+  });
+});
+
+describe('scalar parameters', () => {
+  test('binds a bare scalar instead of an empty object', () => {
+    expect(normalizeParameters('SELECT name FROM users WHERE id = ?', 5 as never)).toEqual([
+      'SELECT name FROM users WHERE id = ?',
+      [5],
+    ]);
+    expect(normalizeParameters('SELECT 1 WHERE name = ?', 'ochre' as never)).toEqual([
+      'SELECT 1 WHERE name = ?',
+      ['ochre'],
+    ]);
+  });
+
+  test('binds Date and Buffer values whole', () => {
+    const stamp = new Date('2026-07-31T00:00:00.000Z');
+    expect(normalizeParameters('SELECT 1 WHERE created = ?', stamp as never)[1]).toEqual([stamp]);
+    const blob = Buffer.from([1, 2, 3]);
+    expect(normalizeParameters('SELECT 1 WHERE data = ?', blob as never)[1]).toEqual([blob]);
+  });
+
+  test('binds a bare scalar for PostgreSQL placeholders', () => {
+    expect(normalizePostgresParameters('SELECT name FROM users WHERE id = $1', 5 as never)).toEqual([
+      'SELECT name FROM users WHERE id = $1',
+      [5],
     ]);
   });
 });
