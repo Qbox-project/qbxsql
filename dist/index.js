@@ -30707,15 +30707,35 @@ var SchemaManager = class {
         return true;
     }
   }
+  /**
+   * Never reassigns a table that another resource already owns. assertOwnership
+   * runs earlier under the same lock, so this is defence in depth rather than
+   * the primary check -- but an unconditional overwrite would silently transfer
+   * ownership if that check were ever bypassed. Matches the PostgreSQL lane.
+   */
   async claimTables(resource, tableNames) {
     for (const tableName of tableNames) {
       await this.database.update(
         `INSERT INTO qbxsql_schema_tables (table_name, resource_name)
          VALUES (?, ?)
-         ON DUPLICATE KEY UPDATE resource_name = VALUES(resource_name)`,
+         ON DUPLICATE KEY UPDATE resource_name = IF(
+           resource_name = VALUES(resource_name),
+           VALUES(resource_name),
+           resource_name
+         )`,
         [tableName, resource],
         { invokingResource: "qbxsql:schema" }
       );
+      const owner = await this.database.scalar(
+        `SELECT resource_name FROM qbxsql_schema_tables WHERE table_name = ?`,
+        [tableName],
+        { invokingResource: "qbxsql:schema" }
+      );
+      if (String(owner) !== resource) {
+        throw new Error(
+          `Table '${tableName}' is owned by resource '${String(owner)}', not '${resource}'.`
+        );
+      }
     }
   }
   async releaseTable(resource, tableName) {
