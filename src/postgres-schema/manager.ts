@@ -302,7 +302,7 @@ export class PostgresSchemaManager {
       const migrationRows = await this.readMigrationRows(resource);
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       this.assertOwnershipTransitions(resource, registry, schema, migrations);
-      this.assertBlockingPolicy(migrations);
+      this.assertBlockingPolicy(resource, migrations);
       await this.assertOwnership(lock, resource, [
         ...Object.keys(schema.tables),
         ...migrations.flatMap((migration) => migration.operations.flatMap(operationTable)),
@@ -424,7 +424,7 @@ export class PostgresSchemaManager {
 
       const migrations = this.pendingMigrations(schema, baselineVersion);
       this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
-      this.assertBlockingPolicy(migrations);
+      this.assertBlockingPolicy(resource, migrations);
       const appliedActions: string[] = [];
       const appliedMigrations: number[] = [];
       for (const migration of migrations) {
@@ -681,14 +681,17 @@ export class PostgresSchemaManager {
     }
   }
 
-  private assertBlockingPolicy(migrations: readonly PostgresMigrationDefinition[]): void {
+  private assertBlockingPolicy(
+    resource: string,
+    migrations: readonly PostgresMigrationDefinition[],
+  ): void {
     for (const migration of migrations) {
       if (
         migration.operations.some(requiresBlocking) &&
         !(migration.allowBlocking === true && this.allowBlocking)
       ) {
         throw new PostgresSchemaMigrationRequiredError({
-          resource: 'migration',
+          resource,
           version: migration.version,
           actions: migrationPlanActions([migration], this.allowBlocking),
           warnings: [],

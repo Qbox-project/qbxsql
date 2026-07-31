@@ -296,8 +296,14 @@ function validateMigrationOperation(operation: MigrationOperation): void {
 }
 
 function validateMigrations(migrations: MigrationDefinition[]): void {
+  // Spreading a malformed value here would throw a bare TypeError that says
+  // nothing about which part of the schema is wrong.
+  if (!Array.isArray(migrations)) throw new Error('Schema migrations must be an array.');
   let previousVersion = 0;
   for (const migration of [...migrations].sort((a, b) => a.version - b.version)) {
+    if (!migration || typeof migration !== 'object') {
+      throw new Error('Each schema migration must be an object.');
+    }
     if (!Number.isInteger(migration.version) || migration.version < 1) {
       throw new Error('Migration versions must be positive integers.');
     }

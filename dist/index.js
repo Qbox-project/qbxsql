@@ -26507,8 +26507,12 @@ function validateMigrationOperation(operation) {
 }
 __name(validateMigrationOperation, "validateMigrationOperation");
 function validateMigrations(migrations) {
+  if (!Array.isArray(migrations)) throw new Error("Schema migrations must be an array.");
   let previousVersion = 0;
   for (const migration of [...migrations].sort((a, b) => a.version - b.version)) {
+    if (!migration || typeof migration !== "object") {
+      throw new Error("Each schema migration must be an object.");
+    }
     if (!Number.isInteger(migration.version) || migration.version < 1) {
       throw new Error("Migration versions must be positive integers.");
     }
@@ -28422,7 +28426,7 @@ var PostgresSchemaManager = class {
       const migrationRows = await this.readMigrationRows(resource);
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       this.assertOwnershipTransitions(resource, registry, schema, migrations);
-      this.assertBlockingPolicy(migrations);
+      this.assertBlockingPolicy(resource, migrations);
       await this.assertOwnership(lock, resource, [
         ...Object.keys(schema.tables),
         ...migrations.flatMap((migration) => migration.operations.flatMap(operationTable))
@@ -28524,7 +28528,7 @@ var PostgresSchemaManager = class {
       );
       const migrations = this.pendingMigrations(schema, baselineVersion);
       this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
-      this.assertBlockingPolicy(migrations);
+      this.assertBlockingPolicy(resource, migrations);
       const appliedActions = [];
       const appliedMigrations = [];
       for (const migration of migrations) {
@@ -28751,11 +28755,11 @@ var PostgresSchemaManager = class {
       }
     }
   }
-  assertBlockingPolicy(migrations) {
+  assertBlockingPolicy(resource, migrations) {
     for (const migration of migrations) {
       if (migration.operations.some(requiresBlocking) && !(migration.allowBlocking === true && this.allowBlocking)) {
         throw new PostgresSchemaMigrationRequiredError({
-          resource: "migration",
+          resource,
           version: migration.version,
           actions: migrationPlanActions([migration], this.allowBlocking),
           warnings: []
@@ -30158,7 +30162,7 @@ var SchemaManager = class {
         appliedMigrations
       };
     } finally {
-      lock.destroy();
+      await this.releaseLock(lock);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -30341,7 +30345,7 @@ var SchemaManager = class {
       }
       throw error;
     } finally {
-      lock.destroy();
+      await this.releaseLock(lock);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -30442,6 +30446,19 @@ var SchemaManager = class {
     const rows4 = result.rows;
     if (Number(rows4[0]?.acquired) !== 1) throw new Error("Timed out waiting for the qbxsql schema lock.");
   }
+  /**
+   * GET_LOCK is session scoped, so the lock has to be dropped explicitly before
+   * the connection can go back to the pool. Destroying the connection also
+   * drops it, but throws away a pooled connection on every ensure and adopt.
+   */
+  async releaseLock(connection) {
+    try {
+      await connection.query(`SELECT RELEASE_LOCK('qbxsql:schema')`);
+      connection.release();
+    } catch {
+      connection.destroy();
+    }
+  }
   async readRegistry(resource) {
     const row = await this.database.single(
       `SELECT resource_name AS resourceName, version, checksum, tables_json AS tablesJson
@@ -30501,18 +30518,19 @@ var SchemaManager = class {
     }
   }
   async assertOwnership(resource, tableNames) {
-    if (tableNames.length === 0) return;
+    const desired = [...new Set(tableNames)];
+    if (desired.length === 0) return;
     const rows4 = await this.database.query(
-      `SELECT table_name AS tableName, resource_name AS resourceName FROM qbxsql_schema_tables`,
-      [],
+      `SELECT table_name AS tableName, resource_name AS resourceName
+         FROM qbxsql_schema_tables
+        WHERE table_name IN (${desired.map(() => "?").join(", ")})`,
+      desired,
       { invokingResource: "qbxsql:schema" }
     );
-    const desired = new Set(tableNames);
     for (const row of rows4) {
-      const tableName = String(row.tableName);
-      if (desired.has(tableName) && String(row.resourceName) !== resource) {
+      if (String(row.resourceName) !== resource) {
         throw new Error(
-          `Table '${tableName}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`
+          `Table '${String(row.tableName)}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`
         );
       }
     }

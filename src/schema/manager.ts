@@ -349,7 +349,7 @@ export class SchemaManager {
         appliedMigrations,
       };
     } finally {
-      lock.destroy();
+      await this.releaseLock(lock);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -559,7 +559,7 @@ export class SchemaManager {
       }
       throw error;
     } finally {
-      lock.destroy();
+      await this.releaseLock(lock);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -668,6 +668,21 @@ export class SchemaManager {
     if (Number(rows[0]?.acquired) !== 1) throw new Error('Timed out waiting for the qbxsql schema lock.');
   }
 
+  /**
+   * GET_LOCK is session scoped, so the lock has to be dropped explicitly before
+   * the connection can go back to the pool. Destroying the connection also
+   * drops it, but throws away a pooled connection on every ensure and adopt.
+   */
+  private async releaseLock(connection: DatabaseConnection): Promise<void> {
+    try {
+      await connection.query(`SELECT RELEASE_LOCK('qbxsql:schema')`);
+      connection.release();
+    } catch {
+      // If the lock cannot be confirmed released, do not return the connection.
+      connection.destroy();
+    }
+  }
+
   private async readRegistry(resource: string): Promise<RegistryRow | null> {
     const row = (await this.database.single(
       `SELECT resource_name AS resourceName, version, checksum, tables_json AS tablesJson
@@ -734,18 +749,19 @@ export class SchemaManager {
   }
 
   private async assertOwnership(resource: string, tableNames: string[]): Promise<void> {
-    if (tableNames.length === 0) return;
+    const desired = [...new Set(tableNames)];
+    if (desired.length === 0) return;
     const rows = (await this.database.query(
-      `SELECT table_name AS tableName, resource_name AS resourceName FROM qbxsql_schema_tables`,
-      [],
+      `SELECT table_name AS tableName, resource_name AS resourceName
+         FROM qbxsql_schema_tables
+        WHERE table_name IN (${desired.map(() => '?').join(', ')})`,
+      desired,
       { invokingResource: 'qbxsql:schema' },
     )) as Row[];
-    const desired = new Set(tableNames);
     for (const row of rows) {
-      const tableName = String(row.tableName);
-      if (desired.has(tableName) && String(row.resourceName) !== resource) {
+      if (String(row.resourceName) !== resource) {
         throw new Error(
-          `Table '${tableName}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`,
+          `Table '${String(row.tableName)}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`,
         );
       }
     }
