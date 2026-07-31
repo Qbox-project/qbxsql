@@ -27382,6 +27382,9 @@ function validateOperation(operation) {
       assertPostgresIdentifier(operationRecord[key], `migration ${key}`);
     }
   }
+  if (["dropTable", "dropColumn", "sql"].includes(operation.type) && operationRecord.allowDataLoss !== true) {
+    throw new Error(`${operation.type} requires allowDataLoss=true.`);
+  }
   if ("definition" in operation) {
     if (operation.type === "addColumn" || operation.type === "alterColumn") {
       return {

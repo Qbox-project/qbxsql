@@ -523,6 +523,15 @@ function validateOperation(operation: PostgresMigrationOperation): PostgresMigra
       assertPostgresIdentifier(operationRecord[key] as string, `migration ${key}`);
     }
   }
+  // Without this the flag is simply absent, and the planner's
+  // `!('allowDataLoss' in operation)` test then reports a destructive drop as
+  // dataSafe to an operator reviewing the plan.
+  if (
+    ['dropTable', 'dropColumn', 'sql'].includes(operation.type) &&
+    operationRecord.allowDataLoss !== true
+  ) {
+    throw new Error(`${operation.type} requires allowDataLoss=true.`);
+  }
   if ('definition' in operation) {
     if (operation.type === 'addColumn' || operation.type === 'alterColumn') {
       return {

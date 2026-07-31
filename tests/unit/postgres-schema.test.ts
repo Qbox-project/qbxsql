@@ -70,6 +70,28 @@ describe('PostgreSQL declarative schemas', () => {
     expect(() => validatePostgresSchema(unsafe)).toThrow('without a semicolon');
   });
 
+  test('requires allowDataLoss for destructive migrations', () => {
+    const drop = schema();
+    drop.migrations = [
+      {
+        version: 1,
+        name: 'drop legacy table',
+        operations: [{ type: 'dropTable', table: 'legacy' } as never],
+      },
+    ];
+    expect(() => validatePostgresSchema(drop)).toThrow('dropTable requires allowDataLoss=true');
+
+    const accepted = schema();
+    accepted.migrations = [
+      {
+        version: 1,
+        name: 'drop legacy table',
+        operations: [{ type: 'dropTable', table: 'legacy', allowDataLoss: true }],
+      },
+    ];
+    expect(() => validatePostgresSchema(accepted)).not.toThrow();
+  });
+
   test('rejects DDL injection through referential actions', () => {
     const input = schema();
     input.tables.properties!.foreignKeys = [
