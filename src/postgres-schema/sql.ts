@@ -183,7 +183,7 @@ export function createPostgresIndexSql(
     index.include && index.include.length > 0
       ? ` INCLUDE (${index.include.map(quotePostgresIdentifier).join(', ')})`
       : '';
-  const predicate = index.where ? ` WHERE ${index.where}` : '';
+  const predicate = index.where ? ` WHERE (${index.where})` : '';
   const options = index.options && Object.keys(index.options).length > 0
     ? ` WITH (${Object.entries(index.options)
       .map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`)

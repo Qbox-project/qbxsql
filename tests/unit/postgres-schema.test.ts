@@ -70,13 +70,39 @@ describe('PostgreSQL declarative schemas', () => {
     expect(() => validatePostgresSchema(unsafe)).toThrow('without a semicolon');
   });
 
+  test('rejects DDL injection through referential actions', () => {
+    const input = schema();
+    input.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['owner'],
+        references: { table: 'users', columns: ['identifier'] },
+        onDelete: 'CASCADE, ADD COLUMN backdoor TEXT' as 'CASCADE',
+      },
+    ];
+    expect(() => validatePostgresSchema(input)).toThrow('onDelete must be one of');
+
+    const canonical = schema();
+    canonical.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['owner'],
+        references: { table: 'users', columns: ['identifier'] },
+        onDelete: 'cascade' as 'CASCADE',
+      },
+    ];
+    expect(
+      validatePostgresSchema(canonical).tables.properties!.foreignKeys![0]!.onDelete,
+    ).toBe('CASCADE');
+  });
+
   test('renders tables, JSON defaults, partial indexes, and concurrent migrations', () => {
     const table = validatePostgresSchema(schema()).tables.properties!;
     expect(createPostgresTableSql('properties', table)).toContain(
       `"metadata" JSONB DEFAULT '{}'::jsonb NOT NULL`,
     );
     expect(createPostgresIndexSql('properties', table.indexes![0]!, true)).toBe(
-      'CREATE INDEX CONCURRENTLY "properties_owner_idx" ON "public"."properties" USING BTREE ("owner") WHERE owner IS NOT NULL',
+      'CREATE INDEX CONCURRENTLY "properties_owner_idx" ON "public"."properties" USING BTREE ("owner") WHERE (owner IS NOT NULL)',
     );
     expect(
       postgresMigrationStatements({

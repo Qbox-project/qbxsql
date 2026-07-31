@@ -44,11 +44,53 @@ const columnTypes = new Set<ColumnType>([
 const integerTypes = new Set<ColumnType>(['tinyint', 'smallint', 'mediumint', 'int', 'bigint']);
 const lengthTypes = new Set<ColumnType>(['char', 'varchar', 'binary', 'varbinary']);
 const expressionPattern = /^CURRENT_TIMESTAMP(?:\([0-6]\))?$/;
+// Engine, charset, and collation are interpolated into DDL without identifier
+// quoting, so they are restricted to bare words the same way collation is.
+const tableOptionPattern = /^[A-Za-z0-9_]+$/;
+// InnoDB parses SET DEFAULT but rejects it, so it is deliberately excluded.
+const referentialActions = ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'] as const;
+type ReferentialAction = (typeof referentialActions)[number];
 
 export function assertIdentifier(identifier: string, label = 'identifier'): void {
   if (!identifierPattern.test(identifier)) {
     throw new Error(`Invalid ${label} '${identifier}'. Use letters, numbers, and underscores only.`);
   }
+}
+
+function assertTableOption(value: unknown, label: string, subject: string): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string' || !tableOptionPattern.test(value)) {
+    throw new Error(`${subject} has an invalid ${label}. Use letters, numbers, and underscores only.`);
+  }
+}
+
+/**
+ * Referential actions are interpolated into DDL verbatim, so only the canonical
+ * spellings are accepted. The canonical form is written back to the definition
+ * so generated SQL never contains caller-supplied text.
+ */
+function canonicalReferentialAction(
+  value: unknown,
+  subject: string,
+): ReferentialAction | undefined {
+  if (value === undefined || value === null) return undefined;
+  const canonical =
+    typeof value === 'string'
+      ? referentialActions.find(
+          (action) => action === value.trim().replace(/\s+/g, ' ').toUpperCase(),
+        )
+      : undefined;
+  if (!canonical) throw new Error(`${subject} must be one of ${referentialActions.join(', ')}.`);
+  return canonical;
+}
+
+function applyReferentialActions(foreignKey: ForeignKeyDefinition, subject: string): void {
+  const onDelete = canonicalReferentialAction(foreignKey.onDelete, `${subject} onDelete`);
+  const onUpdate = canonicalReferentialAction(foreignKey.onUpdate, `${subject} onUpdate`);
+  if (onDelete === undefined) delete foreignKey.onDelete;
+  else foreignKey.onDelete = onDelete;
+  if (onUpdate === undefined) delete foreignKey.onUpdate;
+  else foreignKey.onUpdate = onUpdate;
 }
 
 function validateColumn(name: string, column: ColumnDefinition): void {
@@ -136,6 +178,7 @@ function validateForeignKey(
     }
   }
   for (const column of foreignKey.references.columns) assertIdentifier(column, 'referenced column name');
+  applyReferentialActions(foreignKey, `Foreign key '${foreignKey.name}' on '${tableName}'`);
 }
 
 function validateTable(name: string, table: TableDefinition): void {
@@ -156,9 +199,9 @@ function validateTable(name: string, table: TableDefinition): void {
   }
   for (const index of table.indexes ?? []) validateIndex(name, table, index);
   for (const foreignKey of table.foreignKeys ?? []) validateForeignKey(name, table, foreignKey);
-  if (table.collation && !/^[A-Za-z0-9_]+$/.test(table.collation)) {
-    throw new Error(`Table '${name}' has an invalid collation.`);
-  }
+  assertTableOption(table.engine, 'engine', `Table '${name}'`);
+  assertTableOption(table.charset, 'charset', `Table '${name}'`);
+  assertTableOption(table.collation, 'collation', `Table '${name}'`);
 }
 
 function validateMigrationOperation(operation: MigrationOperation): void {
@@ -211,6 +254,10 @@ function validateMigrationOperation(operation: MigrationOperation): void {
       for (const column of operation.definition.references.columns) {
         assertIdentifier(column, 'referenced column name');
       }
+      applyReferentialActions(
+        operation.definition,
+        `Foreign key '${operation.definition.name}'`,
+      );
       break;
     case 'dropForeignKey':
       assertIdentifier(operation.table, 'table name');
@@ -231,9 +278,9 @@ function validateMigrationOperation(operation: MigrationOperation): void {
       if (!operation.engine && !operation.charset && !operation.collation) {
         throw new Error('setTableOptions requires engine, charset, or collation.');
       }
-      if (operation.collation && !/^[A-Za-z0-9_]+$/.test(operation.collation)) {
-        throw new Error('setTableOptions has an invalid collation.');
-      }
+      assertTableOption(operation.engine, 'engine', 'setTableOptions');
+      assertTableOption(operation.charset, 'charset', 'setTableOptions');
+      assertTableOption(operation.collation, 'collation', 'setTableOptions');
       break;
     case 'releaseTable':
       assertIdentifier(operation.table, 'table name');

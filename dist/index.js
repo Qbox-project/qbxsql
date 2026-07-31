@@ -26246,12 +26246,39 @@ var columnTypes = /* @__PURE__ */ new Set([
 var integerTypes = /* @__PURE__ */ new Set(["tinyint", "smallint", "mediumint", "int", "bigint"]);
 var lengthTypes = /* @__PURE__ */ new Set(["char", "varchar", "binary", "varbinary"]);
 var expressionPattern = /^CURRENT_TIMESTAMP(?:\([0-6]\))?$/;
+var tableOptionPattern = /^[A-Za-z0-9_]+$/;
+var referentialActions = ["RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
 function assertIdentifier(identifier, label = "identifier") {
   if (!identifierPattern.test(identifier)) {
     throw new Error(`Invalid ${label} '${identifier}'. Use letters, numbers, and underscores only.`);
   }
 }
 __name(assertIdentifier, "assertIdentifier");
+function assertTableOption(value, label, subject) {
+  if (value === void 0 || value === null) return;
+  if (typeof value !== "string" || !tableOptionPattern.test(value)) {
+    throw new Error(`${subject} has an invalid ${label}. Use letters, numbers, and underscores only.`);
+  }
+}
+__name(assertTableOption, "assertTableOption");
+function canonicalReferentialAction(value, subject) {
+  if (value === void 0 || value === null) return void 0;
+  const canonical = typeof value === "string" ? referentialActions.find(
+    (action2) => action2 === value.trim().replace(/\s+/g, " ").toUpperCase()
+  ) : void 0;
+  if (!canonical) throw new Error(`${subject} must be one of ${referentialActions.join(", ")}.`);
+  return canonical;
+}
+__name(canonicalReferentialAction, "canonicalReferentialAction");
+function applyReferentialActions(foreignKey, subject) {
+  const onDelete = canonicalReferentialAction(foreignKey.onDelete, `${subject} onDelete`);
+  const onUpdate = canonicalReferentialAction(foreignKey.onUpdate, `${subject} onUpdate`);
+  if (onDelete === void 0) delete foreignKey.onDelete;
+  else foreignKey.onDelete = onDelete;
+  if (onUpdate === void 0) delete foreignKey.onUpdate;
+  else foreignKey.onUpdate = onUpdate;
+}
+__name(applyReferentialActions, "applyReferentialActions");
 function validateColumn(name, column) {
   assertIdentifier(name, "column name");
   if (!column || typeof column !== "object") throw new Error(`Column '${name}' must be an object.`);
@@ -26325,6 +26352,7 @@ function validateForeignKey(tableName, table, foreignKey) {
     }
   }
   for (const column of foreignKey.references.columns) assertIdentifier(column, "referenced column name");
+  applyReferentialActions(foreignKey, `Foreign key '${foreignKey.name}' on '${tableName}'`);
 }
 __name(validateForeignKey, "validateForeignKey");
 function validateTable(name, table) {
@@ -26344,9 +26372,9 @@ function validateTable(name, table) {
   }
   for (const index of table.indexes ?? []) validateIndex(name, table, index);
   for (const foreignKey of table.foreignKeys ?? []) validateForeignKey(name, table, foreignKey);
-  if (table.collation && !/^[A-Za-z0-9_]+$/.test(table.collation)) {
-    throw new Error(`Table '${name}' has an invalid collation.`);
-  }
+  assertTableOption(table.engine, "engine", `Table '${name}'`);
+  assertTableOption(table.charset, "charset", `Table '${name}'`);
+  assertTableOption(table.collation, "collation", `Table '${name}'`);
 }
 __name(validateTable, "validateTable");
 function validateMigrationOperation(operation) {
@@ -26395,6 +26423,10 @@ function validateMigrationOperation(operation) {
       for (const column of operation.definition.references.columns) {
         assertIdentifier(column, "referenced column name");
       }
+      applyReferentialActions(
+        operation.definition,
+        `Foreign key '${operation.definition.name}'`
+      );
       break;
     case "dropForeignKey":
       assertIdentifier(operation.table, "table name");
@@ -26415,9 +26447,9 @@ function validateMigrationOperation(operation) {
       if (!operation.engine && !operation.charset && !operation.collation) {
         throw new Error("setTableOptions requires engine, charset, or collation.");
       }
-      if (operation.collation && !/^[A-Za-z0-9_]+$/.test(operation.collation)) {
-        throw new Error("setTableOptions has an invalid collation.");
-      }
+      assertTableOption(operation.engine, "engine", "setTableOptions");
+      assertTableOption(operation.charset, "charset", "setTableOptions");
+      assertTableOption(operation.collation, "collation", "setTableOptions");
       break;
     case "releaseTable":
       assertIdentifier(operation.table, "table name");
@@ -26985,6 +27017,16 @@ function sqlFragment(value, label) {
   return value.trim();
 }
 __name(sqlFragment, "sqlFragment");
+var referentialActions2 = ["RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT", "NO ACTION"];
+function canonicalReferentialAction2(value, subject) {
+  if (value === void 0 || value === null) return void 0;
+  const canonical = typeof value === "string" ? referentialActions2.find(
+    (action2) => action2 === value.trim().replace(/\s+/g, " ").toUpperCase()
+  ) : void 0;
+  if (!canonical) throw new Error(`${subject} must be one of ${referentialActions2.join(", ")}.`);
+  return canonical;
+}
+__name(canonicalReferentialAction2, "canonicalReferentialAction");
 function validateColumn2(name, source) {
   assertPostgresIdentifier(name, "column name");
   if (!source || typeof source !== "object") throw new Error(`Column '${name}' must be an object.`);
@@ -27214,10 +27256,20 @@ function validateForeignKey2(foreignKey, columns) {
   if (foreignKey.initiallyDeferred && !foreignKey.deferrable) {
     throw new Error(`Foreign key '${foreignKey.name}' cannot be initially deferred unless deferrable.`);
   }
+  const onDelete = canonicalReferentialAction2(
+    foreignKey.onDelete,
+    `Foreign key '${foreignKey.name}' onDelete`
+  );
+  const onUpdate = canonicalReferentialAction2(
+    foreignKey.onUpdate,
+    `Foreign key '${foreignKey.name}' onUpdate`
+  );
   return {
     ...foreignKey,
     columns: local,
-    references: { table: foreignKey.references.table, columns: referenced }
+    references: { table: foreignKey.references.table, columns: referenced },
+    ...onDelete ? { onDelete } : {},
+    ...onUpdate ? { onUpdate } : {}
   };
 }
 __name(validateForeignKey2, "validateForeignKey");
@@ -27555,7 +27607,7 @@ __name(createPostgresTableSql, "createPostgresTableSql");
 function createPostgresIndexSql(table, index, concurrently) {
   const method = (index.method ?? "btree").toUpperCase();
   const include = index.include && index.include.length > 0 ? ` INCLUDE (${index.include.map(quotePostgresIdentifier).join(", ")})` : "";
-  const predicate = index.where ? ` WHERE ${index.where}` : "";
+  const predicate = index.where ? ` WHERE (${index.where})` : "";
   const options = index.options && Object.keys(index.options).length > 0 ? ` WITH (${Object.entries(index.options).map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`).join(", ")})` : "";
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX${concurrently ? " CONCURRENTLY" : ""} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(", ")})${include}${options}${predicate}`;
 }

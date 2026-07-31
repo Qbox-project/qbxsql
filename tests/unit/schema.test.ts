@@ -51,6 +51,55 @@ describe('schema validation and SQL generation', () => {
     ).toThrow('requires a length');
   });
 
+  test('rejects DDL injection through table options and referential actions', () => {
+    const withEngine = exampleSchema();
+    withEngine.tables.properties!.engine = 'InnoDB, DROP COLUMN owner' as 'InnoDB';
+    expect(() => validateSchema(withEngine)).toThrow('invalid engine');
+
+    const withCharset = exampleSchema();
+    withCharset.tables.properties!.charset = 'utf8mb4, DROP COLUMN owner' as 'utf8mb4';
+    expect(() => validateSchema(withCharset)).toThrow('invalid charset');
+
+    const withForeignKey = exampleSchema();
+    withForeignKey.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['owner'],
+        references: { table: 'users', columns: ['identifier'] },
+        onDelete: 'CASCADE, ADD COLUMN backdoor TEXT' as 'CASCADE',
+      },
+    ];
+    expect(() => validateSchema(withForeignKey)).toThrow('onDelete must be one of');
+
+    const options = exampleSchema();
+    options.migrations = [
+      {
+        version: 2,
+        name: 'unsafe options',
+        operations: [
+          { type: 'setTableOptions', table: 'properties', engine: 'InnoDB, DROP COLUMN owner' as 'InnoDB' },
+        ],
+      },
+    ];
+    expect(() => validateSchema(options)).toThrow('invalid engine');
+  });
+
+  test('canonicalizes referential action casing so generated DDL is fixed text', () => {
+    const schema = exampleSchema();
+    schema.tables.properties!.foreignKeys = [
+      {
+        name: 'properties_owner_fk',
+        columns: ['owner'],
+        references: { table: 'users', columns: ['identifier'] },
+        onDelete: 'cascade' as 'CASCADE',
+        onUpdate: 'set  null' as 'SET NULL',
+      },
+    ];
+    const validated = validateSchema(schema);
+    expect(validated.tables.properties!.foreignKeys![0]!.onDelete).toBe('CASCADE');
+    expect(validated.tables.properties!.foreignKeys![0]!.onUpdate).toBe('SET NULL');
+  });
+
   test('produces stable checksums independent of object key order', () => {
     const first = exampleSchema();
     const second: ResourceSchema = {

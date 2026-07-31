@@ -130,6 +130,27 @@ function sqlFragment(value: unknown, label: string): string {
   return value.trim();
 }
 
+const referentialActions = ['RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT', 'NO ACTION'] as const;
+
+/**
+ * Referential actions are interpolated into DDL verbatim, so only the canonical
+ * spellings are accepted and the canonical form is what reaches the generator.
+ */
+function canonicalReferentialAction(
+  value: unknown,
+  subject: string,
+): PostgresForeignKeyDefinition['onDelete'] {
+  if (value === undefined || value === null) return undefined;
+  const canonical =
+    typeof value === 'string'
+      ? referentialActions.find(
+          (action) => action === value.trim().replace(/\s+/g, ' ').toUpperCase(),
+        )
+      : undefined;
+  if (!canonical) throw new Error(`${subject} must be one of ${referentialActions.join(', ')}.`);
+  return canonical;
+}
+
 function validateColumn(name: string, source: PostgresColumnDefinition): PostgresColumnDefinition {
   assertPostgresIdentifier(name, 'column name');
   if (!source || typeof source !== 'object') throw new Error(`Column '${name}' must be an object.`);
@@ -423,10 +444,20 @@ function validateForeignKey(
   if (foreignKey.initiallyDeferred && !foreignKey.deferrable) {
     throw new Error(`Foreign key '${foreignKey.name}' cannot be initially deferred unless deferrable.`);
   }
+  const onDelete = canonicalReferentialAction(
+    foreignKey.onDelete,
+    `Foreign key '${foreignKey.name}' onDelete`,
+  );
+  const onUpdate = canonicalReferentialAction(
+    foreignKey.onUpdate,
+    `Foreign key '${foreignKey.name}' onUpdate`,
+  );
   return {
     ...foreignKey,
     columns: local,
     references: { table: foreignKey.references.table, columns: referenced },
+    ...(onDelete ? { onDelete } : {}),
+    ...(onUpdate ? { onUpdate } : {}),
   };
 }
 
