@@ -48,6 +48,27 @@ describe('startup failure exports', () => {
     expect(() => exports.get('query')!('SELECT 1')).toThrow('must be an integer');
   });
 
+  test('keeps the never-rejecting transaction contract when unavailable', async () => {
+    const { exports, bindings } = collect();
+    registerMySqlUnavailableExports(bindings, {
+      legacyProviders: true,
+      unavailableReason: startupReason,
+    });
+
+    // Callers write `if not MySQL.transaction.await(...)`, so these must
+    // resolve false rather than reject the way the other methods do.
+    await expect(exports.get('transaction_async')!()).resolves.toBe(false);
+    await expect(exports.get('transactionSync')!()).resolves.toBe(false);
+    await expect(exports.get('startTransaction_async')!()).resolves.toBe(false);
+    expect(exports.get('transaction')!([], [])).toBe(false);
+
+    const reported = await new Promise<unknown>((resolve) => {
+      exports.get('transaction')!([], [], (result: unknown) => resolve(result));
+    });
+    expect(reported).toBe(false);
+    await expect(exports.get('oxmysql:transaction_async')!()).resolves.toBe(false);
+  });
+
   test('reports the startup failure through both schema surfaces', async () => {
     const { exports, bindings } = collect();
     registerSchemaUnavailableExports(bindings, startupReason);

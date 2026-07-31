@@ -26063,11 +26063,19 @@ function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), opt
     "update",
     "prepare",
     "rawExecute",
-    "transaction",
-    "startTransaction",
     "execute",
     "fetch"
   ];
+  const transactionUnavailable = /* @__PURE__ */ __name((...args) => {
+    const callback = [...args].reverse().find((entry) => typeof entry === "function");
+    console.error(`[qbxsql] ${message}`);
+    callback?.(false);
+    return false;
+  }, "transactionUnavailable");
+  const transactionPromiseUnavailable = /* @__PURE__ */ __name(async () => {
+    console.error(`[qbxsql] ${message}`);
+    return false;
+  }, "transactionPromiseUnavailable");
   runtime2.addExport("isReady", () => false);
   runtime2.addExport("awaitConnection", promiseUnavailable);
   runtime2.addExport("getStatus", (dialect) => options.getStatus?.(dialect) ?? null);
@@ -26083,6 +26091,16 @@ function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), opt
       runtime2.addProviderExport("oxmysql", `${name}Sync`, promiseUnavailable);
     }
   }
+  for (const name of ["transaction", "startTransaction"]) {
+    runtime2.addExport(name, transactionUnavailable);
+    runtime2.addExport(`${name}_async`, transactionPromiseUnavailable);
+    runtime2.addExport(`${name}Sync`, transactionPromiseUnavailable);
+    if (provider) {
+      runtime2.addProviderExport("oxmysql", name, transactionUnavailable);
+      runtime2.addProviderExport("oxmysql", `${name}_async`, transactionPromiseUnavailable);
+      runtime2.addProviderExport("oxmysql", `${name}Sync`, transactionPromiseUnavailable);
+    }
+  }
   if (provider) {
     runtime2.addProviderExport("oxmysql", "isReady", () => false);
     runtime2.addProviderExport("oxmysql", "awaitConnection", promiseUnavailable);
@@ -26093,16 +26111,18 @@ function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), opt
       "mysql_fetch_all",
       "mysql_fetch_scalar",
       "mysql_execute",
-      "mysql_insert",
-      "mysql_transaction"
+      "mysql_insert"
     ]) {
       runtime2.addProviderExport("mysql-async", name, unavailable);
     }
+    runtime2.addProviderExport("mysql-async", "mysql_transaction", transactionUnavailable);
     runtime2.addProviderExport("mysql-async", "mysql_store", store);
-    for (const name of ["execute", "scalar", "insert", "transaction"]) {
+    for (const name of ["execute", "scalar", "insert"]) {
       runtime2.addProviderExport("ghmattimysql", name, unavailable);
       runtime2.addProviderExport("ghmattimysql", `${name}Sync`, promiseUnavailable);
     }
+    runtime2.addProviderExport("ghmattimysql", "transaction", transactionUnavailable);
+    runtime2.addProviderExport("ghmattimysql", "transactionSync", transactionPromiseUnavailable);
     runtime2.addProviderExport("ghmattimysql", "store", store);
     runtime2.addProviderExport("ghmattimysql", "storeSync", store);
   }
