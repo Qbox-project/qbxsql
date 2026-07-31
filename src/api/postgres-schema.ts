@@ -187,13 +187,14 @@ export function registerPostgresSchemaExports(
 
 export function registerPostgresSchemaUnavailableExports(
   bindings: RuntimeBindings | null = createRuntimeBindings(),
+  reason?: { code: string; message: string },
 ): void {
   if (!bindings) return;
   const unavailable = (...args: unknown[]) => {
     const callback = [...args].reverse().find((entry) => typeof entry === 'function') as
       | SchemaCallback
       | undefined;
-    const error = {
+    const error = reason ?? {
       code: 'QBXSQL_POSTGRES_NOT_CONFIGURED',
       message: 'PostgreSQL is not configured. Set qbxsql_postgres_connection_string.',
     };

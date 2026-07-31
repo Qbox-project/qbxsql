@@ -22,6 +22,8 @@ export interface CompatibilityRegistrationOptions {
   oxmysqlProvider?: boolean;
   getStatus?: (dialect?: string) => unknown;
   getStatuses?: () => unknown;
+  /** Overrides the "not configured" text when startup failed for another reason. */
+  unavailableReason?: { code: string; message: string };
 }
 
 function errorMessage(error: unknown): string {
@@ -531,8 +533,10 @@ export function registerMySqlUnavailableExports(
   const runtime = bindings;
   if (!runtime) return;
   const message =
+    options.unavailableReason?.message ??
     'MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string.';
-  const error = () => Object.assign(new Error(message), { code: 'QBXSQL_MYSQL_NOT_CONFIGURED' });
+  const code = options.unavailableReason?.code ?? 'QBXSQL_MYSQL_NOT_CONFIGURED';
+  const error = () => Object.assign(new Error(message), { code });
   const provider = options.legacyProviders === true && options.oxmysqlProvider !== false;
   const unavailable: ExportFunction = (...args: unknown[]) => {
     const callback = [...args].reverse().find((entry) => typeof entry === 'function') as

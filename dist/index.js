@@ -1690,19 +1690,19 @@ var require_parser_cache = __commonJS({
     var parserCache = createLRU({
       max: 15e3
     });
-    function keyFromFields(type, fields, options, config2) {
+    function keyFromFields(type, fields, options, config) {
       const res = [
         type,
         typeof options.nestTables,
         options.nestTables,
         Boolean(options.rowsAsArray),
-        Boolean(options.supportBigNumbers || config2.supportBigNumbers),
-        Boolean(options.bigNumberStrings || config2.bigNumberStrings),
+        Boolean(options.supportBigNumbers || config.supportBigNumbers),
+        Boolean(options.bigNumberStrings || config.bigNumberStrings),
         typeof options.typeCast === "boolean" ? options.typeCast : typeof options.typeCast,
-        options.timezone || config2.timezone,
+        options.timezone || config.timezone,
         Boolean(options.decimalNumbers),
         options.dateStrings,
-        Boolean(config2.jsonStrings)
+        Boolean(config.jsonStrings)
       ];
       for (let i = 0; i < fields.length; ++i) {
         const field = fields[i];
@@ -1721,13 +1721,13 @@ var require_parser_cache = __commonJS({
       return JSON.stringify(res, null, 0);
     }
     __name(keyFromFields, "keyFromFields");
-    function getParser(type, fields, options, config2, compiler) {
-      const key = keyFromFields(type, fields, options, config2);
+    function getParser(type, fields, options, config, compiler) {
+      const key = keyFromFields(type, fields, options, config);
       let parser = parserCache.get(key);
       if (parser) {
         return parser;
       }
-      parser = compiler(fields, options, config2);
+      parser = compiler(fields, options, config);
       parserCache.set(key, parser);
       return parser;
     }
@@ -15475,19 +15475,19 @@ var require_text_parser = __commonJS({
     for (const t in Types) {
       typeNames[Types[t]] = t;
     }
-    function readCodeFor(field, encodingExpr, config2, options) {
+    function readCodeFor(field, encodingExpr, config, options) {
       const type = field.columnType;
       const charset = field.characterSet;
       const supportBigNumbers = Boolean(
-        options.supportBigNumbers || config2.supportBigNumbers
+        options.supportBigNumbers || config.supportBigNumbers
       );
       const bigNumberStrings = Boolean(
-        options.bigNumberStrings || config2.bigNumberStrings
+        options.bigNumberStrings || config.bigNumberStrings
       );
-      const timezone = options.timezone || config2.timezone;
-      const dateStrings = options.dateStrings || config2.dateStrings;
+      const timezone = options.timezone || config.timezone;
+      const dateStrings = options.dateStrings || config.dateStrings;
       if (field.extendedFormat === "json") {
-        return config2.jsonStrings ? `packet.readLengthCodedString(${encodingExpr})` : `packet.parseJson(${encodingExpr}, ${supportBigNumbers})`;
+        return config.jsonStrings ? `packet.readLengthCodedString(${encodingExpr})` : `packet.parseJson(${encodingExpr}, ${supportBigNumbers})`;
       }
       switch (type) {
         case Types.TINY:
@@ -15508,7 +15508,7 @@ var require_text_parser = __commonJS({
           return "packet.readLengthCodedNumber()";
         case Types.DECIMAL:
         case Types.NEWDECIMAL:
-          if (config2.decimalNumbers) {
+          if (config.decimalNumbers) {
             return "packet.parseLengthCodedFloat()";
           }
           return 'packet.readLengthCodedString("ascii")';
@@ -15530,7 +15530,7 @@ var require_text_parser = __commonJS({
         case Types.VECTOR:
           return "packet.parseVector()";
         case Types.JSON:
-          return config2.jsonStrings ? 'packet.readLengthCodedString("utf8")' : `packet.parseJson("utf8", ${supportBigNumbers})`;
+          return config.jsonStrings ? 'packet.readLengthCodedString("utf8")' : `packet.parseJson("utf8", ${supportBigNumbers})`;
         default:
           if (charset === Charsets.BINARY) {
             return "packet.readLengthCodedBuffer()";
@@ -15539,9 +15539,9 @@ var require_text_parser = __commonJS({
       }
     }
     __name(readCodeFor, "readCodeFor");
-    function compile(fields, options, config2) {
-      if (typeof config2.typeCast === "function" && typeof options.typeCast !== "function") {
-        options.typeCast = config2.typeCast;
+    function compile(fields, options, config) {
+      if (typeof config.typeCast === "function" && typeof options.typeCast !== "function") {
+        options.typeCast = config.typeCast;
       }
       function wrap(field, _this) {
         return {
@@ -15617,7 +15617,7 @@ var require_text_parser = __commonJS({
           parserFn(`${lvalue} = packet.readLengthCodedBuffer();`);
         } else {
           const encodingExpr = `fields[${i}].encoding`;
-          const readCode = readCodeFor(fields[i], encodingExpr, config2, options);
+          const readCode = readCodeFor(fields[i], encodingExpr, config, options);
           if (typeof options.typeCast === "function") {
             parserFn(
               `${lvalue} = options.typeCast(this.wrap${i}, function() { return ${readCode} });`
@@ -15630,7 +15630,7 @@ var require_text_parser = __commonJS({
       parserFn("return result;");
       parserFn("}");
       parserFn("};")("})()");
-      if (config2.debug) {
+      if (config.debug) {
         helpers.printDebugWithCode(
           "Compiled text protocol row parser",
           parserFn.toString()
@@ -15642,8 +15642,8 @@ var require_text_parser = __commonJS({
       return parserFn.toFunction();
     }
     __name(compile, "compile");
-    function getTextParser(fields, options, config2) {
-      return parserCache.getParser("text", fields, options, config2, compile);
+    function getTextParser(fields, options, config) {
+      return parserCache.getParser("text", fields, options, config, compile);
     }
     __name(getTextParser, "getTextParser");
     module2.exports = getTextParser;
@@ -15667,19 +15667,19 @@ var require_static_text_parser = __commonJS({
       type,
       charset,
       encoding,
-      config: config2,
+      config,
       options
     }) {
       const supportBigNumbers = Boolean(
-        options.supportBigNumbers || config2.supportBigNumbers
+        options.supportBigNumbers || config.supportBigNumbers
       );
       const bigNumberStrings = Boolean(
-        options.bigNumberStrings || config2.bigNumberStrings
+        options.bigNumberStrings || config.bigNumberStrings
       );
-      const timezone = options.timezone || config2.timezone;
-      const dateStrings = options.dateStrings || config2.dateStrings;
+      const timezone = options.timezone || config.timezone;
+      const dateStrings = options.dateStrings || config.dateStrings;
       if (field.extendedFormat === "json") {
-        return config2.jsonStrings ? packet.readLengthCodedString(encoding) : packet.parseJson(encoding, supportBigNumbers);
+        return config.jsonStrings ? packet.readLengthCodedString(encoding) : packet.parseJson(encoding, supportBigNumbers);
       }
       switch (type) {
         case Types.TINY:
@@ -15699,7 +15699,7 @@ var require_static_text_parser = __commonJS({
         case Types.NULL:
         case Types.DECIMAL:
         case Types.NEWDECIMAL:
-          if (config2.decimalNumbers) {
+          if (config.decimalNumbers) {
             return packet.parseLengthCodedFloat();
           }
           return packet.readLengthCodedString("ascii");
@@ -15721,7 +15721,7 @@ var require_static_text_parser = __commonJS({
         case Types.VECTOR:
           return packet.parseVector();
         case Types.JSON:
-          return config2.jsonStrings ? packet.readLengthCodedString("utf8") : packet.parseJson("utf8", supportBigNumbers);
+          return config.jsonStrings ? packet.readLengthCodedString("utf8") : packet.parseJson("utf8", supportBigNumbers);
         default:
           if (charset === Charsets.BINARY) {
             return packet.readLengthCodedBuffer();
@@ -15756,20 +15756,20 @@ var require_static_text_parser = __commonJS({
       };
     }
     __name(createTypecastField, "createTypecastField");
-    function getTextParser(_fields, _options, config2) {
+    function getTextParser(_fields, _options, config) {
       return {
         next(packet, fields, options) {
           const result = options.rowsAsArray ? [] : {};
           for (let i = 0; i < fields.length; i++) {
             const field = fields[i];
-            const typeCast2 = options.typeCast ? options.typeCast : config2.typeCast;
+            const typeCast2 = options.typeCast ? options.typeCast : config.typeCast;
             const next = /* @__PURE__ */ __name(() => readField({
               packet,
               field,
               type: field.columnType,
               encoding: field.encoding,
               charset: field.characterSet,
-              config: config2,
+              config,
               options
             }), "next");
             let value;
@@ -16164,18 +16164,18 @@ var require_binary_parser = __commonJS({
     for (const t in Types) {
       typeNames[Types[t]] = t;
     }
-    function readCodeFor(field, config2, options, fieldNum) {
+    function readCodeFor(field, config, options, fieldNum) {
       const supportBigNumbers = Boolean(
-        options.supportBigNumbers || config2.supportBigNumbers
+        options.supportBigNumbers || config.supportBigNumbers
       );
       const bigNumberStrings = Boolean(
-        options.bigNumberStrings || config2.bigNumberStrings
+        options.bigNumberStrings || config.bigNumberStrings
       );
-      const timezone = options.timezone || config2.timezone;
-      const dateStrings = options.dateStrings || config2.dateStrings;
+      const timezone = options.timezone || config.timezone;
+      const dateStrings = options.dateStrings || config.dateStrings;
       const unsigned = field.flags & FieldFlags.UNSIGNED;
       if (field.extendedFormat === "json") {
-        return config2.jsonStrings ? `packet.readLengthCodedString(fields[${fieldNum}].encoding)` : `packet.parseJson(fields[${fieldNum}].encoding, ${supportBigNumbers});`;
+        return config.jsonStrings ? `packet.readLengthCodedString(fields[${fieldNum}].encoding)` : `packet.parseJson(fields[${fieldNum}].encoding, ${supportBigNumbers});`;
       }
       switch (field.columnType) {
         case Types.TINY:
@@ -16205,7 +16205,7 @@ var require_binary_parser = __commonJS({
           return "packet.readTimeString()";
         case Types.DECIMAL:
         case Types.NEWDECIMAL:
-          if (config2.decimalNumbers) {
+          if (config.decimalNumbers) {
             return "packet.parseLengthCodedFloat();";
           }
           return 'packet.readLengthCodedString("ascii");';
@@ -16214,7 +16214,7 @@ var require_binary_parser = __commonJS({
         case Types.VECTOR:
           return "packet.parseVector()";
         case Types.JSON:
-          return config2.jsonStrings ? 'packet.readLengthCodedString("utf8")' : `packet.parseJson("utf8", ${supportBigNumbers});`;
+          return config.jsonStrings ? 'packet.readLengthCodedString("utf8")' : `packet.parseJson("utf8", ${supportBigNumbers});`;
         case Types.LONGLONG:
           if (!supportBigNumbers) {
             return unsigned ? "packet.readInt64JSNumber();" : "packet.readSInt64JSNumber();";
@@ -16231,7 +16231,7 @@ var require_binary_parser = __commonJS({
       }
     }
     __name(readCodeFor, "readCodeFor");
-    function compile(fields, options, config2) {
+    function compile(fields, options, config) {
       const parserFn = genFunc();
       const nullBitmapLength = Math.floor((fields.length + 7 + 2) / 8);
       function fieldMetadata2(field) {
@@ -16307,8 +16307,8 @@ var require_binary_parser = __commonJS({
       } else {
         parserFn("const result = {};");
       }
-      if (typeof config2.typeCast === "function" && typeof options.typeCast !== "function") {
-        options.typeCast = config2.typeCast;
+      if (typeof config.typeCast === "function" && typeof options.typeCast !== "function") {
+        options.typeCast = config.typeCast;
       }
       parserFn("packet.readInt8();");
       for (let i = 0; i < nullBitmapLength; ++i) {
@@ -16348,7 +16348,7 @@ var require_binary_parser = __commonJS({
         } else {
           const fieldWrapperVar = `fieldWrapper${i}`;
           parserFn(`const ${fieldWrapperVar} = wrap(fields[${i}], packet);`);
-          const readCode = readCodeFor(fields[i], config2, options, i);
+          const readCode = readCodeFor(fields[i], config, options, i);
           if (typeof options.typeCast === "function") {
             parserFn(
               `${lvalue} = options.typeCast(${fieldWrapperVar}, function() { return ${readCode} });`
@@ -16367,7 +16367,7 @@ var require_binary_parser = __commonJS({
       parserFn("return result;");
       parserFn("}");
       parserFn("};")("})()");
-      if (config2.debug) {
+      if (config.debug) {
         helpers.printDebugWithCode(
           "Compiled binary protocol row parser",
           parserFn.toString()
@@ -16376,8 +16376,8 @@ var require_binary_parser = __commonJS({
       return parserFn.toFunction({ wrap, wrapNull });
     }
     __name(compile, "compile");
-    function getBinaryParser(fields, options, config2) {
-      return parserCache.getParser("binary", fields, options, config2, compile);
+    function getBinaryParser(fields, options, config) {
+      return parserCache.getParser("binary", fields, options, config, compile);
     }
     __name(getBinaryParser, "getBinaryParser");
     module2.exports = getBinaryParser;
@@ -16396,19 +16396,19 @@ var require_static_binary_parser = __commonJS({
     for (const t in Types) {
       typeNames[Types[t]] = t;
     }
-    function getBinaryParser(fields, _options, config2) {
-      function readCode(field, config3, options, fieldNum, packet) {
+    function getBinaryParser(fields, _options, config) {
+      function readCode(field, config2, options, fieldNum, packet) {
         const supportBigNumbers = Boolean(
-          options.supportBigNumbers || config3.supportBigNumbers
+          options.supportBigNumbers || config2.supportBigNumbers
         );
         const bigNumberStrings = Boolean(
-          options.bigNumberStrings || config3.bigNumberStrings
+          options.bigNumberStrings || config2.bigNumberStrings
         );
-        const timezone = options.timezone || config3.timezone;
-        const dateStrings = options.dateStrings || config3.dateStrings;
+        const timezone = options.timezone || config2.timezone;
+        const dateStrings = options.dateStrings || config2.dateStrings;
         const unsigned = field.flags & FieldFlags.UNSIGNED;
         if (field.extendedFormat === "json") {
-          return config3.jsonStrings ? packet.readLengthCodedString(field.encoding) : packet.parseJson(field.encoding, supportBigNumbers);
+          return config2.jsonStrings ? packet.readLengthCodedString(field.encoding) : packet.parseJson(field.encoding, supportBigNumbers);
         }
         switch (field.columnType) {
           case Types.TINY:
@@ -16439,13 +16439,13 @@ var require_static_binary_parser = __commonJS({
             return packet.readTimeString();
           case Types.DECIMAL:
           case Types.NEWDECIMAL:
-            return config3.decimalNumbers ? packet.parseLengthCodedFloat() : packet.readLengthCodedString("ascii");
+            return config2.decimalNumbers ? packet.parseLengthCodedFloat() : packet.readLengthCodedString("ascii");
           case Types.GEOMETRY:
             return packet.parseGeometryValue();
           case Types.VECTOR:
             return packet.parseVector();
           case Types.JSON:
-            return config3.jsonStrings ? packet.readLengthCodedString("utf8") : packet.parseJson("utf8", supportBigNumbers);
+            return config2.jsonStrings ? packet.readLengthCodedString("utf8") : packet.parseJson("utf8", supportBigNumbers);
           case Types.LONGLONG:
             if (!supportBigNumbers)
               return unsigned ? packet.readInt64JSNumber() : packet.readSInt64JSNumber();
@@ -16494,14 +16494,14 @@ var require_static_binary_parser = __commonJS({
           let nullByteIndex = 0;
           for (let i = 0; i < fields2.length; i++) {
             const field = fields2[i];
-            const typeCast2 = options.typeCast !== void 0 ? options.typeCast : config2.typeCast;
+            const typeCast2 = options.typeCast !== void 0 ? options.typeCast : config.typeCast;
             let value;
             if (nullBitmaskBytes[nullByteIndex] & currentFieldNullBit) {
               value = typeof typeCast2 === "function" ? typeCast2(wrapNull(field), () => null) : null;
             } else if (options.typeCast === false) {
               value = packet.readLengthCodedBuffer();
             } else {
-              const next = /* @__PURE__ */ __name(() => readCode(field, config2, options, i, packet), "next");
+              const next = /* @__PURE__ */ __name(() => readCode(field, config, options, i, packet), "next");
               value = typeof typeCast2 === "function" ? typeCast2(
                 {
                   type: typeNames[field.columnType],
@@ -17302,13 +17302,13 @@ var require_tracing = __commonJS({
     var executeChannel = hasTracingChannel ? dc.tracingChannel("mysql2:execute") : void 0;
     var connectChannel = hasTracingChannel ? dc.tracingChannel("mysql2:connect") : void 0;
     var poolConnectChannel = hasTracingChannel ? dc.tracingChannel("mysql2:pool:connect") : void 0;
-    function getServerContext(config2) {
-      if (config2.socketPath) {
-        return { serverAddress: config2.socketPath, serverPort: void 0 };
+    function getServerContext(config) {
+      if (config.socketPath) {
+        return { serverAddress: config.socketPath, serverPort: void 0 };
       }
       return {
-        serverAddress: config2.host || "localhost",
-        serverPort: config2.port || 3306
+        serverAddress: config.host || "localhost",
+        serverPort: config.port || 3306
       };
     }
     __name(getServerContext, "getServerContext");
@@ -17409,20 +17409,20 @@ var require_named_placeholders = __commonJS({
       return [query];
     }
     __name(parse, "parse");
-    function createCompiler(config2) {
-      if (!config2) config2 = {};
-      if (!config2.placeholder) {
-        config2.placeholder = "?";
+    function createCompiler(config) {
+      if (!config) config = {};
+      if (!config.placeholder) {
+        config.placeholder = "?";
       }
       let ncache = 100;
       let cache;
-      if (typeof config2.cache === "number") {
-        ncache = config2.cache;
+      if (typeof config.cache === "number") {
+        ncache = config.cache;
       }
-      if (typeof config2.cache === "object") {
-        cache = config2.cache;
+      if (typeof config.cache === "object") {
+        cache = config.cache;
       }
-      if (config2.cache !== false && !cache) {
+      if (config.cache !== false && !cache) {
         cache = require_lib3().createLRU({ max: ncache });
       }
       function toArrayParams(tree, params) {
@@ -17455,17 +17455,17 @@ var require_named_placeholders = __commonJS({
         let unnamed = noTailingSemicolon(tree[0][0]);
         for (let i = 1; i < tree[0].length; ++i) {
           if (tree[0][i - 1].slice(-1) === ":") {
-            unnamed += config2.placeholder;
+            unnamed += config.placeholder;
           }
-          unnamed += config2.placeholder;
+          unnamed += config.placeholder;
           unnamed += noTailingSemicolon(tree[0][i]);
         }
         const last = tree[0][tree[0].length - 1];
         if (tree[0].length === tree[1].length) {
           if (last.slice(-1) === ":") {
-            unnamed += config2.placeholder;
+            unnamed += config.placeholder;
           }
-          unnamed += config2.placeholder;
+          unnamed += config.placeholder;
         }
         return [unnamed, tree[1]];
       }
@@ -17637,7 +17637,7 @@ var require_connection = __commonJS({
           });
           this.addCommand(handshakeCommand);
           if (shouldTrace(connectChannel)) {
-            const config2 = this.config;
+            const config = this.config;
             tracePromise(
               connectChannel,
               () => new Promise((resolve, reject) => {
@@ -17654,12 +17654,12 @@ var require_connection = __commonJS({
                 this.once("error", onError);
               }),
               () => {
-                const server = getServerContext(config2);
+                const server = getServerContext(config);
                 return {
-                  database: config2.database || "",
+                  database: config.database || "",
                   serverAddress: server.serverAddress,
                   serverPort: server.serverPort,
-                  user: config2.user || ""
+                  user: config.user || ""
                 };
               }
             ).catch(() => {
@@ -18430,10 +18430,10 @@ var require_connection = __commonJS({
         this.addCommand = this._addCommandClosedState;
         return quitCmd;
       }
-      static createQuery(sql, values, cb, config2) {
+      static createQuery(sql, values, cb, config) {
         let options = {
-          rowsAsArray: config2.rowsAsArray,
-          infileStreamFactory: config2.infileStreamFactory
+          rowsAsArray: config.rowsAsArray,
+          infileStreamFactory: config.infileStreamFactory
         };
         if (typeof sql === "object") {
           options = {
@@ -19014,15 +19014,15 @@ var require_pool = __commonJS({
           this.emit("enqueue");
           return this._connectionQueue.push(cb2);
         }, "_getConnection");
-        const config2 = this.config.connectionConfig;
+        const config = this.config.connectionConfig;
         traceCallback(
           poolConnectChannel,
           _getConnection,
           0,
           () => {
-            const server = getServerContext(config2);
+            const server = getServerContext(config);
             return {
-              database: config2.database || "",
+              database: config.database || "",
               serverAddress: server.serverAddress,
               serverPort: server.serverPort
             };
@@ -19521,13 +19521,13 @@ var require_pool_cluster = __commonJS({
       static {
         __name(this, "PoolCluster");
       }
-      constructor(config2) {
+      constructor(config) {
         super();
-        config2 = config2 || {};
-        this._canRetry = typeof config2.canRetry === "undefined" ? true : config2.canRetry;
-        this._removeNodeErrorCount = config2.removeNodeErrorCount || 5;
-        this._restoreNodeTimeout = config2.restoreNodeTimeout || 0;
-        this._defaultSelector = config2.defaultSelector || "RR";
+        config = config || {};
+        this._canRetry = typeof config.canRetry === "undefined" ? true : config.canRetry;
+        this._removeNodeErrorCount = config.removeNodeErrorCount || 5;
+        this._restoreNodeTimeout = config.restoreNodeTimeout || 0;
+        this._defaultSelector = config.defaultSelector || "RR";
         this._closed = false;
         this._lastId = 0;
         this._nodes = {};
@@ -19548,16 +19548,16 @@ var require_pool_cluster = __commonJS({
         }
         return this._namespaces[key];
       }
-      add(id, config2) {
+      add(id, config) {
         if (typeof id === "object") {
-          config2 = id;
+          config = id;
           id = `CLUSTER::${++this._lastId}`;
         }
         if (typeof this._nodes[id] === "undefined") {
           this._nodes[id] = {
             id,
             errorCount: 0,
-            pool: new Pool2({ config: new PoolConfig(config2) }),
+            pool: new Pool2({ config: new PoolConfig(config) }),
             _offlineUntil: 0
           };
           this._serviceableNodeIds.push(id);
@@ -19707,8 +19707,8 @@ var require_create_pool = __commonJS({
     "use strict";
     var Pool2 = require_pool3();
     var PoolConfig = require_pool_config();
-    function createPool2(config2) {
-      return new Pool2({ config: new PoolConfig(config2) });
+    function createPool2(config) {
+      return new Pool2({ config: new PoolConfig(config) });
     }
     __name(createPool2, "createPool");
     module2.exports = createPool2;
@@ -19720,8 +19720,8 @@ var require_create_pool_cluster = __commonJS({
   "node_modules/mysql2/lib/create_pool_cluster.js"(exports2, module2) {
     "use strict";
     var PoolCluster = require_pool_cluster();
-    function createPoolCluster(config2) {
-      return new PoolCluster(config2);
+    function createPoolCluster(config) {
+      return new PoolCluster(config);
     }
     __name(createPoolCluster, "createPoolCluster");
     module2.exports = createPoolCluster;
@@ -21217,19 +21217,19 @@ var require_utils = __commonJS({
       return ret;
     }
     __name(dateToStringUTC, "dateToStringUTC");
-    function normalizeQueryConfig(config2, values, callback) {
-      config2 = typeof config2 === "string" ? { text: config2 } : config2;
+    function normalizeQueryConfig(config, values, callback) {
+      config = typeof config === "string" ? { text: config } : config;
       if (values) {
         if (typeof values === "function") {
-          config2.callback = values;
+          config.callback = values;
         } else {
-          config2.values = values;
+          config.values = values;
         }
       }
       if (callback) {
-        config2.callback = callback;
+        config.callback = callback;
       }
-      return config2;
+      return config;
     }
     __name(normalizeQueryConfig, "normalizeQueryConfig");
     var escapeIdentifier2 = /* @__PURE__ */ __name(function(str) {
@@ -21685,10 +21685,10 @@ var require_pg_connection_string = __commonJS({
     "use strict";
     function parse(str, options = {}) {
       if (str.charAt(0) === "/") {
-        const config3 = str.split(" ");
-        return { host: config3[0], database: config3[1] };
+        const config2 = str.split(" ");
+        return { host: config2[0], database: config2[1] };
       }
-      const config2 = /* @__PURE__ */ Object.create(null);
+      const config = /* @__PURE__ */ Object.create(null);
       let result;
       let dummyHost = false;
       if (/ |%[^a-f0-9]|%[a-f0-9][^a-f0-9]/i.test(str)) {
@@ -21706,78 +21706,78 @@ var require_pg_connection_string = __commonJS({
         throw err;
       }
       for (const entry of result.searchParams.entries()) {
-        config2[entry[0]] = entry[1];
+        config[entry[0]] = entry[1];
       }
-      config2.user = config2.user || decodeURIComponent(result.username);
-      config2.password = config2.password || decodeURIComponent(result.password);
+      config.user = config.user || decodeURIComponent(result.username);
+      config.password = config.password || decodeURIComponent(result.password);
       if (result.protocol == "socket:") {
-        config2.host = decodeURI(result.pathname);
-        config2.database = result.searchParams.get("db");
-        config2.client_encoding = result.searchParams.get("encoding");
-        return config2;
+        config.host = decodeURI(result.pathname);
+        config.database = result.searchParams.get("db");
+        config.client_encoding = result.searchParams.get("encoding");
+        return config;
       }
       const hostname = dummyHost ? "" : result.hostname;
-      if (!config2.host) {
-        config2.host = decodeURIComponent(hostname);
+      if (!config.host) {
+        config.host = decodeURIComponent(hostname);
       } else if (hostname && /^%2f/i.test(hostname)) {
         result.pathname = hostname + result.pathname;
       }
-      if (!config2.port) {
-        config2.port = result.port;
+      if (!config.port) {
+        config.port = result.port;
       }
       const pathname = result.pathname.slice(1) || null;
-      config2.database = pathname ? decodeURI(pathname) : null;
-      if (config2.ssl === "true" || config2.ssl === "1") {
-        config2.ssl = true;
+      config.database = pathname ? decodeURI(pathname) : null;
+      if (config.ssl === "true" || config.ssl === "1") {
+        config.ssl = true;
       }
-      if (config2.ssl === "0") {
-        config2.ssl = false;
+      if (config.ssl === "0") {
+        config.ssl = false;
       }
-      if (config2.sslcert || config2.sslkey || config2.sslrootcert || config2.sslmode) {
-        config2.ssl = {};
+      if (config.sslcert || config.sslkey || config.sslrootcert || config.sslmode) {
+        config.ssl = {};
       }
-      if (config2.sslnegotiation === "direct" && config2.ssl === void 0) {
-        config2.ssl = true;
+      if (config.sslnegotiation === "direct" && config.ssl === void 0) {
+        config.ssl = true;
       }
-      const fs = config2.sslcert || config2.sslkey || config2.sslrootcert ? require("fs") : null;
-      if (config2.sslcert) {
-        config2.ssl.cert = fs.readFileSync(config2.sslcert).toString();
+      const fs = config.sslcert || config.sslkey || config.sslrootcert ? require("fs") : null;
+      if (config.sslcert) {
+        config.ssl.cert = fs.readFileSync(config.sslcert).toString();
       }
-      if (config2.sslkey) {
-        config2.ssl.key = fs.readFileSync(config2.sslkey).toString();
+      if (config.sslkey) {
+        config.ssl.key = fs.readFileSync(config.sslkey).toString();
       }
-      if (config2.sslrootcert) {
-        config2.ssl.ca = fs.readFileSync(config2.sslrootcert).toString();
+      if (config.sslrootcert) {
+        config.ssl.ca = fs.readFileSync(config.sslrootcert).toString();
       }
-      if (options.useLibpqCompat && config2.uselibpqcompat) {
+      if (options.useLibpqCompat && config.uselibpqcompat) {
         throw new Error("Both useLibpqCompat and uselibpqcompat are set. Please use only one of them.");
       }
-      if (config2.uselibpqcompat === "true" || options.useLibpqCompat) {
-        switch (config2.sslmode) {
+      if (config.uselibpqcompat === "true" || options.useLibpqCompat) {
+        switch (config.sslmode) {
           case "disable": {
-            config2.ssl = false;
+            config.ssl = false;
             break;
           }
           case "prefer": {
-            config2.ssl.rejectUnauthorized = false;
+            config.ssl.rejectUnauthorized = false;
             break;
           }
           case "require": {
-            if (config2.sslrootcert) {
-              config2.ssl.checkServerIdentity = function() {
+            if (config.sslrootcert) {
+              config.ssl.checkServerIdentity = function() {
               };
             } else {
-              config2.ssl.rejectUnauthorized = false;
+              config.ssl.rejectUnauthorized = false;
             }
             break;
           }
           case "verify-ca": {
-            if (!config2.ssl.ca) {
+            if (!config.ssl.ca) {
               throw new Error(
                 "SECURITY WARNING: Using sslmode=verify-ca requires specifying a CA with sslrootcert. If a public CA is used, verify-ca allows connections to a server that somebody else may have registered with the CA, making you vulnerable to Man-in-the-Middle attacks. Either specify a custom CA certificate with sslrootcert parameter or use sslmode=verify-full for proper security."
               );
             }
-            config2.ssl.checkServerIdentity = function() {
+            config.ssl.checkServerIdentity = function() {
             };
             break;
           }
@@ -21786,27 +21786,27 @@ var require_pg_connection_string = __commonJS({
           }
         }
       } else {
-        switch (config2.sslmode) {
+        switch (config.sslmode) {
           case "disable": {
-            config2.ssl = false;
+            config.ssl = false;
             break;
           }
           case "prefer":
           case "require":
           case "verify-ca":
           case "verify-full": {
-            if (config2.sslmode !== "verify-full") {
-              deprecatedSslModeWarning(config2.sslmode);
+            if (config.sslmode !== "verify-full") {
+              deprecatedSslModeWarning(config.sslmode);
             }
             break;
           }
           case "no-verify": {
-            config2.ssl.rejectUnauthorized = false;
+            config.ssl.rejectUnauthorized = false;
             break;
           }
         }
       }
-      return config2;
+      return config;
     }
     __name(parse, "parse");
     function toConnectionOptions(sslConfig) {
@@ -21819,8 +21819,8 @@ var require_pg_connection_string = __commonJS({
       return connectionOptions;
     }
     __name(toConnectionOptions, "toConnectionOptions");
-    function toClientConfig(config2) {
-      const poolConfig = Object.entries(config2).reduce((c, [key, value]) => {
+    function toClientConfig(config) {
+      const poolConfig = Object.entries(config).reduce((c, [key, value]) => {
         if (key === "ssl") {
           const sslConfig = value;
           if (typeof sslConfig === "boolean") {
@@ -21879,9 +21879,9 @@ var require_connection_parameters = __commonJS({
     var dns = require("dns");
     var defaults2 = require_defaults2();
     var parse = require_pg_connection_string().parse;
-    var val = /* @__PURE__ */ __name(function(key, config2, envVar) {
-      if (config2[key]) {
-        return config2[key];
+    var val = /* @__PURE__ */ __name(function(key, config, envVar) {
+      if (config[key]) {
+        return config[key];
       }
       if (envVar === void 0) {
         envVar = process.env["PG" + key.toUpperCase()];
@@ -21908,8 +21908,8 @@ var require_connection_parameters = __commonJS({
     var quoteParamValue = /* @__PURE__ */ __name(function(value) {
       return "'" + ("" + value).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
     }, "quoteParamValue");
-    var add = /* @__PURE__ */ __name(function(params, config2, paramName) {
-      const value = config2[paramName];
+    var add = /* @__PURE__ */ __name(function(params, config, paramName) {
+      const value = config[paramName];
       if (value !== void 0 && value !== null) {
         params.push(paramName + "=" + quoteParamValue(value));
       }
@@ -21918,27 +21918,27 @@ var require_connection_parameters = __commonJS({
       static {
         __name(this, "ConnectionParameters");
       }
-      constructor(config2) {
-        config2 = typeof config2 === "string" ? parse(config2) : config2 || {};
-        if (config2.connectionString) {
-          config2 = Object.assign({}, config2, parse(config2.connectionString));
+      constructor(config) {
+        config = typeof config === "string" ? parse(config) : config || {};
+        if (config.connectionString) {
+          config = Object.assign({}, config, parse(config.connectionString));
         }
-        this.user = val("user", config2);
-        this.database = val("database", config2);
+        this.user = val("user", config);
+        this.database = val("database", config);
         if (this.database === void 0) {
           this.database = this.user;
         }
-        this.port = parseInt(val("port", config2), 10);
-        this.host = val("host", config2);
+        this.port = parseInt(val("port", config), 10);
+        this.host = val("host", config);
         Object.defineProperty(this, "password", {
           configurable: true,
           enumerable: false,
           writable: true,
-          value: val("password", config2)
+          value: val("password", config)
         });
-        this.binary = val("binary", config2);
-        this.options = val("options", config2);
-        this.ssl = typeof config2.ssl === "undefined" ? readSSLConfigFromEnvironment() : config2.ssl;
+        this.binary = val("binary", config);
+        this.options = val("options", config);
+        this.ssl = typeof config.ssl === "undefined" ? readSSLConfigFromEnvironment() : config.ssl;
         if (typeof this.ssl === "string") {
           if (this.ssl === "true") {
             this.ssl = true;
@@ -21952,7 +21952,7 @@ var require_connection_parameters = __commonJS({
             enumerable: false
           });
         }
-        this.sslnegotiation = val("sslnegotiation", config2, "PGSSLNEGOTIATION");
+        this.sslnegotiation = val("sslnegotiation", config, "PGSSLNEGOTIATION");
         if (this.sslnegotiation !== void 0 && this.sslnegotiation !== "postgres" && this.sslnegotiation !== "direct") {
           throw new Error(
             `Invalid sslnegotiation value: "${this.sslnegotiation}". Valid values are "postgres" and "direct".`
@@ -21961,27 +21961,27 @@ var require_connection_parameters = __commonJS({
         if (this.sslnegotiation === "direct" && !this.ssl) {
           throw new Error("sslnegotiation=direct requires SSL to be enabled");
         }
-        this.client_encoding = val("client_encoding", config2);
-        this.replication = val("replication", config2);
+        this.client_encoding = val("client_encoding", config);
+        this.replication = val("replication", config);
         this.isDomainSocket = !(this.host || "").indexOf("/");
-        this.application_name = val("application_name", config2, "PGAPPNAME");
-        this.fallback_application_name = val("fallback_application_name", config2, false);
-        this.statement_timeout = val("statement_timeout", config2, false);
-        this.lock_timeout = val("lock_timeout", config2, false);
-        this.idle_in_transaction_session_timeout = val("idle_in_transaction_session_timeout", config2, false);
-        this.query_timeout = val("query_timeout", config2, false);
-        if (config2.connectionTimeoutMillis === void 0) {
+        this.application_name = val("application_name", config, "PGAPPNAME");
+        this.fallback_application_name = val("fallback_application_name", config, false);
+        this.statement_timeout = val("statement_timeout", config, false);
+        this.lock_timeout = val("lock_timeout", config, false);
+        this.idle_in_transaction_session_timeout = val("idle_in_transaction_session_timeout", config, false);
+        this.query_timeout = val("query_timeout", config, false);
+        if (config.connectionTimeoutMillis === void 0) {
           this.connect_timeout = process.env.PGCONNECT_TIMEOUT || 0;
         } else {
-          this.connect_timeout = Math.floor(config2.connectionTimeoutMillis / 1e3);
+          this.connect_timeout = Math.floor(config.connectionTimeoutMillis / 1e3);
         }
-        if (config2.keepAlive === false) {
+        if (config.keepAlive === false) {
           this.keepalives = 0;
-        } else if (config2.keepAlive === true) {
+        } else if (config.keepAlive === true) {
           this.keepalives = 1;
         }
-        if (typeof config2.keepAliveInitialDelayMillis === "number") {
-          this.keepalives_idle = Math.floor(config2.keepAliveInitialDelayMillis / 1e3);
+        if (typeof config.keepAliveInitialDelayMillis === "number") {
+          this.keepalives_idle = Math.floor(config.keepAliveInitialDelayMillis / 1e3);
         }
       }
       getLibpqConnectionString(cb) {
@@ -22131,21 +22131,21 @@ var require_query3 = __commonJS({
       static {
         __name(this, "Query");
       }
-      constructor(config2, values, callback) {
+      constructor(config, values, callback) {
         super();
-        config2 = utils.normalizeQueryConfig(config2, values, callback);
-        this.text = config2.text;
-        this.values = config2.values;
-        this.rows = config2.rows;
-        this.types = config2.types;
-        this.name = config2.name;
-        this.queryMode = config2.queryMode;
-        this.binary = config2.binary;
-        this.portal = config2.portal || "";
-        this.callback = config2.callback;
-        this._rowMode = config2.rowMode;
-        if (process.domain && config2.callback) {
-          this.callback = process.domain.bind(config2.callback);
+        config = utils.normalizeQueryConfig(config, values, callback);
+        this.text = config.text;
+        this.values = config.values;
+        this.rows = config.rows;
+        this.types = config.types;
+        this.name = config.name;
+        this.queryMode = config.queryMode;
+        this.binary = config.binary;
+        this.portal = config.portal || "";
+        this.callback = config.callback;
+        this._rowMode = config.rowMode;
+        if (process.domain && config.callback) {
+          this.callback = process.domain.bind(config.callback);
         }
         this._result = new Result2(this._rowMode, this.types);
         this._results = this._result;
@@ -22730,16 +22730,16 @@ var require_serializer = __commonJS({
         }
       }
     }, "writeValues");
-    var bind = /* @__PURE__ */ __name((config2 = {}) => {
-      const portal = config2.portal || "";
-      const statement = config2.statement || "";
-      const binary = config2.binary || false;
-      const values = config2.values || emptyArray;
+    var bind = /* @__PURE__ */ __name((config = {}) => {
+      const portal = config.portal || "";
+      const statement = config.statement || "";
+      const binary = config.binary || false;
+      const values = config.values || emptyArray;
       const len = values.length;
       writer.addCString(portal).addCString(statement);
       writer.addInt16(len);
       try {
-        writeValues(values, config2.valueMapper);
+        writeValues(values, config.valueMapper);
       } catch (err) {
         writer.clear();
         paramWriter.clear();
@@ -22758,12 +22758,12 @@ var require_serializer = __commonJS({
       );
     }, "bind");
     var emptyExecute = Buffer.from([69, 0, 0, 0, 9, 0, 0, 0, 0, 0]);
-    var execute = /* @__PURE__ */ __name((config2) => {
-      if (!config2 || !config2.portal && !config2.rows) {
+    var execute = /* @__PURE__ */ __name((config) => {
+      if (!config || !config.portal && !config.rows) {
         return emptyExecute;
       }
-      const portal = config2.portal || "";
-      const rows4 = config2.rows || 0;
+      const portal = config.portal || "";
+      const rows4 = config.rows || 0;
       const portalLength = Buffer.byteLength(portal);
       const len = 4 + portalLength + 1 + 4;
       const buff = Buffer.allocUnsafe(1 + len);
@@ -23353,18 +23353,18 @@ var require_connection4 = __commonJS({
       static {
         __name(this, "Connection");
       }
-      constructor(config2) {
+      constructor(config) {
         super();
-        config2 = config2 || {};
-        this.stream = config2.stream || getStream(config2.ssl);
+        config = config || {};
+        this.stream = config.stream || getStream(config.ssl);
         if (typeof this.stream === "function") {
-          this.stream = this.stream(config2);
+          this.stream = this.stream(config);
         }
-        this._keepAlive = config2.keepAlive;
-        this._keepAliveInitialDelayMillis = config2.keepAliveInitialDelayMillis;
+        this._keepAlive = config.keepAlive;
+        this._keepAliveInitialDelayMillis = config.keepAliveInitialDelayMillis;
         this.parsedStatements = {};
-        this.ssl = config2.ssl || false;
-        this.sslNegotiation = config2.sslNegotiation || "postgres";
+        this.ssl = config.ssl || false;
+        this.sslNegotiation = config.sslNegotiation || "postgres";
         this._ending = false;
         this._emitMessage = false;
         const self2 = this;
@@ -23457,8 +23457,8 @@ var require_connection4 = __commonJS({
       requestSsl() {
         this.stream.write(serialize.requestSsl());
       }
-      startup(config2) {
-        this.stream.write(serialize.startup(config2));
+      startup(config) {
+        this.stream.write(serialize.startup(config));
       }
       cancel(processID, secretKey) {
         this._send(serialize.cancel(processID, secretKey));
@@ -23486,12 +23486,12 @@ var require_connection4 = __commonJS({
         this._send(serialize.parse(query));
       }
       // send bind message
-      bind(config2) {
-        this._send(serialize.bind(config2));
+      bind(config) {
+        this._send(serialize.bind(config));
       }
       // send execute message
-      execute(config2) {
-        this._send(serialize.execute(config2));
+      execute(config) {
+        this._send(serialize.execute(config));
       }
       flush() {
         if (this.stream.writable) {
@@ -23892,9 +23892,9 @@ var require_client2 = __commonJS({
       static {
         __name(this, "Client");
       }
-      constructor(config2) {
+      constructor(config) {
         super();
-        this.connectionParameters = new ConnectionParameters(config2);
+        this.connectionParameters = new ConnectionParameters(config);
         this.user = this.connectionParameters.user;
         this.database = this.connectionParameters.database;
         this.port = this.connectionParameters.port;
@@ -23906,7 +23906,7 @@ var require_client2 = __commonJS({
           value: this.connectionParameters.password
         });
         this.replication = this.connectionParameters.replication;
-        const c = config2 || {};
+        const c = config || {};
         if (c.Promise) {
           byoPromiseDeprecationNotice();
         }
@@ -24367,14 +24367,14 @@ var require_client2 = __commonJS({
           }
         }
       }
-      query(config2, values, callback) {
+      query(config, values, callback) {
         let query;
         let result;
-        if (config2 == null) {
+        if (config == null) {
           throw new TypeError("Client was passed a null or undefined query");
         }
-        if (typeof config2.submit === "function") {
-          result = query = config2;
+        if (typeof config.submit === "function") {
+          result = query = config;
           if (!query.callback) {
             if (typeof values === "function") {
               query.callback = values;
@@ -24383,7 +24383,7 @@ var require_client2 = __commonJS({
             }
           }
         } else {
-          query = new Query2(config2, values, callback);
+          query = new Query2(config, values, callback);
           if (!query.callback) {
             result = new this._Promise((resolve, reject) => {
               query.callback = (err, res) => err ? reject(err) : resolve(res);
@@ -24395,7 +24395,7 @@ var require_client2 = __commonJS({
             throw new TypeError("callback is not a function");
           }
         }
-        const readTimeout = config2.query_timeout || this.connectionParameters.query_timeout;
+        const readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
         if (readTimeout) {
           const queryCallback = query.callback || (() => {
           });
@@ -24930,16 +24930,16 @@ var require_query4 = __commonJS({
     var EventEmitter = require("events").EventEmitter;
     var util = require("util");
     var utils = require_utils();
-    var NativeQuery = module2.exports = function(config2, values, callback) {
+    var NativeQuery = module2.exports = function(config, values, callback) {
       EventEmitter.call(this);
-      config2 = utils.normalizeQueryConfig(config2, values, callback);
-      this.text = config2.text;
-      this.values = config2.values;
-      this.name = config2.name;
-      this.queryMode = config2.queryMode;
-      this.callback = config2.callback;
+      config = utils.normalizeQueryConfig(config, values, callback);
+      this.text = config.text;
+      this.values = config.values;
+      this.name = config.name;
+      this.queryMode = config.queryMode;
+      this.callback = config.callback;
       this.state = "new";
-      this._arrayMode = config2.rowMode === "array";
+      this._arrayMode = config.rowMode === "array";
       this._emitRowEvents = false;
       this.on(
         "newListener",
@@ -25084,11 +25084,11 @@ var require_client3 = __commonJS({
       },
       "Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead."
     );
-    var Client2 = module2.exports = function(config2) {
+    var Client2 = module2.exports = function(config) {
       EventEmitter.call(this);
-      config2 = config2 || {};
-      this._Promise = config2.Promise || global.Promise;
-      this._types = new TypeOverrides2(config2.types);
+      config = config || {};
+      this._Promise = config.Promise || global.Promise;
+      this._types = new TypeOverrides2(config.types);
       this.native = new Native({
         types: this._types
       });
@@ -25097,8 +25097,8 @@ var require_client3 = __commonJS({
       this._connecting = false;
       this._connected = false;
       this._queryable = true;
-      const cp = this.connectionParameters = new ConnectionParameters(config2);
-      if (config2.nativeConnectionString) cp.nativeConnectionString = config2.nativeConnectionString;
+      const cp = this.connectionParameters = new ConnectionParameters(config);
+      if (config.nativeConnectionString) cp.nativeConnectionString = config.nativeConnectionString;
       this.user = cp.user;
       Object.defineProperty(this, "password", {
         configurable: true,
@@ -25175,23 +25175,23 @@ var require_client3 = __commonJS({
         });
       });
     };
-    Client2.prototype.query = function(config2, values, callback) {
+    Client2.prototype.query = function(config, values, callback) {
       let query;
       let result;
       let readTimeout;
       let readTimeoutTimer;
       let queryCallback;
-      if (config2 === null || config2 === void 0) {
+      if (config === null || config === void 0) {
         throw new TypeError("Client was passed a null or undefined query");
-      } else if (typeof config2.submit === "function") {
-        readTimeout = config2.query_timeout || this.connectionParameters.query_timeout;
-        result = query = config2;
+      } else if (typeof config.submit === "function") {
+        readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
+        result = query = config;
         if (typeof values === "function") {
-          config2.callback = values;
+          config.callback = values;
         }
       } else {
-        readTimeout = config2.query_timeout || this.connectionParameters.query_timeout;
-        query = new NativeQuery(config2, values, callback);
+        readTimeout = config.query_timeout || this.connectionParameters.query_timeout;
+        query = new NativeQuery(config, values, callback);
         if (!query.callback) {
           let resolveOut, rejectOut;
           result = new this._Promise((resolve, reject) => {
@@ -25732,7 +25732,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
     },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
-  const runtime = bindings ?? fallbackBindings;
+  const runtime2 = bindings ?? fallbackBindings;
   const legacyProviders = options.legacyProviders === true;
   const oxmysqlProvider = legacyProviders && options.oxmysqlProvider !== false;
   function normalize(query, parameters) {
@@ -25766,7 +25766,7 @@ function registerCompatibilityExports(database2, bindings = createRuntimeBinding
 Query: ${query}` : ""}${includeParameters ? `
 ${JSON.stringify(parameters)}` : ""}
 ${message}`;
-    runtime.emitEvent?.("oxmysql:error", {
+    runtime2.emitEvent?.("oxmysql:error", {
       query,
       parameters,
       message,
@@ -25798,7 +25798,7 @@ ${message}`;
   function queryMethod(method) {
     return (query, parameters = [], callback, explicitResource, returnCallbackErrors = false) => {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
-      const resource = queryResource(explicitResource, runtime);
+      const resource = queryResource(explicitResource, runtime2);
       let normalizedQuery = query;
       let normalizedValues = values;
       try {
@@ -25845,7 +25845,7 @@ ${message}`;
     update: queryMethod("update"),
     prepare(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
-      const resource = queryResource(explicitResource, runtime);
+      const resource = queryResource(explicitResource, runtime2);
       let normalizedQuery = query;
       let normalizedValues = values;
       try {
@@ -25872,7 +25872,7 @@ ${message}`;
     },
     rawExecute(query, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [values, resolvedCallback] = extractCallback(parameters, callback);
-      const resource = queryResource(explicitResource, runtime);
+      const resource = queryResource(explicitResource, runtime2);
       let normalizedQuery = query;
       let normalizedValues = values;
       try {
@@ -25899,7 +25899,7 @@ ${message}`;
     },
     transaction(queries, parameters = [], callback, explicitResource, returnCallbackErrors = false) {
       const [sharedParameters, resolvedCallback] = extractCallback(parameters, callback);
-      const resource = queryResource(explicitResource, runtime);
+      const resource = queryResource(explicitResource, runtime2);
       let statements;
       try {
         statements = normalizeTransactionStatements(queries, sharedParameters);
@@ -25923,7 +25923,7 @@ ${message}`;
         (error) => {
           const message = errorMessage(error);
           const failedQuery = typeof error === "object" && error && "sql" in error ? String(error.sql ?? "") : statements.map((statement) => statement.query).join("; ");
-          runtime.emitEvent?.("oxmysql:transaction-error", {
+          runtime2.emitEvent?.("oxmysql:transaction-error", {
             query: failedQuery,
             parameters: sharedParameters,
             message,
@@ -25940,13 +25940,13 @@ ${message}`
       );
     },
     store(query, callback) {
-      invokeCallback3(callback, queryResource(void 0, runtime), query);
+      invokeCallback3(callback, queryResource(void 0, runtime2), query);
       return query;
     },
     startTransaction(work, explicitResource) {
-      const resource = queryResource(explicitResource, runtime);
+      const resource = queryResource(explicitResource, runtime2);
       return database2.startTransaction(work, resource, (error) => {
-        runtime.emitEvent?.("oxmysql:error", {
+        runtime2.emitEvent?.("oxmysql:error", {
           query: void 0,
           parameters: void 0,
           message: errorMessage(error),
@@ -25973,15 +25973,15 @@ ${message}`
     });
   }, "asyncExport");
   for (const [name, method] of Object.entries(api)) {
-    runtime.addExport(name, method);
-    if (oxmysqlProvider) runtime.addProviderExport("oxmysql", name, method);
+    runtime2.addExport(name, method);
+    if (oxmysqlProvider) runtime2.addProviderExport("oxmysql", name, method);
     if (!["isReady", "awaitConnection", "getStatus", "getStatuses", "store", "startTransaction"].includes(name)) {
       const promiseMethod = asyncExport(method);
-      runtime.addExport(`${name}_async`, promiseMethod);
-      runtime.addExport(`${name}Sync`, promiseMethod);
+      runtime2.addExport(`${name}_async`, promiseMethod);
+      runtime2.addExport(`${name}Sync`, promiseMethod);
       if (oxmysqlProvider) {
-        runtime.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
-        runtime.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
+        runtime2.addProviderExport("oxmysql", `${name}_async`, promiseMethod);
+        runtime2.addProviderExport("oxmysql", `${name}Sync`, promiseMethod);
       }
     }
   }
@@ -25996,8 +25996,8 @@ ${message}`
     startTransactionSync: api.startTransaction
   };
   for (const [name, method] of Object.entries(lifecycleAliases)) {
-    runtime.addExport(name, method);
-    if (oxmysqlProvider) runtime.addProviderExport("oxmysql", name, method);
+    runtime2.addExport(name, method);
+    if (oxmysqlProvider) runtime2.addProviderExport("oxmysql", name, method);
   }
   const mysqlAsyncAliases = {
     mysql_fetch_all: api.query,
@@ -26009,7 +26009,7 @@ ${message}`
   };
   if (legacyProviders) {
     for (const [name, method] of Object.entries(mysqlAsyncAliases)) {
-      runtime.addProviderExport("mysql-async", name, method);
+      runtime2.addProviderExport("mysql-async", name, method);
     }
   }
   const ghmattiAliases = {
@@ -26021,8 +26021,8 @@ ${message}`
   };
   if (legacyProviders) {
     for (const [name, method] of Object.entries(ghmattiAliases)) {
-      runtime.addProviderExport("ghmattimysql", name, method);
-      runtime.addProviderExport(
+      runtime2.addProviderExport("ghmattimysql", name, method);
+      runtime2.addProviderExport(
         "ghmattimysql",
         `${name}Sync`,
         name === "store" ? (query) => api.store(query) : asyncExport(method)
@@ -26033,10 +26033,11 @@ ${message}`
 }
 __name(registerCompatibilityExports, "registerCompatibilityExports");
 function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), options = {}) {
-  const runtime = bindings;
-  if (!runtime) return;
-  const message = "MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string.";
-  const error = /* @__PURE__ */ __name(() => Object.assign(new Error(message), { code: "QBXSQL_MYSQL_NOT_CONFIGURED" }), "error");
+  const runtime2 = bindings;
+  if (!runtime2) return;
+  const message = options.unavailableReason?.message ?? "MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string.";
+  const code = options.unavailableReason?.code ?? "QBXSQL_MYSQL_NOT_CONFIGURED";
+  const error = /* @__PURE__ */ __name(() => Object.assign(new Error(message), { code }), "error");
   const provider = options.legacyProviders === true && options.oxmysqlProvider !== false;
   const unavailable = /* @__PURE__ */ __name((...args) => {
     const callback = [...args].reverse().find((entry) => typeof entry === "function");
@@ -26067,25 +26068,25 @@ function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), opt
     "execute",
     "fetch"
   ];
-  runtime.addExport("isReady", () => false);
-  runtime.addExport("awaitConnection", promiseUnavailable);
-  runtime.addExport("getStatus", (dialect) => options.getStatus?.(dialect) ?? null);
-  runtime.addExport("getStatuses", () => options.getStatuses?.() ?? { mysql: null, postgresql: null });
-  runtime.addExport("store", store);
+  runtime2.addExport("isReady", () => false);
+  runtime2.addExport("awaitConnection", promiseUnavailable);
+  runtime2.addExport("getStatus", (dialect) => options.getStatus?.(dialect) ?? null);
+  runtime2.addExport("getStatuses", () => options.getStatuses?.() ?? { mysql: null, postgresql: null });
+  runtime2.addExport("store", store);
   for (const name of methods) {
-    runtime.addExport(name, unavailable);
-    runtime.addExport(`${name}_async`, promiseUnavailable);
-    runtime.addExport(`${name}Sync`, promiseUnavailable);
+    runtime2.addExport(name, unavailable);
+    runtime2.addExport(`${name}_async`, promiseUnavailable);
+    runtime2.addExport(`${name}Sync`, promiseUnavailable);
     if (provider) {
-      runtime.addProviderExport("oxmysql", name, unavailable);
-      runtime.addProviderExport("oxmysql", `${name}_async`, promiseUnavailable);
-      runtime.addProviderExport("oxmysql", `${name}Sync`, promiseUnavailable);
+      runtime2.addProviderExport("oxmysql", name, unavailable);
+      runtime2.addProviderExport("oxmysql", `${name}_async`, promiseUnavailable);
+      runtime2.addProviderExport("oxmysql", `${name}Sync`, promiseUnavailable);
     }
   }
   if (provider) {
-    runtime.addProviderExport("oxmysql", "isReady", () => false);
-    runtime.addProviderExport("oxmysql", "awaitConnection", promiseUnavailable);
-    runtime.addProviderExport("oxmysql", "store", store);
+    runtime2.addProviderExport("oxmysql", "isReady", () => false);
+    runtime2.addProviderExport("oxmysql", "awaitConnection", promiseUnavailable);
+    runtime2.addProviderExport("oxmysql", "store", store);
   }
   if (options.legacyProviders) {
     for (const name of [
@@ -26095,15 +26096,15 @@ function registerMySqlUnavailableExports(bindings = createRuntimeBindings(), opt
       "mysql_insert",
       "mysql_transaction"
     ]) {
-      runtime.addProviderExport("mysql-async", name, unavailable);
+      runtime2.addProviderExport("mysql-async", name, unavailable);
     }
-    runtime.addProviderExport("mysql-async", "mysql_store", store);
+    runtime2.addProviderExport("mysql-async", "mysql_store", store);
     for (const name of ["execute", "scalar", "insert", "transaction"]) {
-      runtime.addProviderExport("ghmattimysql", name, unavailable);
-      runtime.addProviderExport("ghmattimysql", `${name}Sync`, promiseUnavailable);
+      runtime2.addProviderExport("ghmattimysql", name, unavailable);
+      runtime2.addProviderExport("ghmattimysql", `${name}Sync`, promiseUnavailable);
     }
-    runtime.addProviderExport("ghmattimysql", "store", store);
-    runtime.addProviderExport("ghmattimysql", "storeSync", store);
+    runtime2.addProviderExport("ghmattimysql", "store", store);
+    runtime2.addProviderExport("ghmattimysql", "storeSync", store);
   }
 }
 __name(registerMySqlUnavailableExports, "registerMySqlUnavailableExports");
@@ -26121,8 +26122,8 @@ function errorPayload(error) {
   return payload;
 }
 __name(errorPayload, "errorPayload");
-function resourceName(explicit, runtime) {
-  return typeof explicit === "string" && explicit.length > 0 ? explicit : runtime.invokingResource();
+function resourceName(explicit, runtime2) {
+  return typeof explicit === "string" && explicit.length > 0 ? explicit : runtime2.invokingResource();
 }
 __name(resourceName, "resourceName");
 function extractCallback2(parameters, callback) {
@@ -26149,7 +26150,7 @@ function publicResult(result) {
 }
 __name(publicResult, "publicResult");
 function registerPostgresExports(database2, bindings = createRuntimeBindings()) {
-  const runtime = bindings ?? {
+  const runtime2 = bindings ?? {
     addExport() {
     },
     addProviderExport() {
@@ -26159,7 +26160,7 @@ function registerPostgresExports(database2, bindings = createRuntimeBindings()) 
   function queryMethod(operation) {
     return (query, parameters = [], callback, explicitResource) => {
       const [values, resolvedCallback] = extractCallback2(parameters, callback);
-      const resource = resourceName(explicitResource, runtime);
+      const resource = resourceName(explicitResource, runtime2);
       void database2[operation](query, values, { invokingResource: resource }).then(
         (result) => invokeCallback(resolvedCallback, result),
         (error) => invokeCallback(resolvedCallback, null, errorPayload(error))
@@ -26178,14 +26179,14 @@ function registerPostgresExports(database2, bindings = createRuntimeBindings()) 
     postgresScalar: queryMethod("scalar"),
     postgresExecute(query, parameters = [], callback, explicitResource) {
       const [values, resolvedCallback] = extractCallback2(parameters, callback);
-      const resource = resourceName(explicitResource, runtime);
+      const resource = resourceName(explicitResource, runtime2);
       void database2.executeResult(query, values, { invokingResource: resource }).then(
         (result) => invokeCallback(resolvedCallback, publicResult(result)),
         (error) => invokeCallback(resolvedCallback, null, errorPayload(error))
       );
     },
     postgresTransaction(queries, callback, explicitResource) {
-      const resource = resourceName(explicitResource, runtime);
+      const resource = resourceName(explicitResource, runtime2);
       let statements;
       try {
         statements = normalizeTransactionStatements(queries);
@@ -26199,21 +26200,22 @@ function registerPostgresExports(database2, bindings = createRuntimeBindings()) 
       );
     },
     postgresStartTransaction(work, explicitResource) {
-      return database2.withTransaction(work, resourceName(explicitResource, runtime));
+      return database2.withTransaction(work, resourceName(explicitResource, runtime2));
     }
   };
-  for (const [name, method] of Object.entries(api)) runtime.addExport(name, method);
+  for (const [name, method] of Object.entries(api)) runtime2.addExport(name, method);
   return api;
 }
 __name(registerPostgresExports, "registerPostgresExports");
-function registerPostgresUnavailableExports(bindings = createRuntimeBindings()) {
-  const runtime = bindings;
-  if (!runtime) return;
+function registerPostgresUnavailableExports(bindings = createRuntimeBindings(), reason) {
+  const runtime2 = bindings;
+  if (!runtime2) return;
+  const failure = reason ?? {
+    code: "QBXSQL_POSTGRES_NOT_CONFIGURED",
+    message: "PostgreSQL is not configured. Set qbxsql_postgres_connection_string."
+  };
   const unavailable = /* @__PURE__ */ __name(() => {
-    throw {
-      code: "QBXSQL_POSTGRES_NOT_CONFIGURED",
-      message: "PostgreSQL is not configured. Set qbxsql_postgres_connection_string."
-    };
+    throw { ...failure };
   }, "unavailable");
   for (const name of [
     "postgresAwaitConnection",
@@ -26224,9 +26226,9 @@ function registerPostgresUnavailableExports(bindings = createRuntimeBindings()) 
     "postgresTransaction",
     "postgresStartTransaction"
   ]) {
-    runtime.addExport(name, unavailable);
+    runtime2.addExport(name, unavailable);
   }
-  runtime.addExport("postgresIsReady", () => false);
+  runtime2.addExport("postgresIsReady", () => false);
 }
 __name(registerPostgresUnavailableExports, "registerPostgresUnavailableExports");
 
@@ -29048,7 +29050,7 @@ function errorPayload2(error) {
 }
 __name(errorPayload2, "errorPayload");
 function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings()) {
-  const runtime = bindings ?? {
+  const runtime2 = bindings ?? {
     addExport() {
     },
     addProviderExport() {
@@ -29057,7 +29059,7 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
   };
   const resourceName5 = /* @__PURE__ */ __name((explicit, callback) => {
     try {
-      return schemaResource(explicit, runtime);
+      return schemaResource(explicit, runtime2);
     } catch (error) {
       const failure = errorPayload2(error);
       console.error(`[qbxsql] PostgreSQL schema operation refused: ${failure.message}`);
@@ -29133,15 +29135,15 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
       );
     }
   };
-  for (const [name, callback] of Object.entries(api)) runtime.addExport(name, callback);
+  for (const [name, callback] of Object.entries(api)) runtime2.addExport(name, callback);
   return api;
 }
 __name(registerPostgresSchemaExports, "registerPostgresSchemaExports");
-function registerPostgresSchemaUnavailableExports(bindings = createRuntimeBindings()) {
+function registerPostgresSchemaUnavailableExports(bindings = createRuntimeBindings(), reason) {
   if (!bindings) return;
   const unavailable = /* @__PURE__ */ __name((...args) => {
     const callback = [...args].reverse().find((entry) => typeof entry === "function");
-    const error = {
+    const error = reason ?? {
       code: "QBXSQL_POSTGRES_NOT_CONFIGURED",
       message: "PostgreSQL is not configured. Set qbxsql_postgres_connection_string."
     };
@@ -30833,8 +30835,31 @@ function errorPayload3(error) {
   return { code: "QBXSQL_SCHEMA_ERROR", message };
 }
 __name(errorPayload3, "errorPayload");
+function registerSchemaUnavailableExports(bindings = createRuntimeBindings(), reason) {
+  if (!bindings) return;
+  const failure = reason ?? {
+    code: "QBXSQL_MYSQL_NOT_CONFIGURED",
+    message: "MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string."
+  };
+  const unavailable = /* @__PURE__ */ __name((...args) => {
+    const callback = [...args].reverse().find((entry) => typeof entry === "function");
+    if (callback) {
+      callback(null, failure);
+      return;
+    }
+    throw Object.assign(new Error(failure.message), { code: failure.code });
+  }, "unavailable");
+  const promiseUnavailable = /* @__PURE__ */ __name(async () => {
+    throw Object.assign(new Error(failure.message), { code: failure.code });
+  }, "promiseUnavailable");
+  for (const name of ["ensureSchema", "planSchema", "adoptSchema", "planSchemaAdoption"]) {
+    bindings.addExport(name, unavailable);
+    bindings.addExport(`${name}_async`, promiseUnavailable);
+  }
+}
+__name(registerSchemaUnavailableExports, "registerSchemaUnavailableExports");
 function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
-  const runtime = bindings ?? {
+  const runtime2 = bindings ?? {
     addExport() {
     },
     addProviderExport() {
@@ -30850,7 +30875,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   function operation(schema, dryRun, callback, explicitResource) {
     let resource;
     try {
-      resource = schemaResource(explicitResource, runtime);
+      resource = schemaResource(explicitResource, runtime2);
     } catch (error) {
       refuse(callback, error);
       return;
@@ -30865,7 +30890,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
     let resource;
     try {
-      resource = schemaResource(explicitResource, runtime);
+      resource = schemaResource(explicitResource, runtime2);
     } catch (error) {
       refuse(callback, error);
       return;
@@ -30892,7 +30917,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
     }
   };
   for (const [name, callback] of Object.entries(api)) {
-    runtime.addExport(name, callback);
+    runtime2.addExport(name, callback);
     if (name === "adoptSchema" || name === "planSchemaAdoption") {
       const asyncCallback = /* @__PURE__ */ __name((schema, baselineVersion, explicitResource) => new Promise((resolve, reject) => {
         callback(
@@ -30905,7 +30930,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
           explicitResource
         );
       }), "asyncCallback");
-      runtime.addExport(`${name}_async`, asyncCallback);
+      runtime2.addExport(`${name}_async`, asyncCallback);
     } else {
       const asyncCallback = /* @__PURE__ */ __name((schema, explicitResource) => new Promise((resolve, reject) => {
         callback(
@@ -30917,7 +30942,7 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
           explicitResource
         );
       }), "asyncCallback");
-      runtime.addExport(`${name}_async`, asyncCallback);
+      runtime2.addExport(`${name}_async`, asyncCallback);
     }
   }
   return api;
@@ -31084,9 +31109,9 @@ var ConnectionUnavailableError = class extends Error {
 };
 var emptyPoolStatus = { total: 0, free: 0, acquired: 0, queued: 0 };
 var DatabaseService = class {
-  constructor(driver, config2) {
+  constructor(driver, config) {
     this.driver = driver;
-    this.config = config2;
+    this.config = config;
     this.driver.onFatalError?.((error) => this.handleDisconnect(error));
   }
   driver;
@@ -31985,9 +32010,9 @@ var MySqlConnection = class {
   }
 };
 var MySqlDriver = class {
-  constructor(config2) {
-    this.config = config2;
-    this.parsedOptions = parseMySqlConnectionString(config2.connectionString);
+  constructor(config) {
+    this.config = config;
+    this.parsedOptions = parseMySqlConnectionString(config.connectionString);
     this.namedPlaceholders = this.parsedOptions.namedPlaceholders !== false;
   }
   config;
@@ -32356,8 +32381,8 @@ var PostgresConnection = class {
   }
 };
 var PostgresDriver = class {
-  constructor(config2) {
-    this.config = config2;
+  constructor(config) {
+    this.config = config;
   }
   config;
   static {
@@ -32508,7 +32533,6 @@ var PostgresDriver = class {
 
 // src/index.ts
 var resourceName4 = typeof GetCurrentResourceName === "function" ? GetCurrentResourceName() : "qbxsql";
-var config = loadConfig();
 function mysqlService(databaseConfig2) {
   return new DatabaseService(new MySqlDriver(databaseConfig2), databaseConfig2);
 }
@@ -32517,27 +32541,53 @@ function postgresService(databaseConfig2) {
   return new DatabaseService(new PostgresDriver(databaseConfig2), databaseConfig2);
 }
 __name(postgresService, "postgresService");
-var mysqlDatabase = config.mysql ? mysqlService(config.mysql) : null;
-var postgresDatabase = config.postgres ? postgresService(config.postgres) : null;
-var postgresExtensions = postgresDatabase ? new PostgresExtensionRegistry(postgresDatabase) : null;
-var primaryDatabase = mysqlDatabase ?? postgresDatabase;
-var mysqlSchemaDatabase = config.mysql?.schemaConnectionString ? mysqlService({ ...config.mysql, connectionString: config.mysql.schemaConnectionString }) : mysqlDatabase;
-var mysqlSchemas = mysqlSchemaDatabase && mysqlDatabase ? new SchemaManager(mysqlSchemaDatabase, {
-  mode: config.schemaMode,
-  allowBlocking: config.schemaAllowBlocking,
-  applicationDatabase: mysqlDatabase
-}) : null;
-var postgresSchemaDatabase = config.postgres?.schemaConnectionString ? postgresService({
-  ...config.postgres,
-  connectionString: config.postgres.schemaConnectionString
-}) : postgresDatabase;
-var postgresSchemas = postgresSchemaDatabase && postgresDatabase ? new PostgresSchemaManager(postgresSchemaDatabase, {
-  mode: config.schemaMode,
-  allowBlocking: config.schemaAllowBlocking,
-  applicationDatabase: postgresDatabase,
-  extensionRegistry: postgresExtensions,
-  ...config.postgres?.schemaLockTimeout !== void 0 ? { lockTimeout: config.postgres.schemaLockTimeout } : {}
-}) : null;
+function createRuntime() {
+  const config = loadConfig();
+  const mysqlDatabase2 = config.mysql ? mysqlService(config.mysql) : null;
+  const postgresDatabase2 = config.postgres ? postgresService(config.postgres) : null;
+  const postgresExtensions2 = postgresDatabase2 ? new PostgresExtensionRegistry(postgresDatabase2) : null;
+  const mysqlSchemaDatabase2 = config.mysql?.schemaConnectionString ? mysqlService({ ...config.mysql, connectionString: config.mysql.schemaConnectionString }) : mysqlDatabase2;
+  const postgresSchemaDatabase2 = config.postgres?.schemaConnectionString ? postgresService({
+    ...config.postgres,
+    connectionString: config.postgres.schemaConnectionString
+  }) : postgresDatabase2;
+  return {
+    mysqlDatabase: mysqlDatabase2,
+    postgresDatabase: postgresDatabase2,
+    postgresExtensions: postgresExtensions2,
+    mysqlSchemaDatabase: mysqlSchemaDatabase2,
+    mysqlSchemas: mysqlSchemaDatabase2 && mysqlDatabase2 ? new SchemaManager(mysqlSchemaDatabase2, {
+      mode: config.schemaMode,
+      allowBlocking: config.schemaAllowBlocking,
+      applicationDatabase: mysqlDatabase2
+    }) : null,
+    postgresSchemaDatabase: postgresSchemaDatabase2,
+    postgresSchemas: postgresSchemaDatabase2 && postgresDatabase2 ? new PostgresSchemaManager(postgresSchemaDatabase2, {
+      mode: config.schemaMode,
+      allowBlocking: config.schemaAllowBlocking,
+      applicationDatabase: postgresDatabase2,
+      extensionRegistry: postgresExtensions2,
+      ...config.postgres?.schemaLockTimeout !== void 0 ? { lockTimeout: config.postgres.schemaLockTimeout } : {}
+    }) : null,
+    primaryDatabase: mysqlDatabase2 ?? postgresDatabase2
+  };
+}
+__name(createRuntime, "createRuntime");
+var startupError = null;
+var runtime = null;
+try {
+  runtime = createRuntime();
+} catch (error) {
+  startupError = error;
+}
+var mysqlDatabase = runtime?.mysqlDatabase ?? null;
+var postgresDatabase = runtime?.postgresDatabase ?? null;
+var postgresExtensions = runtime?.postgresExtensions ?? null;
+var mysqlSchemaDatabase = runtime?.mysqlSchemaDatabase ?? null;
+var mysqlSchemas = runtime?.mysqlSchemas ?? null;
+var postgresSchemaDatabase = runtime?.postgresSchemaDatabase ?? null;
+var postgresSchemas = runtime?.postgresSchemas ?? null;
+var primaryDatabase = runtime?.primaryDatabase ?? null;
 function statusFor(dialect) {
   const normalized = dialect?.trim().toLowerCase();
   if (normalized === "postgres" || normalized === "postgresql") {
@@ -32547,7 +32597,7 @@ function statusFor(dialect) {
   if (normalized === "mysql" || normalized === "mariadb") {
     return mysqlDatabase?.getStatus() ?? null;
   }
-  return primaryDatabase.getStatus();
+  return primaryDatabase?.getStatus() ?? null;
 }
 __name(statusFor, "statusFor");
 function allStatuses() {
@@ -32611,24 +32661,31 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
+  const startupReason = startupError ? {
+    code: "QBXSQL_STARTUP_FAILED",
+    message: `qbxsql failed to start: ${startupError instanceof Error ? startupError.message : String(startupError)}`
+  } : void 0;
+  if (startupReason) console.error(`^1[${resourceName4}] ${startupReason.message}^0`);
   const compatibilityOptions = {
     legacyProviders: true,
     oxmysqlProvider: !isQbxsqlCompatibilityBridge(),
     getStatus: statusFor,
-    getStatuses: allStatuses
+    getStatuses: allStatuses,
+    ...startupReason ? { unavailableReason: startupReason } : {}
   };
   if (mysqlDatabase) {
     registerCompatibilityExports(mysqlDatabase, void 0, compatibilityOptions);
     registerSchemaExports(mysqlSchemas);
   } else {
     registerMySqlUnavailableExports(void 0, compatibilityOptions);
+    registerSchemaUnavailableExports(void 0, startupReason);
   }
   if (postgresDatabase) {
     registerPostgresExports(postgresDatabase);
     registerPostgresSchemaExports(postgresSchemas);
   } else {
-    registerPostgresUnavailableExports();
-    registerPostgresSchemaUnavailableExports();
+    registerPostgresUnavailableExports(void 0, startupReason);
+    registerPostgresSchemaUnavailableExports(void 0, startupReason);
   }
   for (const service of [mysqlDatabase, postgresDatabase]) {
     if (!service) continue;

@@ -39,6 +39,34 @@ function errorPayload(error: unknown): SchemaApiError {
   return { code: 'QBXSQL_SCHEMA_ERROR', message };
 }
 
+export function registerSchemaUnavailableExports(
+  bindings: RuntimeBindings | null = createRuntimeBindings(),
+  reason?: SchemaApiError,
+): void {
+  if (!bindings) return;
+  const failure = reason ?? {
+    code: 'QBXSQL_MYSQL_NOT_CONFIGURED',
+    message: 'MySQL is not configured. Set mysql_connection_string or qbxsql_mysql_connection_string.',
+  };
+  const unavailable = (...args: unknown[]) => {
+    const callback = [...args].reverse().find((entry) => typeof entry === 'function') as
+      | SchemaCallback
+      | undefined;
+    if (callback) {
+      callback(null, failure);
+      return;
+    }
+    throw Object.assign(new Error(failure.message), { code: failure.code });
+  };
+  const promiseUnavailable = async () => {
+    throw Object.assign(new Error(failure.message), { code: failure.code });
+  };
+  for (const name of ['ensureSchema', 'planSchema', 'adoptSchema', 'planSchemaAdoption']) {
+    bindings.addExport(name, unavailable);
+    bindings.addExport(`${name}_async`, promiseUnavailable);
+  }
+}
+
 export function registerSchemaExports(
   manager: SchemaManager,
   bindings: RuntimeBindings | null = createRuntimeBindings(),

@@ -5,7 +5,7 @@ import {
   registerPostgresSchemaExports,
   registerPostgresSchemaUnavailableExports,
 } from './api/postgres-schema.js';
-import { registerSchemaExports } from './api/schema.js';
+import { registerSchemaExports, registerSchemaUnavailableExports } from './api/schema.js';
 import { DatabaseService, type DatabaseStatus } from './core/database.js';
 import { MySqlDriver } from './drivers/mysql.js';
 import { PostgresDriver } from './drivers/postgres.js';
@@ -15,7 +15,6 @@ import { SchemaManager } from './schema/manager.js';
 
 const resourceName =
   typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
-const config = loadConfig();
 
 function mysqlService(databaseConfig: QbxSqlConfig): DatabaseService {
   return new DatabaseService(new MySqlDriver(databaseConfig), databaseConfig);
@@ -25,44 +24,88 @@ function postgresService(databaseConfig: PostgresSqlConfig): DatabaseService {
   return new DatabaseService(new PostgresDriver(databaseConfig), databaseConfig);
 }
 
-const mysqlDatabase = config.mysql ? mysqlService(config.mysql) : null;
-const postgresDatabase = config.postgres ? postgresService(config.postgres) : null;
-const postgresExtensions = postgresDatabase
-  ? new PostgresExtensionRegistry(postgresDatabase)
-  : null;
-const primaryDatabase = mysqlDatabase ?? postgresDatabase!;
+interface Runtime {
+  mysqlDatabase: DatabaseService | null;
+  postgresDatabase: DatabaseService | null;
+  postgresExtensions: PostgresExtensionRegistry | null;
+  mysqlSchemaDatabase: DatabaseService | null;
+  mysqlSchemas: SchemaManager | null;
+  postgresSchemaDatabase: DatabaseService | null;
+  postgresSchemas: PostgresSchemaManager | null;
+  primaryDatabase: DatabaseService;
+}
 
-const mysqlSchemaDatabase =
-  config.mysql?.schemaConnectionString
-    ? mysqlService({ ...config.mysql, connectionString: config.mysql.schemaConnectionString })
-    : mysqlDatabase;
-const mysqlSchemas =
-  mysqlSchemaDatabase && mysqlDatabase
-    ? new SchemaManager(mysqlSchemaDatabase, {
-        mode: config.schemaMode,
-        allowBlocking: config.schemaAllowBlocking,
-        applicationDatabase: mysqlDatabase,
-      })
+/**
+ * Builds every service from convars. Anything this throws -- an unset or
+ * malformed connection string -- must not stop the module before exports are
+ * registered, or dependent resources fail with "No such export" instead of a
+ * diagnosable error.
+ */
+function createRuntime(): Runtime {
+  const config = loadConfig();
+  const mysqlDatabase = config.mysql ? mysqlService(config.mysql) : null;
+  const postgresDatabase = config.postgres ? postgresService(config.postgres) : null;
+  const postgresExtensions = postgresDatabase
+    ? new PostgresExtensionRegistry(postgresDatabase)
     : null;
-const postgresSchemaDatabase =
-  config.postgres?.schemaConnectionString
-    ? postgresService({
-        ...config.postgres,
-        connectionString: config.postgres.schemaConnectionString,
-      })
-    : postgresDatabase;
-const postgresSchemas =
-  postgresSchemaDatabase && postgresDatabase
-    ? new PostgresSchemaManager(postgresSchemaDatabase, {
-        mode: config.schemaMode,
-        allowBlocking: config.schemaAllowBlocking,
-        applicationDatabase: postgresDatabase,
-        extensionRegistry: postgresExtensions!,
-        ...(config.postgres?.schemaLockTimeout !== undefined
-          ? { lockTimeout: config.postgres.schemaLockTimeout }
-          : {}),
-      })
-    : null;
+  const mysqlSchemaDatabase =
+    config.mysql?.schemaConnectionString
+      ? mysqlService({ ...config.mysql, connectionString: config.mysql.schemaConnectionString })
+      : mysqlDatabase;
+  const postgresSchemaDatabase =
+    config.postgres?.schemaConnectionString
+      ? postgresService({
+          ...config.postgres,
+          connectionString: config.postgres.schemaConnectionString,
+        })
+      : postgresDatabase;
+
+  return {
+    mysqlDatabase,
+    postgresDatabase,
+    postgresExtensions,
+    mysqlSchemaDatabase,
+    mysqlSchemas:
+      mysqlSchemaDatabase && mysqlDatabase
+        ? new SchemaManager(mysqlSchemaDatabase, {
+            mode: config.schemaMode,
+            allowBlocking: config.schemaAllowBlocking,
+            applicationDatabase: mysqlDatabase,
+          })
+        : null,
+    postgresSchemaDatabase,
+    postgresSchemas:
+      postgresSchemaDatabase && postgresDatabase
+        ? new PostgresSchemaManager(postgresSchemaDatabase, {
+            mode: config.schemaMode,
+            allowBlocking: config.schemaAllowBlocking,
+            applicationDatabase: postgresDatabase,
+            extensionRegistry: postgresExtensions!,
+            ...(config.postgres?.schemaLockTimeout !== undefined
+              ? { lockTimeout: config.postgres.schemaLockTimeout }
+              : {}),
+          })
+        : null,
+    primaryDatabase: (mysqlDatabase ?? postgresDatabase)!,
+  };
+}
+
+let startupError: unknown = null;
+let runtime: Runtime | null = null;
+try {
+  runtime = createRuntime();
+} catch (error) {
+  startupError = error;
+}
+
+const mysqlDatabase = runtime?.mysqlDatabase ?? null;
+const postgresDatabase = runtime?.postgresDatabase ?? null;
+const postgresExtensions = runtime?.postgresExtensions ?? null;
+const mysqlSchemaDatabase = runtime?.mysqlSchemaDatabase ?? null;
+const mysqlSchemas = runtime?.mysqlSchemas ?? null;
+const postgresSchemaDatabase = runtime?.postgresSchemaDatabase ?? null;
+const postgresSchemas = runtime?.postgresSchemas ?? null;
+const primaryDatabase = runtime?.primaryDatabase ?? null;
 
 function statusFor(dialect?: string): DatabaseStatus | null {
   const normalized = dialect?.trim().toLowerCase();
@@ -75,7 +118,7 @@ function statusFor(dialect?: string): DatabaseStatus | null {
   if (normalized === 'mysql' || normalized === 'mariadb') {
     return mysqlDatabase?.getStatus() ?? null;
   }
-  return primaryDatabase.getStatus();
+  return primaryDatabase?.getStatus() ?? null;
 }
 
 function allStatuses(): { mysql: DatabaseStatus | null; postgresql: DatabaseStatus | null } {
@@ -140,7 +183,7 @@ function startQbxsqlCompatibilityBridge(): void {
   });
 }
 
-const services = [
+const services: DatabaseService[] = [
   mysqlDatabase,
   postgresDatabase,
   ...(mysqlSchemaDatabase && mysqlSchemaDatabase !== mysqlDatabase
@@ -166,25 +209,37 @@ if (isConcreteOxmysqlActive()) {
     });
   }
 } else {
+  const startupReason = startupError
+    ? {
+        code: 'QBXSQL_STARTUP_FAILED',
+        message: `qbxsql failed to start: ${
+          startupError instanceof Error ? startupError.message : String(startupError)
+        }`,
+      }
+    : undefined;
+  if (startupReason) console.error(`^1[${resourceName}] ${startupReason.message}^0`);
+
   const compatibilityOptions = {
     legacyProviders: true,
     oxmysqlProvider: !isQbxsqlCompatibilityBridge(),
     getStatus: statusFor,
     getStatuses: allStatuses,
+    ...(startupReason ? { unavailableReason: startupReason } : {}),
   };
   if (mysqlDatabase) {
     registerCompatibilityExports(mysqlDatabase, undefined, compatibilityOptions);
     registerSchemaExports(mysqlSchemas!);
   } else {
     registerMySqlUnavailableExports(undefined, compatibilityOptions);
+    registerSchemaUnavailableExports(undefined, startupReason);
   }
 
   if (postgresDatabase) {
     registerPostgresExports(postgresDatabase);
     registerPostgresSchemaExports(postgresSchemas!);
   } else {
-    registerPostgresUnavailableExports();
-    registerPostgresSchemaUnavailableExports();
+    registerPostgresUnavailableExports(undefined, startupReason);
+    registerPostgresSchemaUnavailableExports(undefined, startupReason);
   }
 
   for (const service of [mysqlDatabase, postgresDatabase]) {

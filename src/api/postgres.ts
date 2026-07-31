@@ -153,14 +153,16 @@ export function registerPostgresExports(
 
 export function registerPostgresUnavailableExports(
   bindings: RuntimeBindings | null = createRuntimeBindings(),
+  reason?: { code: string; message: string },
 ): void {
   const runtime = bindings;
   if (!runtime) return;
+  const failure = reason ?? {
+    code: 'QBXSQL_POSTGRES_NOT_CONFIGURED',
+    message: 'PostgreSQL is not configured. Set qbxsql_postgres_connection_string.',
+  };
   const unavailable = () => {
-    throw {
-      code: 'QBXSQL_POSTGRES_NOT_CONFIGURED',
-      message: 'PostgreSQL is not configured. Set qbxsql_postgres_connection_string.',
-    };
+    throw { ...failure };
   };
   for (const name of [
     'postgresAwaitConnection',
