@@ -77,10 +77,28 @@ export function registerSchemaExports(
     invokingResource: () => 'unknown',
   };
 
+  /**
+   * A throwing consumer callback must not be reported as a failed operation:
+   * chaining .catch() after .then() would invoke the same callback a second
+   * time with an error payload for work that actually succeeded.
+   */
+  function invokeCallback(
+    callback: SchemaCallback | undefined,
+    result: unknown,
+    error?: SchemaApiError,
+  ): void {
+    if (!callback) return;
+    try {
+      callback(result, error);
+    } catch (callbackError) {
+      console.error('[qbxsql] schema callback failed', callbackError);
+    }
+  }
+
   function refuse(callback: SchemaCallback | undefined, error: unknown): void {
     const failure = errorPayload(error);
     console.error(`[qbxsql] schema operation refused: ${failure.message}`);
-    callback?.(null, failure);
+    invokeCallback(callback, null, failure);
   }
 
   function operation(
@@ -96,13 +114,14 @@ export function registerSchemaExports(
       refuse(callback, error);
       return;
     }
-    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema))
-      .then((result) => callback?.(result))
-      .catch((error: unknown) => {
+    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then(
+      (result) => invokeCallback(callback, result),
+      (error: unknown) => {
         const failure = errorPayload(error);
         console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
-        callback?.(null, failure);
-      });
+        invokeCallback(callback, null, failure);
+      },
+    );
   }
 
   function adoptionOperation(
@@ -122,13 +141,14 @@ export function registerSchemaExports(
     void (dryRun
       ? manager.planAdoption(resource, schema, baselineVersion)
       : manager.adopt(resource, schema, baselineVersion)
-    )
-      .then((result) => callback?.(result))
-      .catch((error: unknown) => {
+    ).then(
+      (result) => invokeCallback(callback, result),
+      (error: unknown) => {
         const failure = errorPayload(error);
         console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);
-        callback?.(null, failure);
-      });
+        invokeCallback(callback, null, failure);
+      },
+    );
   }
 
   const api: Record<string, ExportFunction> = {

@@ -30866,10 +30866,19 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
     },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
+  function invokeCallback3(callback, result, error) {
+    if (!callback) return;
+    try {
+      callback(result, error);
+    } catch (callbackError) {
+      console.error("[qbxsql] schema callback failed", callbackError);
+    }
+  }
+  __name(invokeCallback3, "invokeCallback");
   function refuse(callback, error) {
     const failure = errorPayload3(error);
     console.error(`[qbxsql] schema operation refused: ${failure.message}`);
-    callback?.(null, failure);
+    invokeCallback3(callback, null, failure);
   }
   __name(refuse, "refuse");
   function operation(schema, dryRun, callback, explicitResource) {
@@ -30880,11 +30889,14 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
       refuse(callback, error);
       return;
     }
-    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
-      const failure = errorPayload3(error);
-      console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
-      callback?.(null, failure);
-    });
+    void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then(
+      (result) => invokeCallback3(callback, result),
+      (error) => {
+        const failure = errorPayload3(error);
+        console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
+        invokeCallback3(callback, null, failure);
+      }
+    );
   }
   __name(operation, "operation");
   function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
@@ -30895,11 +30907,14 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
       refuse(callback, error);
       return;
     }
-    void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
-      const failure = errorPayload3(error);
-      console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);
-      callback?.(null, failure);
-    });
+    void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then(
+      (result) => invokeCallback3(callback, result),
+      (error) => {
+        const failure = errorPayload3(error);
+        console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);
+        invokeCallback3(callback, null, failure);
+      }
+    );
   }
   __name(adoptionOperation, "adoptionOperation");
   const api = {
