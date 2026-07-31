@@ -223,4 +223,37 @@ describe('schema validation and SQL generation', () => {
       ]),
     );
   });
+
+  test('requires operator approval to drop columns and primary keys', () => {
+    const migration = {
+      version: 4,
+      name: 'drop money column',
+      allowBlocking: true,
+      operations: [
+        {
+          type: 'dropColumn' as const,
+          table: 'properties',
+          column: 'money',
+          allowDataLoss: true as const,
+        },
+        { type: 'dropPrimaryKey' as const, table: 'properties' },
+        { type: 'setPrimaryKey' as const, table: 'properties', columns: ['id'] },
+      ],
+    };
+
+    // allowDataLoss is the schema author's flag; the operator's is
+    // qbxsql_schema_allow_blocking, so these must not run unattended without it.
+    expect(migrationActions([migration], false)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'migration:dropColumn', automatic: false }),
+        expect.objectContaining({ kind: 'migration:dropPrimaryKey', automatic: false }),
+        expect.objectContaining({ kind: 'migration:setPrimaryKey', automatic: false }),
+      ]),
+    );
+    expect(migrationActions([migration], true)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'migration:dropColumn', automatic: true }),
+      ]),
+    );
+  });
 });

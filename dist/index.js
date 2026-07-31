@@ -29987,7 +29987,7 @@ function operationAlgorithm(operation) {
 }
 __name(operationAlgorithm, "operationAlgorithm");
 function requiresBlockingAuthorization(operation) {
-  return operation.type === "renameTable" || operation.type === "dropTable" || operation.type === "sql" || operation.type === "setTableOptions";
+  return operation.type === "renameTable" || operation.type === "dropTable" || operation.type === "sql" || operation.type === "setTableOptions" || operation.type === "dropColumn" || operation.type === "dropPrimaryKey" || operation.type === "setPrimaryKey";
 }
 __name(requiresBlockingAuthorization, "requiresBlockingAuthorization");
 function enforcedAlgorithm(action2) {

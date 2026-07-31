@@ -110,12 +110,22 @@ function operationAlgorithm(operation: MigrationOperation): SchemaAction['algori
   }
 }
 
+/**
+ * Operations the server operator must sign off on with
+ * qbxsql_schema_allow_blocking. allowDataLoss is set by the schema author, not
+ * the operator, so destructive column and key changes belong here too --
+ * otherwise a resource could drop a column on the next server start with no
+ * human in the loop.
+ */
 function requiresBlockingAuthorization(operation: MigrationOperation): boolean {
   return (
     operation.type === 'renameTable' ||
     operation.type === 'dropTable' ||
     operation.type === 'sql' ||
-    operation.type === 'setTableOptions'
+    operation.type === 'setTableOptions' ||
+    operation.type === 'dropColumn' ||
+    operation.type === 'dropPrimaryKey' ||
+    operation.type === 'setPrimaryKey'
   );
 }
 
