@@ -1,8 +1,26 @@
 local currentResource = GetCurrentResourceName()
 local adapter = exports.qbxsql
 
+--- Callbacks that crossed the CFX runtime boundary arrive as tables holding a
+--- function reference rather than as plain Lua functions.
+local function isCallback(value)
+    local valueType = type(value)
+
+    return valueType == 'function'
+        or (valueType == 'table' and value.__cfx_functionReference ~= nil)
+end
+
+--- Checked here rather than left to the connector: a mistyped callback would
+--- otherwise surface as a failure inside qbxsql instead of at the call site.
+local function assertCallback(callback)
+    if callback and not isCallback(callback) then
+        error(('Schema callback must be a function, received %s'):format(type(callback)))
+    end
+end
+
 local function call(method, schema, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
+    assertCallback(callback)
     return adapter[method](nil, schema, callback, currentResource)
 end
 
@@ -46,6 +64,7 @@ end
 local function adoptionCall(method, schema, baselineVersion, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
     assert(type(baselineVersion) == 'number', 'Adoption baseline must be a number')
+    assertCallback(callback)
     return adapter[method](nil, schema, baselineVersion, callback, currentResource)
 end
 

@@ -200,8 +200,17 @@ Postgres.extensions = setmetatable({
     end
 })
 
+--- Checked here rather than left to the connector: a mistyped callback would
+--- otherwise surface as a failure inside qbxsql instead of at the call site.
+local function assertSchemaCallback(callback)
+    if callback and not isCallback(callback) then
+        error(('Schema callback must be a function, received %s'):format(type(callback)))
+    end
+end
+
 local function schemaCall(method, schema, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
+    assertSchemaCallback(callback)
     return adapter[method](nil, schema, callback, resourceName)
 end
 
@@ -230,6 +239,7 @@ end
 local function adoptionCall(method, schema, baselineVersion, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
     assert(type(baselineVersion) == 'number', 'Adoption baseline must be a number')
+    assertSchemaCallback(callback)
     return adapter[method](nil, schema, baselineVersion, callback, resourceName)
 end
 
