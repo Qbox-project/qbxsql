@@ -160,7 +160,11 @@ local function store(query, callback)
     local id = #queryStore + 1
     queryStore[id] = query
 
-    return callback and callback(id) or id
+    -- `callback(id) or id` would swallow a callback that legitimately returns
+    -- false or nil and hand back the id instead.
+    if callback then return callback(id) end
+
+    return id
 end
 
 MySQL.Sync = setmetatable({ store = store }, aliasMetatable)
@@ -169,7 +173,9 @@ MySQL.Async = setmetatable({ store = store }, aliasMetatable)
 local function onReady(callback)
     qbxsql.awaitConnection()
 
-    return callback and callback() or true
+    if callback then return callback() end
+
+    return true
 end
 
 MySQL.ready = setmetatable({ await = onReady }, {

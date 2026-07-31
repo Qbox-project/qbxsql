@@ -123,7 +123,11 @@ Postgres.startTransaction = setmetatable({ await = startTransaction }, {
 
 local function onReady(callback)
     adapter.postgresAwaitConnection()
-    return callback and callback() or true
+    -- `callback() or true` would swallow a callback that legitimately returns
+    -- false or nil and report success instead.
+    if callback then return callback() end
+
+    return true
 end
 
 Postgres.ready = setmetatable({ await = onReady }, {
