@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { releaseRoot, repositoryRoot, validateBuiltRelease } from './release-lib.mjs';
-import { createSecretSafeWriter } from './secret-safe-writer.mjs';
+import { configValue, createSecretSafeWriter } from './secret-safe-writer.mjs';
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -34,7 +34,7 @@ const resources = path.join(temporaryRoot, 'resources');
 const port = 32_000 + (process.pid % 1_000);
 let output = '';
 
-const sensitiveValues = [licenseKey, connectionString];
+const sensitiveValues = [licenseKey, connectionString, postgresConnectionString];
 
 async function cleanup() {
   const relative = path.relative(os.tmpdir(), temporaryRoot);
@@ -82,13 +82,13 @@ async function runConflictGate() {
   );
 
   const conflictConfig = [
-    `sv_licenseKey "${licenseKey.replaceAll('"', '')}"`,
+    `sv_licenseKey "${configValue(licenseKey, 'the license key')}"`,
     'sv_hostname "qbxsql conflict gate"',
     'sv_maxclients 1',
     `endpoint_add_tcp "127.0.0.1:${port + 1}"`,
     `endpoint_add_udp "127.0.0.1:${port + 1}"`,
-    `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
-    `set qbxsql_postgres_connection_string "${postgresConnectionString.replaceAll('"', '')}"`,
+    `set mysql_connection_string "${configValue(connectionString, 'the MySQL connection string')}"`,
+    `set qbxsql_postgres_connection_string "${configValue(postgresConnectionString, 'the PostgreSQL connection string')}"`,
     'ensure oxmysql',
   ].join('\n');
   await writeFile(path.join(conflictRoot, 'server.cfg'), `${conflictConfig}\n`, { mode: 0o600 });
@@ -199,13 +199,13 @@ try {
   if (flavor !== 'enhanced') await installFixtures();
 
   const config = [
-    `sv_licenseKey "${licenseKey.replaceAll('"', '')}"`,
+    `sv_licenseKey "${configValue(licenseKey, 'the license key')}"`,
     'sv_hostname "qbxsql release gate"',
     'sv_maxclients 1',
     `endpoint_add_tcp "127.0.0.1:${port}"`,
     `endpoint_add_udp "127.0.0.1:${port}"`,
-    `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
-    `set qbxsql_postgres_connection_string "${postgresConnectionString.replaceAll('"', '')}"`,
+    `set mysql_connection_string "${configValue(connectionString, 'the MySQL connection string')}"`,
+    `set qbxsql_postgres_connection_string "${configValue(postgresConnectionString, 'the PostgreSQL connection string')}"`,
     'set qbxsql_connection_wait_timeout 30000',
     'set qbxsql_schema_mode auto',
     'ensure qbxsql',

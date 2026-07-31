@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { releaseRoot, repositoryRoot, validateBuiltRelease } from './release-lib.mjs';
+import { configValue, createSecretSafeWriter } from './secret-safe-writer.mjs';
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -12,7 +13,9 @@ function option(name, fallback) {
 
 const binary = option('--binary');
 const connectionString = option('--connection-string', process.env.QBXSQL_TEST_CONNECTION_STRING);
-const licenseKey = option('--license-key', process.env.CFX_LICENSE_KEY);
+// Read from the environment only: a command argument is visible in process
+// listings and shell history.
+const licenseKey = process.env.CFX_LICENSE_KEY;
 const provider = option('--provider', 'qbxsql');
 const oxmysqlPath = option('--oxmysql-path');
 const outputPath = option('--output');
@@ -20,7 +23,7 @@ const timeout = Number(option('--timeout', '120000'));
 
 if (!binary || !connectionString || !licenseKey || !['qbxsql', 'oxmysql'].includes(provider)) {
   throw new Error(
-    'Usage: node scripts/run-contract-probe.mjs --binary <FXServer> --provider qbxsql|oxmysql --connection-string <url> --license-key <key> [--oxmysql-path <dir>] [--output result.json]',
+    'Usage: CFX_LICENSE_KEY=<secret> node scripts/run-contract-probe.mjs --binary <FXServer> --provider qbxsql|oxmysql --connection-string <url> [--oxmysql-path <dir>] [--output result.json]',
   );
 }
 if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 600_000) {
@@ -44,6 +47,8 @@ const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'qbxsql-contract-'));
 const resources = path.join(temporaryRoot, 'resources');
 const port = 34_000 + (process.pid % 1_000);
 let output = '';
+const sensitiveValues = [licenseKey, connectionString];
+const safeStdout = createSecretSafeWriter(process.stdout, sensitiveValues);
 
 async function cleanup() {
   const relative = path.relative(os.tmpdir(), temporaryRoot);
@@ -66,12 +71,12 @@ try {
   );
 
   const config = [
-    `sv_licenseKey "${licenseKey.replaceAll('"', '')}"`,
+    `sv_licenseKey "${configValue(licenseKey, 'the license key')}"`,
     'sv_hostname "qbxsql contract probe"',
     'sv_maxclients 1',
     `endpoint_add_tcp "127.0.0.1:${port}"`,
     `endpoint_add_udp "127.0.0.1:${port}"`,
-    `set mysql_connection_string "${connectionString.replaceAll('"', '')}"`,
+    `set mysql_connection_string "${configValue(connectionString, 'the MySQL connection string')}"`,
     'set qbxsql_schema_mode off',
     'set qbxsql_contract_provider "oxmysql"',
     `set qbxsql_contract_result_provider "${provider}"`,
@@ -95,7 +100,7 @@ try {
     const consume = (chunk) => {
       const text = chunk.toString();
       output += text;
-      process.stdout.write(text);
+      safeStdout.push(chunk);
       if (!output.includes('QBXSQL_CONTRACT_RESULT_END')) return;
       try {
         const chunks = [...output.matchAll(/QBXSQL_CONTRACT_CHUNK:(.*?):QBXSQL_CONTRACT_CHUNK_END/g)]
@@ -136,5 +141,6 @@ try {
     }
   }
 } finally {
+  safeStdout.flush();
   await cleanup();
 }

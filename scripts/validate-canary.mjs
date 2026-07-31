@@ -55,7 +55,7 @@ if (allowedErrorDelta > 0 && errorJustification.trim().length < 10) {
 }
 
 const raw = await readFile(path.resolve(input), 'utf8');
-if (/mysql:\/\/|(?:password|pwd)\s*=|sv_licensekey|cfx_license_key/i.test(raw)) {
+if (/(?:mysql|mariadb|postgres(?:ql)?):\/\/|(?:password|pwd)\s*=|sv_licensekey|cfx_license_key|cfxk_[A-Za-z0-9_-]{16,}/i.test(raw)) {
   throw new Error('Canary evidence appears to contain credentials or a connection string.');
 }
 const records = raw

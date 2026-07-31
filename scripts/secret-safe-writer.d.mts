@@ -7,3 +7,5 @@ export function createSecretSafeWriter(
   stream: { write(value: string): unknown },
   values: string[],
 ): SecretSafeWriter;
+
+export function configValue(value: unknown, label: string): string;
