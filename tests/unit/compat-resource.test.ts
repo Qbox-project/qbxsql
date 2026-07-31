@@ -30,8 +30,8 @@ describe('qbxsql compatibility metadata and providers', () => {
     expect(wrapper).toContain('MySQL.Sync = setmetatable');
     expect(wrapper).toContain('MySQL.Async = setmetatable');
     expect(wrapper).toContain('local MySQL = setmetatable');
-    expect(wrapper).toContain('qbxsql.awaitConnection()');
-    expect(wrapper).toContain('local qbxsql = exports.qbxsql');
+    expect(wrapper).toMatch(/\.awaitConnection\(\)/);
+    expect(wrapper).toContain('exports.qbxsql');
   });
 
   test('exposes callback and await schema adoption helpers', async () => {

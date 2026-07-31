@@ -60,12 +60,12 @@ local function safeArgs(query, parameters, callback, transaction)
     return query, parameters, callback
 end
 
-local qbxsql = exports.qbxsql
+local adapter = exports.qbxsql
 
 local function await(method, query, parameters)
     local response = promise.new()
 
-    qbxsql[method](nil, query, parameters, function(result, error)
+    adapter[method](nil, query, parameters, function(result, error)
         if error then return response:reject(error) end
 
         response:resolve(result)
@@ -83,7 +83,7 @@ local methodMetatable = {
             self.method == 'transaction'
         )
 
-        return qbxsql[self.method](
+        return adapter[self.method](
             nil,
             query,
             parameters,
@@ -97,7 +97,7 @@ local methodMetatable = {
 local MySQL = setmetatable(MySQL or {}, {
     __index = function(_, method)
         return function(...)
-            return qbxsql[method](nil, ...)
+            return adapter[method](nil, ...)
         end
     end
 })
@@ -171,7 +171,7 @@ MySQL.Sync = setmetatable({ store = store }, aliasMetatable)
 MySQL.Async = setmetatable({ store = store }, aliasMetatable)
 
 local function onReady(callback)
-    qbxsql.awaitConnection()
+    adapter.awaitConnection()
 
     if callback then return callback() end
 
@@ -193,7 +193,7 @@ local function startTransaction(callback)
     -- control back to Lua, so the direct call already blocks. `.await` is
     -- offered for symmetry with the other methods and with Postgres.lua, and
     -- resolves to the same thing.
-    return qbxsql:startTransaction(callback, resourceName)
+    return adapter:startTransaction(callback, resourceName)
 end
 
 MySQL.startTransaction = setmetatable({ await = startTransaction }, {

@@ -1,4 +1,4 @@
-local currentResource = GetCurrentResourceName()
+local resourceName = GetCurrentResourceName()
 local adapter = exports.qbxsql
 
 --- Callbacks that crossed the CFX runtime boundary arrive as tables holding a
@@ -21,7 +21,7 @@ end
 local function call(method, schema, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
     assertCallback(callback)
-    return adapter[method](nil, schema, callback, currentResource)
+    return adapter[method](nil, schema, callback, resourceName)
 end
 
 --- Turns any callback-style helper into a blocking call. `start` receives the
@@ -65,7 +65,7 @@ local function adoptionCall(method, schema, baselineVersion, callback)
     assert(type(schema) == 'table', 'Schema must be a table')
     assert(type(baselineVersion) == 'number', 'Adoption baseline must be a number')
     assertCallback(callback)
-    return adapter[method](nil, schema, baselineVersion, callback, currentResource)
+    return adapter[method](nil, schema, baselineVersion, callback, resourceName)
 end
 
 local function adoptionAwait(method, schema, baselineVersion)
