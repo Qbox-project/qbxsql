@@ -1047,6 +1047,16 @@ export class PostgresSchemaManager {
                updated_at = CURRENT_TIMESTAMP`,
         [resource, schema.version, checksum, JSON.stringify(Object.keys(schema.tables).sort())],
       );
+      // Reconcile rows exist to resume a run interrupted partway through. Once
+      // the schema is converged they have served their purpose, and keeping
+      // them would make an identical action a permanent no-op: if the same
+      // drift reappeared out of band, the replan would skip every statement and
+      // then fail the convergence re-check with no way to recover.
+      await connection.query(
+        `DELETE FROM qbxsql_internal.schema_actions
+          WHERE resource_name = $1 AND action_key LIKE 'reconcile:%'`,
+        [resource],
+      );
       await connection.commit();
     } catch (error) {
       await connection.rollback().catch(() => {});

@@ -29058,6 +29058,11 @@ var PostgresSchemaManager = class {
                updated_at = CURRENT_TIMESTAMP`,
         [resource, schema.version, checksum, JSON.stringify(Object.keys(schema.tables).sort())]
       );
+      await connection.query(
+        `DELETE FROM qbxsql_internal.schema_actions
+          WHERE resource_name = $1 AND action_key LIKE 'reconcile:%'`,
+        [resource]
+      );
       await connection.commit();
     } catch (error) {
       await connection.rollback().catch(() => {
