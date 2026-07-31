@@ -165,6 +165,12 @@ export interface ActualTable {
   foreignKeys: Map<string, ActualForeignKey>;
 }
 
+export interface SchemaCapabilities {
+  instantAddColumn: boolean;
+  inplaceAlterColumn: boolean;
+  inplaceAddIndex: boolean;
+}
+
 export interface SchemaAction {
   kind: string;
   sql: string;

@@ -14,6 +14,7 @@ import type {
   ResourceSchema,
   SchemaAction,
   SchemaAdoptionResult,
+  SchemaCapabilities,
   SchemaEnsureResult,
   SchemaPlan,
 } from './types.js';
@@ -94,7 +95,6 @@ function validateResourceName(resource: string): void {
 function operationAlgorithm(operation: MigrationOperation): SchemaAction['algorithm'] {
   switch (operation.type) {
     case 'addColumn':
-    case 'dropColumn':
       return 'INSTANT';
     case 'renameColumn':
     case 'alterColumn':
@@ -103,8 +103,12 @@ function operationAlgorithm(operation: MigrationOperation): SchemaAction['algori
     case 'addForeignKey':
     case 'dropForeignKey':
     case 'setPrimaryKey':
-    case 'dropPrimaryKey':
+    // DROP COLUMN is an INPLACE rebuild; it is only instant on MySQL 8.0.29+.
+    case 'dropColumn':
       return 'INPLACE';
+    // InnoDB has no online path for dropping a primary key on its own.
+    case 'dropPrimaryKey':
+      return 'MANUAL';
     default:
       return 'MANUAL';
   }
@@ -137,9 +141,42 @@ function enforcedAlgorithm(action: SchemaAction): string {
       : action.algorithm;
 }
 
+/**
+ * Renders setPrimaryKey, whose statement depends on whether the table already
+ * has a primary key. Returns null for every other operation so callers fall
+ * back to the ordinary rendering. Shared by the planner and the executor so the
+ * two cannot disagree about what will run.
+ */
+function primaryKeyMigrationSql(
+  operation: MigrationOperation,
+  blockingAllowed: boolean,
+  capabilities?: SchemaCapabilities,
+  actual?: Map<string, ActualTable>,
+): string | null {
+  if (operation.type !== 'setPrimaryKey' || !actual) return null;
+  const hasPrimaryKey = actual.get(operation.table)?.indexes.has('PRIMARY') === true;
+  const clauses = [
+    ...(hasPrimaryKey ? ['DROP PRIMARY KEY'] : []),
+    `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(', ')})`,
+  ];
+  const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(', ')}`;
+  if (blockingAllowed) return sql;
+  return (capabilities?.inplaceAlterColumn ?? true)
+    ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE`
+    : sql;
+}
+
+/**
+ * `actual` lets setPrimaryKey render the statement that will really run: when
+ * the table has no primary key, applying it omits the DROP PRIMARY KEY clause,
+ * and a plan that showed the clause would have the operator approve SQL that is
+ * never executed.
+ */
 export function migrationActions(
   migrations: MigrationDefinition[],
   operatorAllowsBlocking: boolean,
+  capabilities?: SchemaCapabilities,
+  actual?: Map<string, ActualTable>,
 ): SchemaAction[] {
   return migrations.flatMap((migration) =>
     migration.operations.map((operation) => {
@@ -148,9 +185,10 @@ export function migrationActions(
       const algorithm = blockingAllowed ? 'MANUAL' : operationAlgorithm(operation);
       return {
         kind: `migration:${operation.type}`,
-        sql: blockingAllowed
-          ? migrationOperationSql(operation)
-          : onlineMigrationOperationSql(operation),
+        sql: primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual)
+          ?? (blockingAllowed
+            ? migrationOperationSql(operation)
+            : onlineMigrationOperationSql(operation, capabilities)),
         safe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
         dataSafe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
         onlineSafe: !blockingAllowed && !requiresBlocking,
@@ -346,9 +384,13 @@ export class SchemaManager {
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion),
     );
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
     const plan = {
       ...basePlan,
-      actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...basePlan.actions],
+      actions: [
+        ...migrationActions(pendingMigrations, this.allowBlocking, capabilities, actual),
+        ...basePlan.actions,
+      ],
     };
     return {
       ...plan,
@@ -831,20 +873,13 @@ export class SchemaManager {
     blockingAllowed: boolean,
     actual: Map<string, ActualTable>,
   ): string {
-    if (operation.type !== 'setPrimaryKey') {
-      return blockingAllowed
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    return (
+      primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual) ??
+      (blockingAllowed
         ? migrationOperationSql(operation)
-        : onlineMigrationOperationSql(operation);
-    }
-
-    const table = actual.get(operation.table);
-    const hasPrimaryKey = table?.indexes.has('PRIMARY') === true;
-    const clauses = [
-      ...(hasPrimaryKey ? ['DROP PRIMARY KEY'] : []),
-      `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(', ')})`,
-    ];
-    const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(', ')}`;
-    return blockingAllowed ? sql : `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+        : onlineMigrationOperationSql(operation, capabilities))
+    );
   }
 
   private async operationNeeded(

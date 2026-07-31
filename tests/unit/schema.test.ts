@@ -6,6 +6,7 @@ import {
   onlineMigrationOperationSql,
 } from '../../src/schema/sql.js';
 import { migrationActions } from '../../src/schema/manager.js';
+import { capabilitiesForVersion } from '../../src/schema/planner.js';
 import { schemaChecksum, validateSchema } from '../../src/schema/validate.js';
 import type { ResourceSchema } from '../../src/schema/types.js';
 
@@ -221,6 +222,70 @@ describe('schema validation and SQL generation', () => {
         expect.objectContaining({ kind: 'migration:renameTable', automatic: true }),
         expect.objectContaining({ kind: 'migration:dropTable', automatic: true }),
       ]),
+    );
+  });
+
+  test('emits only online-DDL hints InnoDB accepts', () => {
+    // DROP COLUMN is instant only on MySQL 8.0.29+, and InnoDB has no online
+    // path for dropping a primary key by itself.
+    expect(
+      onlineMigrationOperationSql({
+        type: 'dropColumn',
+        table: 'properties',
+        column: 'money',
+        allowDataLoss: true,
+      }),
+    ).toBe('ALTER TABLE `properties` DROP COLUMN `money`, ALGORITHM=INPLACE, LOCK=NONE');
+    expect(
+      onlineMigrationOperationSql({ type: 'dropPrimaryKey', table: 'properties' }),
+    ).toBe('ALTER TABLE `properties` DROP PRIMARY KEY');
+  });
+
+  test('omits online hints when the server version is unknown', () => {
+    const capabilities = capabilitiesForVersion(null);
+    expect(
+      onlineMigrationOperationSql(
+        { type: 'addColumn', table: 'properties', column: 'note', definition: { type: 'text' } },
+        capabilities,
+      ),
+    ).toBe('ALTER TABLE `properties` ADD COLUMN `note` TEXT NOT NULL');
+  });
+
+  test('plans the setPrimaryKey statement that will actually run', () => {
+    const migration = {
+      version: 2,
+      name: 'set primary key',
+      operations: [
+        { type: 'setPrimaryKey' as const, table: 'properties', columns: ['id'] },
+      ],
+    };
+    const table = (hasPrimaryKey: boolean) =>
+      new Map([[
+        'properties',
+        {
+          name: 'properties',
+          engine: 'InnoDB',
+          charset: 'utf8mb4',
+          collation: 'utf8mb4_unicode_ci',
+          columns: new Map(),
+          indexes: hasPrimaryKey
+            ? new Map([['PRIMARY', {
+                name: 'PRIMARY',
+                columns: ['id'],
+                unique: true,
+                primary: true,
+                indexType: 'BTREE',
+              }]])
+            : new Map(),
+          foreignKeys: new Map(),
+        },
+      ]]) as never;
+
+    expect(migrationActions([migration], false, undefined, table(false))[0]!.sql).toBe(
+      'ALTER TABLE `properties` ADD PRIMARY KEY (`id`), ALGORITHM=INPLACE, LOCK=NONE',
+    );
+    expect(migrationActions([migration], false, undefined, table(true))[0]!.sql).toBe(
+      'ALTER TABLE `properties` DROP PRIMARY KEY, ADD PRIMARY KEY (`id`), ALGORITHM=INPLACE, LOCK=NONE',
     );
   });
 

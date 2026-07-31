@@ -7,6 +7,7 @@ import type {
   IndexDefinition,
   ResourceSchema,
   SchemaAction,
+  SchemaCapabilities,
   SchemaPlan,
   TableDefinition,
 } from './types.js';
@@ -19,11 +20,7 @@ import {
   quoteIdentifier,
 } from './sql.js';
 
-export interface SchemaCapabilities {
-  instantAddColumn: boolean;
-  inplaceAlterColumn: boolean;
-  inplaceAddIndex: boolean;
-}
+export type { SchemaCapabilities } from './types.js';
 
 const currentCapabilities: SchemaCapabilities = {
   instantAddColumn: true,

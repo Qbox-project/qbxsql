@@ -29480,21 +29480,27 @@ function migrationOperationSql(operation) {
   }
 }
 __name(migrationOperationSql, "migrationOperationSql");
-function onlineMigrationOperationSql(operation) {
+var allOnlineCapabilities = {
+  instantAddColumn: true,
+  inplaceAlterColumn: true,
+  inplaceAddIndex: true
+};
+function onlineMigrationOperationSql(operation, capabilities = allOnlineCapabilities) {
   const sql = migrationOperationSql(operation);
   switch (operation.type) {
     case "addColumn":
+      return capabilities.instantAddColumn ? `${sql}, ALGORITHM=INSTANT` : sql;
     case "dropColumn":
-      return `${sql}, ALGORITHM=INSTANT`;
+      return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     case "renameColumn":
     case "alterColumn":
-    case "addIndex":
-    case "dropIndex":
     case "addForeignKey":
     case "dropForeignKey":
     case "setPrimaryKey":
-    case "dropPrimaryKey":
-      return `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+      return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
+    case "addIndex":
+    case "dropIndex":
+      return capabilities.inplaceAddIndex ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     default:
       return sql;
   }
@@ -29973,7 +29979,6 @@ __name(validateResourceName, "validateResourceName");
 function operationAlgorithm(operation) {
   switch (operation.type) {
     case "addColumn":
-    case "dropColumn":
       return "INSTANT";
     case "renameColumn":
     case "alterColumn":
@@ -29982,8 +29987,12 @@ function operationAlgorithm(operation) {
     case "addForeignKey":
     case "dropForeignKey":
     case "setPrimaryKey":
-    case "dropPrimaryKey":
+    // DROP COLUMN is an INPLACE rebuild; it is only instant on MySQL 8.0.29+.
+    case "dropColumn":
       return "INPLACE";
+    // InnoDB has no online path for dropping a primary key on its own.
+    case "dropPrimaryKey":
+      return "MANUAL";
     default:
       return "MANUAL";
   }
@@ -29997,7 +30006,19 @@ function enforcedAlgorithm(action2) {
   return action2.algorithm === "INSTANT" ? "INSTANT" : action2.algorithm === "INPLACE" ? "INPLACE/LOCK=NONE" : action2.algorithm;
 }
 __name(enforcedAlgorithm, "enforcedAlgorithm");
-function migrationActions(migrations, operatorAllowsBlocking) {
+function primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual) {
+  if (operation.type !== "setPrimaryKey" || !actual) return null;
+  const hasPrimaryKey = actual.get(operation.table)?.indexes.has("PRIMARY") === true;
+  const clauses = [
+    ...hasPrimaryKey ? ["DROP PRIMARY KEY"] : [],
+    `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(", ")})`
+  ];
+  const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(", ")}`;
+  if (blockingAllowed) return sql;
+  return capabilities?.inplaceAlterColumn ?? true ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
+}
+__name(primaryKeyMigrationSql, "primaryKeyMigrationSql");
+function migrationActions(migrations, operatorAllowsBlocking, capabilities, actual) {
   return migrations.flatMap(
     (migration) => migration.operations.map((operation) => {
       const blockingAllowed = migration.allowBlocking === true && operatorAllowsBlocking;
@@ -30005,7 +30026,7 @@ function migrationActions(migrations, operatorAllowsBlocking) {
       const algorithm = blockingAllowed ? "MANUAL" : operationAlgorithm(operation);
       return {
         kind: `migration:${operation.type}`,
-        sql: blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation),
+        sql: primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual) ?? (blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation, capabilities)),
         safe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
         dataSafe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
         onlineSafe: !blockingAllowed && !requiresBlocking2,
@@ -30163,9 +30184,13 @@ var SchemaManager = class {
       actual,
       capabilitiesForVersion(this.database.driver.serverVersion)
     );
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
     const plan = {
       ...basePlan,
-      actions: [...migrationActions(pendingMigrations, this.allowBlocking), ...basePlan.actions]
+      actions: [
+        ...migrationActions(pendingMigrations, this.allowBlocking, capabilities, actual),
+        ...basePlan.actions
+      ]
     };
     return {
       ...plan,
@@ -30593,17 +30618,8 @@ var SchemaManager = class {
     return appliedActions;
   }
   migrationSql(operation, blockingAllowed, actual) {
-    if (operation.type !== "setPrimaryKey") {
-      return blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation);
-    }
-    const table = actual.get(operation.table);
-    const hasPrimaryKey = table?.indexes.has("PRIMARY") === true;
-    const clauses = [
-      ...hasPrimaryKey ? ["DROP PRIMARY KEY"] : [],
-      `ADD PRIMARY KEY (${operation.columns.map(quoteIdentifier).join(", ")})`
-    ];
-    const sql = `ALTER TABLE ${quoteIdentifier(operation.table)} ${clauses.join(", ")}`;
-    return blockingAllowed ? sql : `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    return primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual) ?? (blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation, capabilities));
   }
   async operationNeeded(resource, operation, actual) {
     switch (operation.type) {

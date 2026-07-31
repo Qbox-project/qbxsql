@@ -4,6 +4,7 @@ import type {
   ForeignKeyDefinition,
   IndexDefinition,
   MigrationOperation,
+  SchemaCapabilities,
   TableDefinition,
 } from './types.js';
 import { assertIdentifier } from './validate.js';
@@ -134,21 +135,39 @@ export function migrationOperationSql(operation: MigrationOperation): string {
   }
 }
 
-export function onlineMigrationOperationSql(operation: MigrationOperation): string {
+const allOnlineCapabilities: SchemaCapabilities = {
+  instantAddColumn: true,
+  inplaceAlterColumn: true,
+  inplaceAddIndex: true,
+};
+
+/**
+ * Adds the strongest online-DDL hint InnoDB will actually accept.
+ *
+ * DROP COLUMN is only instant on MySQL 8.0.29+/MariaDB 10.4+, so it uses the
+ * INPLACE rebuild that every supported server allows. Dropping a primary key on
+ * its own is COPY-only in InnoDB and gets no hint at all: it cannot run online,
+ * and requiresBlockingAuthorization already makes the operator approve it.
+ */
+export function onlineMigrationOperationSql(
+  operation: MigrationOperation,
+  capabilities: SchemaCapabilities = allOnlineCapabilities,
+): string {
   const sql = migrationOperationSql(operation);
   switch (operation.type) {
     case 'addColumn':
+      return capabilities.instantAddColumn ? `${sql}, ALGORITHM=INSTANT` : sql;
     case 'dropColumn':
-      return `${sql}, ALGORITHM=INSTANT`;
+      return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     case 'renameColumn':
     case 'alterColumn':
-    case 'addIndex':
-    case 'dropIndex':
     case 'addForeignKey':
     case 'dropForeignKey':
     case 'setPrimaryKey':
-    case 'dropPrimaryKey':
-      return `${sql}, ALGORITHM=INPLACE, LOCK=NONE`;
+      return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
+    case 'addIndex':
+    case 'dropIndex':
+      return capabilities.inplaceAddIndex ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     default:
       return sql;
   }
