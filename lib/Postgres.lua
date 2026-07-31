@@ -49,7 +49,23 @@ local function awaitQuery(method, query, parameters)
     return Await(response)
 end
 
-local Postgres = Postgres or {}
+-- Connector exports are named postgresQuery, postgresIsReady, and so on.
+local function postgresExport(name)
+    return 'postgres' .. name:sub(1, 1):upper() .. name:sub(2)
+end
+
+local Postgres = setmetatable(Postgres or {}, {
+    -- Names not defined below fall through to the matching connector export, so
+    -- Postgres.isReady() and anything added later are reachable from the facade
+    -- instead of only through exports.qbxsql.
+    __index = function(_, name)
+        local export = postgresExport(name)
+
+        return function(...)
+            return adapter[export](nil, ...)
+        end
+    end
+})
 
 for name, exportName in pairs({
     query = 'postgresQuery',

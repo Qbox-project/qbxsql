@@ -47,7 +47,9 @@ describe('qbxsql compatibility metadata and providers', () => {
     const manifest = await fixture('tests/fxserver/qbxsql_runtime_test/fxmanifest.lua');
     const server = await fixture('tests/fxserver/qbxsql_runtime_test/server.lua');
 
-    expect(wrapper).toContain('local Postgres = Postgres or {}');
+    expect(wrapper).toMatch(/local Postgres = setmetatable\(Postgres or \{\}/);
+    // Undeclared names reach the connector, so Postgres.isReady() resolves.
+    expect(wrapper).toContain('__index');
     expect(wrapper).toContain("query = 'postgresQuery'");
     expect(wrapper).toContain("execute = 'postgresExecute'");
     expect(wrapper).toContain("ensure = 'postgresEnsureSchema'");
