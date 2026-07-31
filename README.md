@@ -191,4 +191,4 @@ The deterministic builder produces `release/qbxsql/`, a versioned ZIP, and its S
 bun run install:dev -- --resources C:\path\to\server\resources
 ```
 
-Broader database checks, benchmarks, and canary tooling remain available for targeted local validation; they are not continuously scheduled workflows. See [release policy](docs/RELEASE.md), [optional benchmark checks](docs/BENCHMARKS.md), and [canary evidence](docs/CANARY.md).
+Broader database checks, benchmarks, and canary tooling remain available for targeted local validation; they are not continuously scheduled workflows. See [release policy](docs/RELEASE.md) and [optional benchmark checks](docs/BENCHMARKS.md).

@@ -42,7 +42,7 @@ The broader database matrix, benchmarks, reconnect soak, Windows checks, and sev
 
 Before deploying, verify a backup, set schema mode to `plan`, and review every action. Install the release resource, remove real oxmysql, and run the Qbox checklist.
 
-Run one Qbox canary for seven days using the monitor and validator in [CANARY.md](CANARY.md). Monitor state, error/query/slow-query totals, reconnects, queue depth, pool acquisition, process memory, and every schema result. Stop the canary for unexplained data loss, partial transactions, persistent dependency failure, a connection leak, credential exposure, or an unreviewed blocking/destructive plan.
+Run one Qbox canary for seven days using the monitor in `tools/qbxsql_canary` and `bun run canary:validate`. Monitor state, error/query/slow-query totals, reconnects, queue depth, pool acquisition, process memory, and every schema result. Stop the canary for unexplained data loss, partial transactions, persistent dependency failure, a connection leak, credential exposure, or an unreviewed blocking/destructive plan.
 
 ## Rollback
 

@@ -89,4 +89,4 @@ Historical local enhanced-CFX results remain useful development evidence, but st
 
 ## Qbox
 
-Qbox is accepted only through the real-client checklist in [QBOX-CERTIFICATION.md]. Unit tests and a headless FXServer pass do not replace character, inventory, banking, vehicle, property, restart, outage, and shutdown persistence checks.
+Qbox is accepted only after a real-client pass on a staging server. Unit tests and a headless FXServer run do not replace character, inventory, banking, vehicle, property, restart, outage, and shutdown persistence checks.

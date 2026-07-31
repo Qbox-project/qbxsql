@@ -6,7 +6,7 @@
 2. Take a database backup and verify that it can be restored.
 3. Build the release with `bun run release`, verify it with `bun run release:validate`, and review the SHA-256 checksum.
 4. Search resources for oxmysql NUI/profiler commands or external logger plugins; those features are out of scope.
-5. Run the complete [Qbox certification checklist](QBOX-CERTIFICATION.md) on a staging server.
+5. Exercise character, inventory, banking, vehicle, and property persistence with real clients on a staging server, including a restart and a planned database outage.
 
 ## Resource layout
 
