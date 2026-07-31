@@ -7,6 +7,8 @@ import {
 import type { ResourceSchema } from '../schema/types.js';
 import {
   createRuntimeBindings,
+  schemaResource,
+  SchemaResourceMismatchError,
   type ExportFunction,
   type RuntimeBindings,
 } from './compatibility.js';
@@ -31,6 +33,9 @@ function errorPayload(error: unknown): SchemaApiError {
   if (error instanceof SchemaDisabledError) {
     return { code: 'QBXSQL_SCHEMA_DISABLED', message };
   }
+  if (error instanceof SchemaResourceMismatchError) {
+    return { code: error.code, message };
+  }
   return { code: 'QBXSQL_SCHEMA_ERROR', message };
 }
 
@@ -44,8 +49,10 @@ export function registerSchemaExports(
     invokingResource: () => 'unknown',
   };
 
-  function resourceName(explicit?: string): string {
-    return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
+  function refuse(callback: SchemaCallback | undefined, error: unknown): void {
+    const failure = errorPayload(error);
+    console.error(`[qbxsql] schema operation refused: ${failure.message}`);
+    callback?.(null, failure);
   }
 
   function operation(
@@ -54,7 +61,13 @@ export function registerSchemaExports(
     callback?: SchemaCallback,
     explicitResource?: string,
   ): void {
-    const resource = resourceName(explicitResource);
+    let resource: string;
+    try {
+      resource = schemaResource(explicitResource, runtime);
+    } catch (error) {
+      refuse(callback, error);
+      return;
+    }
     void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema))
       .then((result) => callback?.(result))
       .catch((error: unknown) => {
@@ -71,7 +84,13 @@ export function registerSchemaExports(
     callback?: SchemaCallback,
     explicitResource?: string,
   ): void {
-    const resource = resourceName(explicitResource);
+    let resource: string;
+    try {
+      resource = schemaResource(explicitResource, runtime);
+    } catch (error) {
+      refuse(callback, error);
+      return;
+    }
     void (dryRun
       ? manager.planAdoption(resource, schema, baselineVersion)
       : manager.adopt(resource, schema, baselineVersion)

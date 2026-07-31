@@ -25634,6 +25634,26 @@ function queryResource(explicit, bindings) {
   return typeof explicit === "string" && explicit.length > 0 ? explicit : bindings.invokingResource();
 }
 __name(queryResource, "queryResource");
+var SchemaResourceMismatchError = class extends Error {
+  static {
+    __name(this, "SchemaResourceMismatchError");
+  }
+  code = "QBXSQL_SCHEMA_RESOURCE_MISMATCH";
+  constructor(invoking, claimed) {
+    super(
+      `Resource '${invoking}' cannot manage schemas as '${claimed}'. Schema ownership is bound to the calling resource.`
+    );
+    this.name = "SchemaResourceMismatchError";
+  }
+};
+function schemaResource(explicit, bindings) {
+  const invoking = bindings.invokingResource();
+  const claimed = typeof explicit === "string" && explicit.length > 0 ? explicit : null;
+  if (!claimed) return invoking;
+  if (invoking === "unknown" || invoking === claimed) return claimed;
+  throw new SchemaResourceMismatchError(invoking, claimed);
+}
+__name(schemaResource, "schemaResource");
 function orderedArray(value) {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== "object") return null;
@@ -28963,6 +28983,9 @@ function errorPayload2(error) {
   if (error instanceof PostgresSchemaDisabledError) {
     return { code: "QBXSQL_POSTGRES_SCHEMA_DISABLED", message };
   }
+  if (error instanceof SchemaResourceMismatchError) {
+    return { code: error.code, message };
+  }
   return { code: "QBXSQL_POSTGRES_SCHEMA_ERROR", message };
 }
 __name(errorPayload2, "errorPayload");
@@ -28974,10 +28997,20 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
     },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
-  const resourceName5 = /* @__PURE__ */ __name((explicit) => explicit && explicit.length > 0 ? explicit : runtime.invokingResource(), "resourceName");
+  const resourceName5 = /* @__PURE__ */ __name((explicit, callback) => {
+    try {
+      return schemaResource(explicit, runtime);
+    } catch (error) {
+      const failure = errorPayload2(error);
+      console.error(`[qbxsql] PostgreSQL schema operation refused: ${failure.message}`);
+      invokeCallback2(callback, null, failure);
+      return null;
+    }
+  }, "resourceName");
   const api = {
     postgresEnsureSchema(schema, callback, explicitResource) {
-      const resource = resourceName5(explicitResource);
+      const resource = resourceName5(explicitResource, callback);
+      if (resource === null) return;
       void manager.ensure(resource, schema).then(
         (result) => invokeCallback2(callback, result),
         (error) => {
@@ -28990,7 +29023,8 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
       );
     },
     postgresPlanSchema(schema, callback, explicitResource) {
-      const resource = resourceName5(explicitResource);
+      const resource = resourceName5(explicitResource, callback);
+      if (resource === null) return;
       void manager.plan(resource, schema).then(
         (result) => invokeCallback2(callback, result),
         (error) => {
@@ -29003,7 +29037,8 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
       );
     },
     postgresAdoptSchema(schema, baselineVersion, callback, explicitResource) {
-      const resource = resourceName5(explicitResource);
+      const resource = resourceName5(explicitResource, callback);
+      if (resource === null) return;
       void manager.adopt(resource, schema, baselineVersion).then(
         (result) => invokeCallback2(callback, result),
         (error) => {
@@ -29016,7 +29051,8 @@ function registerPostgresSchemaExports(manager, bindings = createRuntimeBindings
       );
     },
     postgresPlanSchemaAdoption(schema, baselineVersion, callback, explicitResource) {
-      const resource = resourceName5(explicitResource);
+      const resource = resourceName5(explicitResource, callback);
+      if (resource === null) return;
       void manager.planAdoption(resource, schema, baselineVersion).then(
         (result) => invokeCallback2(callback, result),
         (error) => {
@@ -30732,6 +30768,9 @@ function errorPayload3(error) {
   if (error instanceof SchemaDisabledError) {
     return { code: "QBXSQL_SCHEMA_DISABLED", message };
   }
+  if (error instanceof SchemaResourceMismatchError) {
+    return { code: error.code, message };
+  }
   return { code: "QBXSQL_SCHEMA_ERROR", message };
 }
 __name(errorPayload3, "errorPayload");
@@ -30743,12 +30782,20 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
     },
     invokingResource: /* @__PURE__ */ __name(() => "unknown", "invokingResource")
   };
-  function resourceName5(explicit) {
-    return explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
+  function refuse(callback, error) {
+    const failure = errorPayload3(error);
+    console.error(`[qbxsql] schema operation refused: ${failure.message}`);
+    callback?.(null, failure);
   }
-  __name(resourceName5, "resourceName");
+  __name(refuse, "refuse");
   function operation(schema, dryRun, callback, explicitResource) {
-    const resource = resourceName5(explicitResource);
+    let resource;
+    try {
+      resource = schemaResource(explicitResource, runtime);
+    } catch (error) {
+      refuse(callback, error);
+      return;
+    }
     void (dryRun ? manager.plan(resource, schema) : manager.ensure(resource, schema)).then((result) => callback?.(result)).catch((error) => {
       const failure = errorPayload3(error);
       console.error(`[qbxsql] schema operation failed [${resource}]: ${failure.message}`);
@@ -30757,7 +30804,13 @@ function registerSchemaExports(manager, bindings = createRuntimeBindings()) {
   }
   __name(operation, "operation");
   function adoptionOperation(schema, baselineVersion, dryRun, callback, explicitResource) {
-    const resource = resourceName5(explicitResource);
+    let resource;
+    try {
+      resource = schemaResource(explicitResource, runtime);
+    } catch (error) {
+      refuse(callback, error);
+      return;
+    }
     void (dryRun ? manager.planAdoption(resource, schema, baselineVersion) : manager.adopt(resource, schema, baselineVersion)).then((result) => callback?.(result)).catch((error) => {
       const failure = errorPayload3(error);
       console.error(`[qbxsql] schema adoption failed [${resource}]: ${failure.message}`);

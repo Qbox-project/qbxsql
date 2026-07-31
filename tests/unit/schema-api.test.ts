@@ -60,6 +60,39 @@ describe('schema exports', () => {
     });
   });
 
+  test('refuses to manage schemas on behalf of another resource', async () => {
+    const calls: string[] = [];
+    const manager = {
+      ensure: async (resource: string) => {
+        calls.push(resource);
+        return { resource };
+      },
+      adopt: async (resource: string) => {
+        calls.push(resource);
+        return { resource };
+      },
+    };
+    const exports = new Map<string, ExportFunction>();
+    registerSchemaExports(manager as never, {
+      addExport: (name, callback) => exports.set(name, callback),
+      addProviderExport() {},
+      invokingResource: () => 'evil_resource',
+    });
+
+    await expect(
+      exports.get('ensureSchema_async')!({ version: 1, tables: {} }, 'qbx_core'),
+    ).rejects.toMatchObject({ code: 'QBXSQL_SCHEMA_RESOURCE_MISMATCH' });
+    await expect(
+      exports.get('adoptSchema_async')!({ version: 1, tables: {} }, 1, 'qbx_core'),
+    ).rejects.toMatchObject({ code: 'QBXSQL_SCHEMA_RESOURCE_MISMATCH' });
+    expect(calls).toEqual([]);
+
+    // The shim's own name is still accepted, and so is omitting it.
+    await exports.get('ensureSchema_async')!({ version: 1, tables: {} }, 'evil_resource');
+    await exports.get('ensureSchema_async')!({ version: 1, tables: {} });
+    expect(calls).toEqual(['evil_resource', 'evil_resource']);
+  });
+
   test('preserves the structured pending plan across callback and promise exports', async () => {
     const pending: SchemaEnsureResult = {
       resource: 'housing',

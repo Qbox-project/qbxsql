@@ -42,6 +42,33 @@ function queryResource(explicit: unknown, bindings: RuntimeBindings): string {
   return typeof explicit === 'string' && explicit.length > 0 ? explicit : bindings.invokingResource();
 }
 
+export class SchemaResourceMismatchError extends Error {
+  public readonly code = 'QBXSQL_SCHEMA_RESOURCE_MISMATCH';
+
+  public constructor(invoking: string, claimed: string) {
+    super(
+      `Resource '${invoking}' cannot manage schemas as '${claimed}'. Schema ownership is bound to the calling resource.`,
+    );
+    this.name = 'SchemaResourceMismatchError';
+  }
+}
+
+/**
+ * Resolve the owner of a schema operation.
+ *
+ * Unlike query attribution, schema ownership is a security boundary: it decides
+ * which resource may apply DDL to which tables. The runtime's invoking resource
+ * is therefore authoritative, and the explicit argument only names the caller
+ * when the runtime cannot resolve it (which is why lib/Schema.lua sends it).
+ */
+export function schemaResource(explicit: unknown, bindings: RuntimeBindings): string {
+  const invoking = bindings.invokingResource();
+  const claimed = typeof explicit === 'string' && explicit.length > 0 ? explicit : null;
+  if (!claimed) return invoking;
+  if (invoking === 'unknown' || invoking === claimed) return claimed;
+  throw new SchemaResourceMismatchError(invoking, claimed);
+}
+
 function orderedArray(value: unknown): unknown[] | null {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== 'object') return null;

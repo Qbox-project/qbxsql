@@ -8,6 +8,8 @@ import type { PostgresResourceSchema } from '../postgres-schema/types.js';
 import { PostgresExtensionRequirementError } from '../postgres-extensions.js';
 import {
   createRuntimeBindings,
+  schemaResource,
+  SchemaResourceMismatchError,
   type ExportFunction,
   type RuntimeBindings,
 } from './compatibility.js';
@@ -62,6 +64,9 @@ function errorPayload(error: unknown): PostgresApiError & {
   if (error instanceof PostgresSchemaDisabledError) {
     return { code: 'QBXSQL_POSTGRES_SCHEMA_DISABLED', message };
   }
+  if (error instanceof SchemaResourceMismatchError) {
+    return { code: error.code, message };
+  }
   return { code: 'QBXSQL_POSTGRES_SCHEMA_ERROR', message };
 }
 
@@ -74,8 +79,20 @@ export function registerPostgresSchemaExports(
     addProviderExport() {},
     invokingResource: () => 'unknown',
   };
-  const resourceName = (explicit?: string) =>
-    explicit && explicit.length > 0 ? explicit : runtime.invokingResource();
+  /** Returns null when the caller tried to act as another resource. */
+  const resourceName = (
+    explicit: string | undefined,
+    callback: SchemaCallback | undefined,
+  ): string | null => {
+    try {
+      return schemaResource(explicit, runtime);
+    } catch (error) {
+      const failure = errorPayload(error);
+      console.error(`[qbxsql] PostgreSQL schema operation refused: ${failure.message}`);
+      invokeCallback(callback, null, failure);
+      return null;
+    }
+  };
 
   const api: Record<string, ExportFunction> = {
     postgresEnsureSchema(
@@ -83,7 +100,8 @@ export function registerPostgresSchemaExports(
       callback?: SchemaCallback,
       explicitResource?: string,
     ) {
-      const resource = resourceName(explicitResource);
+      const resource = resourceName(explicitResource, callback);
+      if (resource === null) return;
       void manager.ensure(resource, schema).then(
         (result) => invokeCallback(callback, result),
         (error: unknown) => {
@@ -100,7 +118,8 @@ export function registerPostgresSchemaExports(
       callback?: SchemaCallback,
       explicitResource?: string,
     ) {
-      const resource = resourceName(explicitResource);
+      const resource = resourceName(explicitResource, callback);
+      if (resource === null) return;
       void manager.plan(resource, schema).then(
         (result) => invokeCallback(callback, result),
         (error: unknown) => {
@@ -118,7 +137,8 @@ export function registerPostgresSchemaExports(
       callback?: SchemaCallback,
       explicitResource?: string,
     ) {
-      const resource = resourceName(explicitResource);
+      const resource = resourceName(explicitResource, callback);
+      if (resource === null) return;
       void manager.adopt(resource, schema, baselineVersion).then(
         (result) => invokeCallback(callback, result),
         (error: unknown) => {
@@ -136,7 +156,8 @@ export function registerPostgresSchemaExports(
       callback?: SchemaCallback,
       explicitResource?: string,
     ) {
-      const resource = resourceName(explicitResource);
+      const resource = resourceName(explicitResource, callback);
+      if (resource === null) return;
       void manager.planAdoption(resource, schema, baselineVersion).then(
         (result) => invokeCallback(callback, result),
         (error: unknown) => {
