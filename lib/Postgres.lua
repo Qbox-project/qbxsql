@@ -30,23 +30,28 @@ local function safeArgs(query, parameters, callback)
     return query, parameters, callback
 end
 
-local function call(method, query, parameters, callback)
-    query, parameters, callback = safeArgs(query, parameters, callback)
-    return adapter[method](nil, query, parameters, callback, resourceName)
-end
+--- Turns any callback-style helper into a blocking call.
+---
+--- `start` receives the completion callback and is responsible for passing it
+--- on; every await form below is one line of this, which keeps the promise
+--- plumbing in a single place.
+local function awaitCall(start)
+    local settled = promise.new()
 
-local function awaitQuery(method, query, parameters)
-    local response = promise.new()
-
-    call(method, query, parameters, function(result, err)
+    start(function(result, err)
         if err then
-            response:reject(err)
+            settled:reject(err)
         else
-            response:resolve(result)
+            settled:resolve(result)
         end
     end)
 
-    return Await(response)
+    return Await(settled)
+end
+
+local function call(method, query, parameters, callback)
+    query, parameters, callback = safeArgs(query, parameters, callback)
+    return adapter[method](nil, query, parameters, callback, resourceName)
 end
 
 -- Connector exports are named postgresQuery, postgresIsReady, and so on.
@@ -76,7 +81,7 @@ for name, exportName in pairs({
     local method = exportName
     Postgres[name] = setmetatable({
         await = function(query, parameters)
-            return awaitQuery(method, query, parameters)
+            return awaitCall(function(done) return call(method, query, parameters, done) end)
         end
     }, {
         __call = function(_, query, parameters, callback)
@@ -95,15 +100,7 @@ end
 
 Postgres.transaction = setmetatable({
     await = function(statements)
-        local response = promise.new()
-        transactionCall(statements, function(result, err)
-            if err then
-                response:reject(err)
-            else
-                response:resolve(result)
-            end
-        end)
-        return Await(response)
+        return awaitCall(function(done) return transactionCall(statements, done) end)
     end
 }, {
     __call = function(_, statements, callback)
@@ -191,15 +188,7 @@ end
 
 Postgres.extensions = setmetatable({
     await = function()
-        local response = promise.new()
-        extensionsCall(function(result, err)
-            if err then
-                response:reject(err)
-            else
-                response:resolve(result)
-            end
-        end)
-        return Await(response)
+        return awaitCall(extensionsCall)
     end
 }, {
     __call = function(_, callback)
@@ -213,15 +202,7 @@ local function schemaCall(method, schema, callback)
 end
 
 local function schemaAwait(method, schema)
-    local response = promise.new()
-    schemaCall(method, schema, function(result, err)
-        if err then
-            response:reject(err)
-        else
-            response:resolve(result)
-        end
-    end)
-    return Await(response)
+    return awaitCall(function(done) return schemaCall(method, schema, done) end)
 end
 
 Postgres.Schema = Postgres.Schema or {}
@@ -249,15 +230,9 @@ local function adoptionCall(method, schema, baselineVersion, callback)
 end
 
 local function adoptionAwait(method, schema, baselineVersion)
-    local response = promise.new()
-    adoptionCall(method, schema, baselineVersion, function(result, err)
-        if err then
-            response:reject(err)
-        else
-            response:resolve(result)
-        end
+    return awaitCall(function(done)
+        return adoptionCall(method, schema, baselineVersion, done)
     end)
-    return Await(response)
 end
 
 for name, exportName in pairs({

@@ -6,18 +6,25 @@ local function call(method, schema, callback)
     return adapter[method](nil, schema, callback, currentResource)
 end
 
-local function await(method, schema)
-    local response = promise.new()
+--- Turns any callback-style helper into a blocking call. `start` receives the
+--- completion callback and passes it on, which keeps the promise plumbing in
+--- one place rather than once per await form.
+local function awaitCall(start)
+    local settled = promise.new()
 
-    call(method, schema, function(result, err)
+    start(function(result, err)
         if err then
-            response:reject(err)
+            settled:reject(err)
         else
-            response:resolve(result)
+            settled:resolve(result)
         end
     end)
 
-    return Citizen.Await(response)
+    return Citizen.Await(settled)
+end
+
+local function await(method, schema)
+    return awaitCall(function(done) return call(method, schema, done) end)
 end
 
 local QBXSQL = QBXSQL or {}
@@ -43,17 +50,9 @@ local function adoptionCall(method, schema, baselineVersion, callback)
 end
 
 local function adoptionAwait(method, schema, baselineVersion)
-    local response = promise.new()
-
-    adoptionCall(method, schema, baselineVersion, function(result, err)
-        if err then
-            response:reject(err)
-        else
-            response:resolve(result)
-        end
+    return awaitCall(function(done)
+        return adoptionCall(method, schema, baselineVersion, done)
     end)
-
-    return Citizen.Await(response)
 end
 
 
