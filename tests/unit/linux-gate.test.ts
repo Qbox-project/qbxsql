@@ -24,6 +24,13 @@ describe('containerized Linux FXServer gate', () => {
     expect(script).toContain("'--env',\n  'QBXSQL_TEST_CONNECTION_STRING'");
     expect(script).toContain("'--env',\n  'QBXSQL_TEST_POSTGRES_CONNECTION_STRING'");
     expect(script).not.toContain('--license-key');
+    // The URL path must verify the download rather than piping curl into tar.
+    expect(script).toContain('sha256sum --check --strict --status');
+    expect(script).not.toContain('| tar -xJ -C /fxserver');
+    expect(script).toContain(
+      '4d55acd1306651aecf8457699485c736d08aae37b075c493a66dacd623402631',
+    );
+    expect(script).toContain("'--env',\n  'CFX_LINUX_ARTIFACT_SHA256'");
     expect(localRunner).toContain(
       '4d55acd1306651aecf8457699485c736d08aae37b075c493a66dacd623402631',
     );

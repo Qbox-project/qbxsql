@@ -57,7 +57,15 @@ jobs:
       - run: bun run test:contract
       - run: bun run build
       - name: Verify tracked build output
-        run: git diff --exit-code -- dist
+        # git diff ignores untracked files, so a build that emitted a new file
+        # under dist/ would pass. --porcelain reports those too.
+        run: |
+          git diff --exit-code -- dist
+          test -z "$(git status --porcelain -- dist)" || {
+            echo 'dist/ has untracked or modified files after building:'
+            git status --porcelain -- dist
+            exit 1
+          }
       - name: Run integration suite
         env:
           QBXSQL_TEST_ADMIN_URL: mysql://root:root@127.0.0.1:${{ job.services.database.ports['3306'] }}
