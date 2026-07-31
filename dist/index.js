@@ -28194,6 +28194,8 @@ __name(planPostgresSchema, "planPostgresSchema");
 
 // src/postgres-schema/manager.ts
 var advisoryLockNamespace = 196798833;
+var advisoryLockWaitMs = 3e4;
+var advisoryLockPollMs = 100;
 var PostgresSchemaMigrationRequiredError = class extends Error {
   constructor(plan) {
     const blocked = plan.actions.filter((action2) => !action2.automatic);
@@ -28649,11 +28651,33 @@ var PostgresSchemaManager = class {
       )`
     );
   }
+  /**
+   * lock_timeout does not apply to advisory locks, and pg_advisory_lock waits
+   * forever, so a stalled holder would hang every later ensure() with no way
+   * out. Poll pg_try_advisory_lock instead and give up the way MySQL's
+   * GET_LOCK('qbxsql:schema', 30) does.
+   */
   async acquireLock(connection) {
-    await connection.query("SELECT pg_advisory_lock($1, $2)", [advisoryLockNamespace, 1]);
+    const deadline = Date.now() + advisoryLockWaitMs;
+    for (; ; ) {
+      const { rows: rows4 } = await connection.query("SELECT pg_try_advisory_lock($1, $2) AS acquired", [
+        advisoryLockNamespace,
+        1
+      ]);
+      const acquired = (Array.isArray(rows4) ? rows4[0] : void 0)?.acquired;
+      if (acquired === true || acquired === "t" || Number(acquired) === 1) return;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out after ${advisoryLockWaitMs}ms waiting for the qbxsql PostgreSQL schema lock.`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, advisoryLockPollMs));
+    }
   }
   async releaseLock(connection) {
     await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, 1]).catch(() => {
+    });
+    await connection.query("RESET lock_timeout").catch(() => {
     });
   }
   async metadataExists() {

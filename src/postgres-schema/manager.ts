@@ -28,6 +28,8 @@ import {
 type Row = Record<string, unknown>;
 
 const advisoryLockNamespace = 1_967_988_33;
+const advisoryLockWaitMs = 30_000;
+const advisoryLockPollMs = 100;
 
 interface Registry {
   version: number;
@@ -561,14 +563,37 @@ export class PostgresSchemaManager {
     );
   }
 
+  /**
+   * lock_timeout does not apply to advisory locks, and pg_advisory_lock waits
+   * forever, so a stalled holder would hang every later ensure() with no way
+   * out. Poll pg_try_advisory_lock instead and give up the way MySQL's
+   * GET_LOCK('qbxsql:schema', 30) does.
+   */
   private async acquireLock(connection: DatabaseConnection): Promise<void> {
-    await connection.query('SELECT pg_advisory_lock($1, $2)', [advisoryLockNamespace, 1]);
+    const deadline = Date.now() + advisoryLockWaitMs;
+    for (;;) {
+      const { rows } = await connection.query('SELECT pg_try_advisory_lock($1, $2) AS acquired', [
+        advisoryLockNamespace,
+        1,
+      ]);
+      const acquired = (Array.isArray(rows) ? (rows[0] as Row | undefined) : undefined)?.acquired;
+      if (acquired === true || acquired === 't' || Number(acquired) === 1) return;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out after ${advisoryLockWaitMs}ms waiting for the qbxsql PostgreSQL schema lock.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, advisoryLockPollMs));
+    }
   }
 
   private async releaseLock(connection: DatabaseConnection): Promise<void> {
     await connection
       .query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, 1])
       .catch(() => {});
+    // The concurrent-DDL branch sets lock_timeout at session scope; reset it so
+    // the setting does not follow this connection back into the pool.
+    await connection.query('RESET lock_timeout').catch(() => {});
   }
 
   private async metadataExists(): Promise<boolean> {
