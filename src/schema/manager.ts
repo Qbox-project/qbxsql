@@ -784,7 +784,7 @@ export class SchemaManager {
     }
     if (existing?.status === 'failed' && migration.operations.some((operation) => operation.type === 'sql')) {
       throw new Error(
-        `Migration ${migration.version} contains raw SQL and previously failed; inspect it before retrying.`,
+        `Migration ${migration.version} contains raw SQL and previously failed; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`,
       );
     }
 

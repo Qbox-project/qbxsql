@@ -30546,7 +30546,7 @@ var SchemaManager = class {
     }
     if (existing?.status === "failed" && migration.operations.some((operation) => operation.type === "sql")) {
       throw new Error(
-        `Migration ${migration.version} contains raw SQL and previously failed; inspect it before retrying.`
+        `Migration ${migration.version} contains raw SQL and previously failed; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`
       );
     }
     await this.database.update(
@@ -32897,6 +32897,11 @@ if (typeof on === "function") {
       if (connectorStarted) void Promise.all(services.map((service) => service.close()));
       if (isConcreteOxmysqlInstalled() && !isQbxsqlCompatibilityBridge()) {
         reportOxmysqlConflict();
+      }
+      if (connectorStarted) {
+        console.warn(
+          `^3[${resourceName4}] Stopped. Resources that already called exports.oxmysql, exports['mysql-async'], or exports.ghmattimysql keep a stale cached reference and must be restarted too; restarting the server is the reliable option.^0`
+        );
       }
     }
   });

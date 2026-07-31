@@ -23,6 +23,37 @@ Compatibility fixtures also cover the less obvious 2.14.1 behavior:
 - callback exceptions are isolated, promise calls reject database errors, failed statement-list transactions resolve `false`, and callback-transaction failures emit `oxmysql:error`;
 - `_async`, `Sync`, `Async`, stored-query, mysql-async, and ghmattimysql aliases are registered.
 
+## Restarting qbxsql at runtime
+
+Restart the whole server, not just `qbxsql`, whenever a resource has already
+called the legacy aliases.
+
+qbxsql serves `exports.oxmysql`, `exports['mysql-async']`, and
+`exports.ghmattimysql` by answering the `__cfx_export_<name>_<method>` event.
+The CFX scheduler caches the fetched closure in the *calling* resource under the
+name that was referenced, and invalidates that cache only when a resource with
+that exact name stops. Stopping `qbxsql` therefore clears cached
+`exports.qbxsql` entries but leaves cached `exports.oxmysql` entries pointing at
+functions that no longer exist, and the next call fails with "attempted to call
+a function reference that no longer exists" until the *consumer* is restarted.
+
+This is inherent to serving another resource's name and cannot be fixed from
+qbxsql's side. It does not affect consumers that call `exports.qbxsql` directly
+or that include `@qbxsql/lib/MySQL.lua`. Installing the physical oxmysql
+bridge (`tests/fxserver/oxmysql_bridge`) also avoids it for the `oxmysql` name,
+because the bridge is a real resource whose name matches the cache key.
+
+## Known deliberate deviations
+
+- **`null` rather than `undefined` for empty results.** `single`, `scalar`, and
+  `insert` return `null` where oxmysql returns `undefined`. Everything crossing
+  the Lua boundary is normalized so that absent values arrive as `nil`, and both
+  spellings are `nil` in Lua. Only JavaScript consumers comparing with
+  `=== undefined` can observe the difference.
+- **`version` reports oxmysql's version.** `fxmanifest.lua` declares
+  `version '2.14.1'` so dependency checks in other resources pass. qbxsql's own
+  version is in `qbxsql_version`.
+
 ## Database release target
 
 Routine CI uses MariaDB 11.4 and PostgreSQL 16 as the representative integration targets. MariaDB 10.11/11.8 and MySQL 8.0/8.4 remain supported lines and should be rerun locally when query serialization, schema introspection, or DDL behavior changes. They are not separate jobs on every push.

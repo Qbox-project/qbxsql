@@ -328,6 +328,15 @@ if (typeof on === 'function') {
       if (isConcreteOxmysqlInstalled() && !isQbxsqlCompatibilityBridge()) {
         reportOxmysqlConflict();
       }
+      if (connectorStarted) {
+        // CFX caches an export closure in the calling resource under the name it
+        // referenced, and only invalidates that cache when a resource of that
+        // name stops. Consumers holding exports.oxmysql/mysql-async/ghmattimysql
+        // closures keep pointing at functions that no longer exist.
+        console.warn(
+          `^3[${resourceName}] Stopped. Resources that already called exports.oxmysql, exports['mysql-async'], or exports.ghmattimysql keep a stale cached reference and must be restarted too; restarting the server is the reliable option.^0`,
+        );
+      }
     }
   });
 }

@@ -43,6 +43,18 @@ PostgreSQL migrations additionally support `addCheck`, `dropConstraint`, and `va
 
 Only one resource can own a table. Ownership follows a successful rename and is removed only after a successful drop. A declaration cannot silently abandon a table; use `releaseTable` with `allowOwnershipTransfer = true`.
 
+Ownership is bound to the calling resource: qbxsql resolves it from
+`GetInvokingResource()`, and the resource name the Lua shim passes is accepted
+only when it agrees with the runtime. A resource that tries to manage schemas
+under another resource's name is refused with `QBXSQL_SCHEMA_RESOURCE_MISMATCH`.
+
+**Ownership governs DDL, not data access.** It decides which resource may apply
+schema changes to a table. It places no restriction on which resource may
+`SELECT`, `INSERT`, or `UPDATE` through the ordinary query exports, where the
+invoking resource is recorded for logging and attribution only. Do not read
+`qbxsql_schema_tables` or `qbxsql_internal.owned_tables` as an access-control
+boundary between resources.
+
 Introspection is limited to declared, owned, and migration-source tables. Drift detection covers columns (including enums and `ON UPDATE CURRENT_TIMESTAMP`), primary keys, indexes, foreign keys, engine, charset, and collation. Undeclared columns/indexes/foreign keys are reported but never silently removed.
 
 PostgreSQL introspection is likewise scoped and covers formatted column types, nullability, defaults, identity mode, comments, primary keys, index definition/validity, checks, and foreign keys. Managed application tables are in `public`; internal state is isolated in `qbxsql_internal`.
