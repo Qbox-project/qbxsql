@@ -27,6 +27,8 @@ import {
 
 type Row = Record<string, unknown>;
 
+const advisoryLockNamespace = 1_967_988_33;
+
 interface Registry {
   version: number;
   checksum: string;
@@ -227,17 +229,25 @@ export class PostgresSchemaManager {
     const schema = validatePostgresSchema(input);
     const checksum = postgresSchemaChecksum(schema);
     const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
-    await this.initialize();
-    const registry = await this.readRegistry(resource);
-    if (registry && registry.version > schema.version) {
-      throw new Error(
-        `Refusing to downgrade PostgreSQL schema '${resource}' from ${registry.version} to ${schema.version}.`,
-      );
+    // Planning is read-only. Calling initialize() here would create
+    // qbxsql_internal and its tables as a side effect of a dry run, including
+    // when the operator has set the schema mode to off to freeze the database.
+    const metadataReady = await this.metadataExists();
+    let registry: Registry | null = null;
+    let migrations: readonly PostgresMigrationDefinition[] = [];
+    let relevant = Object.keys(schema.tables);
+    if (metadataReady) {
+      registry = await this.readRegistry(resource);
+      if (registry && registry.version > schema.version) {
+        throw new Error(
+          `Refusing to downgrade PostgreSQL schema '${resource}' from ${registry.version} to ${schema.version}.`,
+        );
+      }
+      migrations = this.pendingMigrations(schema, registry?.version ?? schema.version);
+      this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
+      this.assertOwnershipTransitions(resource, registry, schema, migrations);
+      relevant = await this.relevantTables(resource, schema, migrations);
     }
-    const migrations = this.pendingMigrations(schema, registry?.version ?? schema.version);
-    this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
-    this.assertOwnershipTransitions(resource, registry, schema, migrations);
-    const relevant = await this.relevantTables(resource, schema, migrations);
     const actual = await introspectPostgresDatabase(this.database, relevant);
     const drift = planPostgresSchema(resource, schema, actual);
     return {
@@ -552,11 +562,21 @@ export class PostgresSchemaManager {
   }
 
   private async acquireLock(connection: DatabaseConnection): Promise<void> {
-    await connection.query('SELECT pg_advisory_lock($1, $2)', [1_967_988_33, 1]);
+    await connection.query('SELECT pg_advisory_lock($1, $2)', [advisoryLockNamespace, 1]);
   }
 
   private async releaseLock(connection: DatabaseConnection): Promise<void> {
-    await connection.query('SELECT pg_advisory_unlock($1, $2)', [1_967_988_33, 1]).catch(() => {});
+    await connection
+      .query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, 1])
+      .catch(() => {});
+  }
+
+  private async metadataExists(): Promise<boolean> {
+    return Boolean(await this.database.scalar(
+      `SELECT 1
+         FROM pg_catalog.pg_tables
+        WHERE schemaname = 'qbxsql_internal' AND tablename = 'schema_registry'`,
+    ));
   }
 
   private async readRegistry(resource: string): Promise<Registry | null> {

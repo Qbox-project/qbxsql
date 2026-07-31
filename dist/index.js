@@ -28193,6 +28193,7 @@ function planPostgresSchema(resource, schema, actual) {
 __name(planPostgresSchema, "planPostgresSchema");
 
 // src/postgres-schema/manager.ts
+var advisoryLockNamespace = 196798833;
 var PostgresSchemaMigrationRequiredError = class extends Error {
   constructor(plan) {
     const blocked = plan.actions.filter((action2) => !action2.automatic);
@@ -28357,17 +28358,22 @@ var PostgresSchemaManager = class {
     const schema = validatePostgresSchema(input);
     const checksum = postgresSchemaChecksum(schema);
     const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
-    await this.initialize();
-    const registry = await this.readRegistry(resource);
-    if (registry && registry.version > schema.version) {
-      throw new Error(
-        `Refusing to downgrade PostgreSQL schema '${resource}' from ${registry.version} to ${schema.version}.`
-      );
+    const metadataReady = await this.metadataExists();
+    let registry = null;
+    let migrations = [];
+    let relevant = Object.keys(schema.tables);
+    if (metadataReady) {
+      registry = await this.readRegistry(resource);
+      if (registry && registry.version > schema.version) {
+        throw new Error(
+          `Refusing to downgrade PostgreSQL schema '${resource}' from ${registry.version} to ${schema.version}.`
+        );
+      }
+      migrations = this.pendingMigrations(schema, registry?.version ?? schema.version);
+      this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
+      this.assertOwnershipTransitions(resource, registry, schema, migrations);
+      relevant = await this.relevantTables(resource, schema, migrations);
     }
-    const migrations = this.pendingMigrations(schema, registry?.version ?? schema.version);
-    this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
-    this.assertOwnershipTransitions(resource, registry, schema, migrations);
-    const relevant = await this.relevantTables(resource, schema, migrations);
     const actual = await introspectPostgresDatabase(this.database, relevant);
     const drift = planPostgresSchema(resource, schema, actual);
     return {
@@ -28644,11 +28650,18 @@ var PostgresSchemaManager = class {
     );
   }
   async acquireLock(connection) {
-    await connection.query("SELECT pg_advisory_lock($1, $2)", [196798833, 1]);
+    await connection.query("SELECT pg_advisory_lock($1, $2)", [advisoryLockNamespace, 1]);
   }
   async releaseLock(connection) {
-    await connection.query("SELECT pg_advisory_unlock($1, $2)", [196798833, 1]).catch(() => {
+    await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, 1]).catch(() => {
     });
+  }
+  async metadataExists() {
+    return Boolean(await this.database.scalar(
+      `SELECT 1
+         FROM pg_catalog.pg_tables
+        WHERE schemaname = 'qbxsql_internal' AND tablename = 'schema_registry'`
+    ));
   }
   async readRegistry(resource) {
     const row = first(await this.database.query(
