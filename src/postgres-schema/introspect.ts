@@ -18,6 +18,10 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
 }
 
+function numberArray(value: unknown): number[] {
+  return Array.isArray(value) ? value.map((entry) => Number(entry)) : [];
+}
+
 function indexOptions(value: unknown): Record<string, string> {
   const result: Record<string, string> = {};
   for (const option of stringArray(value)) {
@@ -98,6 +102,12 @@ export async function introspectPostgresDatabase(
               )::text[] AS "operatorClasses",
               index_class.reloptions AS options,
               pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS predicate,
+              ARRAY(
+                SELECT option
+                  FROM unnest(idx.indoption::int2[]) WITH ORDINALITY AS opt(option, position)
+                 WHERE opt.position <= idx.indnkeyatts
+                 ORDER BY opt.position
+              )::int[] AS "columnOptions",
               ARRAY(
                 SELECT pg_catalog.pg_get_indexdef(idx.indexrelid, position, TRUE)
                   FROM generate_series(1, idx.indnkeyatts) position
@@ -200,6 +210,7 @@ export async function introspectPostgresDatabase(
       valid: Boolean(row.valid),
       method: String(row.method),
       operatorClasses: stringArray(row.operatorClasses),
+      columnOptions: numberArray(row.columnOptions),
       options: indexOptions(row.options),
       predicate: row.predicate === null || row.predicate === undefined ? null : String(row.predicate),
     };

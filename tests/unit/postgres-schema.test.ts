@@ -113,6 +113,174 @@ describe('PostgreSQL declarative schemas', () => {
     ).toMatchObject({ concurrent: true });
   });
 
+  test('converges on timestamp and time columns', () => {
+    const input = schema();
+    input.tables.properties!.columns.starts_at = { type: 'timestamp', nullable: true };
+    input.tables.properties!.columns.opens_at = { type: 'time', nullable: true };
+    const value = validatePostgresSchema(input);
+    const actual: ActualPostgresTable = {
+      name: 'properties',
+      comment: '',
+      columns: new Map([
+        ['id', {
+          name: 'id',
+          formattedType: 'bigint',
+          nullable: false,
+          defaultExpression: null,
+          identity: 'd',
+          comment: '',
+        }],
+        ['owner', {
+          name: 'owner',
+          formattedType: 'character varying(64)',
+          nullable: false,
+          defaultExpression: null,
+          identity: '',
+          comment: '',
+        }],
+        ['metadata', {
+          name: 'metadata',
+          formattedType: 'jsonb',
+          nullable: false,
+          defaultExpression: `'{}'::jsonb`,
+          identity: '',
+          comment: '',
+        }],
+        ['created_at', {
+          name: 'created_at',
+          formattedType: 'timestamp with time zone',
+          nullable: false,
+          defaultExpression: 'CURRENT_TIMESTAMP',
+          identity: '',
+          comment: '',
+        }],
+        // What format_type() actually reports for these declarations.
+        ['starts_at', {
+          name: 'starts_at',
+          formattedType: 'timestamp without time zone',
+          nullable: true,
+          defaultExpression: null,
+          identity: '',
+          comment: '',
+        }],
+        ['opens_at', {
+          name: 'opens_at',
+          formattedType: 'time without time zone',
+          nullable: true,
+          defaultExpression: null,
+          identity: '',
+          comment: '',
+        }],
+      ]),
+      indexes: new Map([
+        ['properties_owner_idx', {
+          name: 'properties_owner_idx',
+          columns: ['owner'],
+          include: [],
+          unique: false,
+          primary: false,
+          valid: true,
+          method: 'btree',
+          columnOptions: [0],
+          predicate: 'owner IS NOT NULL',
+        }],
+      ]),
+      checks: new Map([
+        ['properties_owner_check', {
+          name: 'properties_owner_check',
+          expression: `owner <> ''`,
+          validated: true,
+        }],
+      ]),
+      foreignKeys: new Map(),
+      primaryKey: ['id'],
+      primaryKeyName: 'properties_pkey',
+    };
+
+    const plan = planPostgresSchema('housing', value, new Map([['properties', actual]]));
+    expect(plan.actions).toHaveLength(0);
+  });
+
+  test('compares declared index ordering against indoption bits', () => {
+    const input = schema();
+    input.tables.properties!.indexes = [{
+      name: 'properties_owner_idx',
+      columns: [{ name: 'owner', order: 'ASC' }],
+    }];
+    const value = validatePostgresSchema(input);
+    const table = (columnOptions: number[]): ActualPostgresTable => ({
+      name: 'properties',
+      comment: '',
+      columns: new Map([
+        ['id', {
+          name: 'id',
+          formattedType: 'bigint',
+          nullable: false,
+          defaultExpression: null,
+          identity: 'd',
+          comment: '',
+        }],
+        ['owner', {
+          name: 'owner',
+          formattedType: 'character varying(64)',
+          nullable: false,
+          defaultExpression: null,
+          identity: '',
+          comment: '',
+        }],
+        ['metadata', {
+          name: 'metadata',
+          formattedType: 'jsonb',
+          nullable: false,
+          defaultExpression: `'{}'::jsonb`,
+          identity: '',
+          comment: '',
+        }],
+        ['created_at', {
+          name: 'created_at',
+          formattedType: 'timestamp with time zone',
+          nullable: false,
+          defaultExpression: 'CURRENT_TIMESTAMP',
+          identity: '',
+          comment: '',
+        }],
+      ]),
+      indexes: new Map([
+        ['properties_owner_idx', {
+          name: 'properties_owner_idx',
+          // pg_get_indexdef(..., attrsOnly) reports the bare column only.
+          columns: ['owner'],
+          include: [],
+          unique: false,
+          primary: false,
+          valid: true,
+          method: 'btree',
+          columnOptions,
+          predicate: null,
+        }],
+      ]),
+      checks: new Map([
+        ['properties_owner_check', {
+          name: 'properties_owner_check',
+          expression: `owner <> ''`,
+          validated: true,
+        }],
+      ]),
+      foreignKeys: new Map(),
+      primaryKey: ['id'],
+      primaryKeyName: 'properties_pkey',
+    });
+
+    // ASC NULLS LAST is the default, so a declared ASC is not drift.
+    expect(
+      planPostgresSchema('housing', value, new Map([['properties', table([0])]])).actions,
+    ).toHaveLength(0);
+    // 0x1 marks the stored index DESC, which no longer matches.
+    expect(
+      planPostgresSchema('housing', value, new Map([['properties', table([1])]])).actions.length,
+    ).toBeGreaterThan(0);
+  });
+
   test('plans new tables and uses concurrent indexes for existing tables', () => {
     const value = validatePostgresSchema(schema());
     const fresh = planPostgresSchema('housing', value, new Map());

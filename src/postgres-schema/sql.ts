@@ -63,6 +63,12 @@ export function postgresType(column: PostgresColumnDefinition): string {
       return `CHARACTER VARYING(${column.length})`;
     case 'timestamptz':
       return 'TIMESTAMP WITH TIME ZONE';
+    // format_type() spells these out, and the planner compares against it, so
+    // the short forms would read as permanent drift.
+    case 'timestamp':
+      return 'TIMESTAMP WITHOUT TIME ZONE';
+    case 'time':
+      return 'TIME WITHOUT TIME ZONE';
     default:
       return column.type.toUpperCase();
   }

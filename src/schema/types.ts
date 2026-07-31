@@ -127,6 +127,8 @@ export interface ActualColumn {
   name: string;
   type: string;
   columnType: string;
+  /** COLUMN_TYPE with its original casing, needed to compare enum members. */
+  columnTypeRaw: string;
   nullable: boolean;
   defaultValue: string | number | null;
   extra: string;

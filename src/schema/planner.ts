@@ -144,7 +144,7 @@ export function compareColumn(
 
   if (targetType === 'enum') {
     const desiredValues = desired.values ?? [];
-    const actualValues = parseEnumValues(actual.columnType);
+    const actualValues = parseEnumValues(actual.columnTypeRaw || actual.columnType);
     if (!sameColumns(desiredValues, actualValues)) {
       changed = true;
       const preservesExistingValues = actualValues.every(

@@ -225,6 +225,8 @@ export interface ActualPostgresIndex {
   valid: boolean;
   method: string;
   operatorClasses?: string[];
+  /** Raw pg_index.indoption bits per key column: 0x1 DESC, 0x2 NULLS FIRST. */
+  columnOptions?: number[];
   options?: Record<string, string>;
   predicate: string | null;
 }

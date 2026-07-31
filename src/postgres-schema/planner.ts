@@ -93,18 +93,46 @@ function safeWidening(actual: string, desired: PostgresColumnDefinition): boolea
   return Boolean(match && Number(match[1]) <= (desired.length ?? 0));
 }
 
+const indoptionDesc = 0x1;
+const indoptionNullsFirst = 0x2;
+
+/**
+ * pg_get_indexdef(..., attrsOnly) prints the bare column or expression and
+ * omits ordering, so declared ordering is compared against the indoption
+ * bitmask instead. PostgreSQL defaults NULLS LAST for ASC and FIRST for DESC.
+ */
+function indexOrderingMatches(
+  actual: ActualPostgresIndex,
+  desired: PostgresIndexDefinition,
+): boolean {
+  const options = actual.columnOptions;
+  if (!options || options.length === 0) {
+    // Older introspection payloads cannot report ordering; only a declared
+    // non-default ordering is treated as drift we cannot confirm.
+    return desired.columns.every(
+      (column) => typeof column === 'string' || (!column.order && !column.nulls),
+    );
+  }
+
+  return desired.columns.every((column, index) => {
+    const option = options[index] ?? 0;
+    const actualDescending = (option & indoptionDesc) !== 0;
+    const actualNullsFirst = (option & indoptionNullsFirst) !== 0;
+    const desiredDescending = typeof column === 'string' ? false : column.order === 'DESC';
+    const desiredNulls = typeof column === 'string' ? undefined : column.nulls;
+    const desiredNullsFirst =
+      desiredNulls === undefined ? desiredDescending : desiredNulls === 'FIRST';
+    return actualDescending === desiredDescending && actualNullsFirst === desiredNullsFirst;
+  });
+}
+
 function indexMatches(
   actual: ActualPostgresIndex,
   desired: PostgresIndexDefinition,
 ): boolean {
-  const desiredColumns = desired.columns.map((column) => {
-    if (typeof column === 'string') return column;
-    return [
-      column.name,
-      column.order,
-      column.nulls ? `NULLS ${column.nulls}` : undefined,
-    ].filter(Boolean).join(' ');
-  });
+  const desiredColumns = desired.columns.map((column) =>
+    typeof column === 'string' ? column : column.name,
+  );
   const desiredOptions = Object.fromEntries(
     Object.entries(desired.options ?? {}).map(([key, value]) => [key, String(value)]),
   );
@@ -118,6 +146,7 @@ function indexMatches(
       typeof column === 'string' ||
       column.operatorClass === undefined ||
       (actual.operatorClasses ?? [])[index] === column.operatorClass) &&
+    indexOrderingMatches(actual, desired) &&
     sameArray(actual.include, desired.include ?? []) &&
     Object.keys(desiredOptions).length === Object.keys(actualOptions).length &&
     Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) &&

@@ -29,6 +29,7 @@ function actual(length: number): ActualTable {
           name: 'id',
           type: 'bigint',
           columnType: 'bigint(20) unsigned',
+          columnTypeRaw: 'bigint(20) unsigned',
           nullable: false,
           defaultValue: null,
           extra: 'auto_increment',
@@ -44,6 +45,7 @@ function actual(length: number): ActualTable {
           name: 'label',
           type: 'varchar',
           columnType: `varchar(${length})`,
+          columnTypeRaw: `varchar(${length})`,
           nullable: false,
           defaultValue: null,
           extra: '',
@@ -129,6 +131,7 @@ describe('declarative schema planner', () => {
       name: 'legacy',
       type: 'text',
       columnType: 'text',
+      columnTypeRaw: 'text',
       nullable: true,
       defaultValue: null,
       extra: '',
@@ -148,6 +151,7 @@ describe('declarative schema planner', () => {
       name: 'status',
       type: 'enum',
       columnType: "enum('draft','published')",
+      columnTypeRaw: "enum('draft','published')",
       nullable: false,
       defaultValue: 'draft',
       extra: '',
@@ -160,6 +164,7 @@ describe('declarative schema planner', () => {
       name: 'updated_at',
       type: 'timestamp',
       columnType: 'timestamp',
+      columnTypeRaw: 'timestamp',
       nullable: false,
       defaultValue: 'current_timestamp()',
       extra: '',
@@ -186,6 +191,32 @@ describe('declarative schema planner', () => {
     expect(plan.actions.map((entry) => entry.reason).join(' ')).toContain(
       'ON UPDATE CURRENT_TIMESTAMP',
     );
+  });
+
+  test('converges on enum values that are not all lowercase', () => {
+    const current = actual(50);
+    current.columns.set('status', {
+      name: 'status',
+      type: 'enum',
+      columnType: "enum('pending','active')",
+      columnTypeRaw: "enum('Pending','Active')",
+      nullable: false,
+      defaultValue: 'Pending',
+      extra: '',
+      maximumLength: 7,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.columns.status = {
+      type: 'enum',
+      values: ['Pending', 'Active'],
+      default: 'Pending',
+    };
+
+    const plan = planSchema('housing', desired, new Map([['properties', current]]));
+    expect(plan.actions).toHaveLength(0);
   });
 
   test('detects engine, charset, and collation drift', () => {

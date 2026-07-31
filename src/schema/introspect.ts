@@ -100,6 +100,7 @@ export async function introspectDatabase(
       name: text(row.columnName),
       type: text(row.dataType).toLowerCase(),
       columnType: text(row.columnType).toLowerCase(),
+      columnTypeRaw: text(row.columnType),
       nullable: text(row.isNullable) === 'YES',
       defaultValue: row.defaultValue as string | number | null,
       extra: text(row.extra).toLowerCase(),

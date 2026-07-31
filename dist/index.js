@@ -26711,6 +26711,10 @@ function stringArray(value) {
   return Array.isArray(value) ? value.map(String) : [];
 }
 __name(stringArray, "stringArray");
+function numberArray(value) {
+  return Array.isArray(value) ? value.map((entry) => Number(entry)) : [];
+}
+__name(numberArray, "numberArray");
 function indexOptions(value) {
   const result = {};
   for (const option of stringArray(value)) {
@@ -26787,6 +26791,12 @@ async function introspectPostgresDatabase(database2, tableNames) {
               )::text[] AS "operatorClasses",
               index_class.reloptions AS options,
               pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS predicate,
+              ARRAY(
+                SELECT option
+                  FROM unnest(idx.indoption::int2[]) WITH ORDINALITY AS opt(option, position)
+                 WHERE opt.position <= idx.indnkeyatts
+                 ORDER BY opt.position
+              )::int[] AS "columnOptions",
               ARRAY(
                 SELECT pg_catalog.pg_get_indexdef(idx.indexrelid, position, TRUE)
                   FROM generate_series(1, idx.indnkeyatts) position
@@ -26883,6 +26893,7 @@ async function introspectPostgresDatabase(database2, tableNames) {
       valid: Boolean(row.valid),
       method: String(row.method),
       operatorClasses: stringArray(row.operatorClasses),
+      columnOptions: numberArray(row.columnOptions),
       options: indexOptions(row.options),
       predicate: row.predicate === null || row.predicate === void 0 ? null : String(row.predicate)
     };
@@ -27532,6 +27543,12 @@ function postgresType(column) {
       return `CHARACTER VARYING(${column.length})`;
     case "timestamptz":
       return "TIMESTAMP WITH TIME ZONE";
+    // format_type() spells these out, and the planner compares against it, so
+    // the short forms would read as permanent drift.
+    case "timestamp":
+      return "TIMESTAMP WITHOUT TIME ZONE";
+    case "time":
+      return "TIME WITHOUT TIME ZONE";
     default:
       return column.type.toUpperCase();
   }
@@ -27794,20 +27811,35 @@ function safeWidening(actual, desired) {
   return Boolean(match && Number(match[1]) <= (desired.length ?? 0));
 }
 __name(safeWidening, "safeWidening");
-function indexMatches(actual, desired) {
-  const desiredColumns = desired.columns.map((column) => {
-    if (typeof column === "string") return column;
-    return [
-      column.name,
-      column.order,
-      column.nulls ? `NULLS ${column.nulls}` : void 0
-    ].filter(Boolean).join(" ");
+var indoptionDesc = 1;
+var indoptionNullsFirst = 2;
+function indexOrderingMatches(actual, desired) {
+  const options = actual.columnOptions;
+  if (!options || options.length === 0) {
+    return desired.columns.every(
+      (column) => typeof column === "string" || !column.order && !column.nulls
+    );
+  }
+  return desired.columns.every((column, index) => {
+    const option = options[index] ?? 0;
+    const actualDescending = (option & indoptionDesc) !== 0;
+    const actualNullsFirst = (option & indoptionNullsFirst) !== 0;
+    const desiredDescending = typeof column === "string" ? false : column.order === "DESC";
+    const desiredNulls = typeof column === "string" ? void 0 : column.nulls;
+    const desiredNullsFirst = desiredNulls === void 0 ? desiredDescending : desiredNulls === "FIRST";
+    return actualDescending === desiredDescending && actualNullsFirst === desiredNullsFirst;
   });
+}
+__name(indexOrderingMatches, "indexOrderingMatches");
+function indexMatches(actual, desired) {
+  const desiredColumns = desired.columns.map(
+    (column) => typeof column === "string" ? column : column.name
+  );
   const desiredOptions = Object.fromEntries(
     Object.entries(desired.options ?? {}).map(([key, value]) => [key, String(value)])
   );
   const actualOptions = actual.options ?? {};
-  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desiredColumns) && desired.columns.every((column, index) => typeof column === "string" || column.operatorClass === void 0 || (actual.operatorClasses ?? [])[index] === column.operatorClass) && sameArray(actual.include, desired.include ?? []) && Object.keys(desiredOptions).length === Object.keys(actualOptions).length && Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) && normalizeSql(actual.predicate) === normalizeSql(desired.where);
+  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desiredColumns) && desired.columns.every((column, index) => typeof column === "string" || column.operatorClass === void 0 || (actual.operatorClasses ?? [])[index] === column.operatorClass) && indexOrderingMatches(actual, desired) && sameArray(actual.include, desired.include ?? []) && Object.keys(desiredOptions).length === Object.keys(actualOptions).length && Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) && normalizeSql(actual.predicate) === normalizeSql(desired.where);
 }
 __name(indexMatches, "indexMatches");
 function foreignKeyMatches(actual, desired) {
@@ -29188,6 +29220,7 @@ async function introspectDatabase(database2, tableNames) {
       name: text(row.columnName),
       type: text(row.dataType).toLowerCase(),
       columnType: text(row.columnType).toLowerCase(),
+      columnTypeRaw: text(row.columnType),
       nullable: text(row.isNullable) === "YES",
       defaultValue: row.defaultValue,
       extra: text(row.extra).toLowerCase(),
@@ -29481,7 +29514,7 @@ function compareColumn(name, desired, actual) {
   }
   if (targetType === "enum") {
     const desiredValues = desired.values ?? [];
-    const actualValues = parseEnumValues(actual.columnType);
+    const actualValues = parseEnumValues(actual.columnTypeRaw || actual.columnType);
     if (!sameColumns(desiredValues, actualValues)) {
       changed = true;
       const preservesExistingValues = actualValues.every(
