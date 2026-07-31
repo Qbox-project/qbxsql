@@ -28390,6 +28390,10 @@ var PostgresSchemaManager = class {
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       this.assertOwnershipTransitions(resource, registry, schema, migrations);
       this.assertBlockingPolicy(migrations);
+      await this.assertOwnership(lock, resource, [
+        ...Object.keys(schema.tables),
+        ...migrations.flatMap((migration) => migration.operations.flatMap(operationTable))
+      ]);
       const appliedMigrations = [];
       const appliedActions = [];
       for (const migration of migrations) {
@@ -28729,6 +28733,28 @@ var PostgresSchemaManager = class {
       }
     }
     if (unmanaged.length > 0) throw new PostgresSchemaAdoptionRequiredError(resource, unmanaged);
+  }
+  /**
+   * Refuse tables owned by another resource before any DDL runs. finishSchema
+   * re-checks ownership, but it only runs after every statement has committed,
+   * so on its own it would leave the other resource's table already mutated.
+   */
+  async assertOwnership(connection, resource, tableNames) {
+    const unique = [...new Set(tableNames)];
+    if (unique.length === 0) return;
+    const { rows: rows4 } = await connection.query(
+      `SELECT table_name AS "tableName", resource_name AS resource
+         FROM qbxsql_internal.owned_tables
+        WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
+      [unique]
+    );
+    for (const row of Array.isArray(rows4) ? rows4 : []) {
+      if (String(row.resource) !== resource) {
+        throw new PostgresSchemaAdoptionConflictError(
+          `PostgreSQL table public.${String(row.tableName)} is owned by resource '${String(row.resource)}', not '${resource}'.`
+        );
+      }
+    }
   }
   async hasInterruptedReconciliation(resource, schemaChecksum2) {
     return Number(await this.database.scalar(
