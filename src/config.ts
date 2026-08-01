@@ -28,6 +28,7 @@ export interface QbxSqlConfig {
   schemaAllowBlocking: boolean;
   schemaConnectionString?: string;
   schemaLockTimeout?: number;
+  schemaLockAcquireTimeout?: number;
   connectionLimitExplicit?: boolean;
   connectTimeoutExplicit?: boolean;
 }
@@ -220,6 +221,11 @@ function databaseConfig(options: DatabaseConfigOptions): QbxSqlConfig {
       [`${prefix}schema_lock_timeout`, 'qbxsql_schema_lock_timeout'],
       options.dialect === 'postgresql' ? 2_000 : 30_000,
       1,
+    ).value,
+    schemaLockAcquireTimeout: integerOption(
+      [`${prefix}schema_lock_acquire_timeout`, 'qbxsql_schema_lock_acquire_timeout'],
+      30_000,
+      1_000,
     ).value,
     ...(options.schemaConnectionString
       ? { schemaConnectionString: options.schemaConnectionString }

@@ -71,6 +71,9 @@ function createRuntime(): Runtime {
             mode: config.schemaMode,
             allowBlocking: config.schemaAllowBlocking,
             applicationDatabase: mysqlDatabase,
+            ...(config.mysql?.schemaLockAcquireTimeout !== undefined
+              ? { lockAcquireTimeout: config.mysql.schemaLockAcquireTimeout }
+              : {}),
           })
         : null,
     postgresSchemaDatabase,
@@ -83,6 +86,9 @@ function createRuntime(): Runtime {
             extensionRegistry: postgresExtensions!,
             ...(config.postgres?.schemaLockTimeout !== undefined
               ? { lockTimeout: config.postgres.schemaLockTimeout }
+              : {}),
+            ...(config.postgres?.schemaLockAcquireTimeout !== undefined
+              ? { lockAcquireTimeout: config.postgres.schemaLockAcquireTimeout }
               : {}),
           })
         : null,

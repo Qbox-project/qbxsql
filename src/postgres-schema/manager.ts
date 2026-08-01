@@ -29,8 +29,24 @@ import {
 type Row = Record<string, unknown>;
 
 const advisoryLockNamespace = 1_967_988_33;
-const advisoryLockWaitMs = 30_000;
 const advisoryLockPollMs = 100;
+
+/**
+ * FNV-1a over the database and subject names, folded to the signed 32-bit
+ * range the second advisory-key slot accepts. One global key would let a
+ * single resource's slow CREATE INDEX CONCURRENTLY starve every other
+ * resource's boot-time ensure; advisory keys are cluster-wide, so the
+ * database name keeps servers on separate databases from contending too.
+ */
+function advisoryLockKey(database: string | null, subject: string): number {
+  const text = `${database ?? ''}:${subject}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash | 0;
+}
 
 interface Registry {
   version: number;
@@ -55,6 +71,8 @@ export interface PostgresSchemaManagerOptions {
   mode?: 'auto' | 'plan' | 'off';
   allowBlocking?: boolean;
   lockTimeout?: number;
+  /** Milliseconds to wait for the schema advisory lock (default 30000). */
+  lockAcquireTimeout?: number;
   applicationDatabase?: DatabaseService;
   extensionRegistry?: PostgresExtensionRegistry;
 }
@@ -200,6 +218,7 @@ export class PostgresSchemaManager {
   private readonly mode: 'auto' | 'plan' | 'off';
   private readonly allowBlocking: boolean;
   private readonly lockTimeout: number;
+  private readonly lockAcquireTimeout: number;
   private readonly applicationDatabase: DatabaseService;
   public readonly extensions: PostgresExtensionRegistry;
 
@@ -210,8 +229,13 @@ export class PostgresSchemaManager {
     this.mode = options.mode ?? 'auto';
     this.allowBlocking = options.allowBlocking ?? false;
     this.lockTimeout = options.lockTimeout ?? 2_000;
+    this.lockAcquireTimeout = options.lockAcquireTimeout ?? 30_000;
     this.applicationDatabase = options.applicationDatabase ?? database;
     this.extensions = options.extensionRegistry ?? new PostgresExtensionRegistry(database);
+  }
+
+  private resourceLockKey(resource: string): number {
+    return advisoryLockKey(this.database.driver.databaseName, resource);
   }
 
   public initialize(): Promise<void> {
@@ -296,8 +320,9 @@ export class PostgresSchemaManager {
     await this.initialize();
 
     const lock = await this.database.driver.acquire();
+    const lockKey = this.resourceLockKey(resource);
     try {
-      await this.acquireLock(lock);
+      await this.acquireLock(lock, lockKey);
       // Checked under the lock, and for every ensure: a declared table that
       // exists but has no ownership row is an implicit adoption whether or
       // not this resource is already registered. The interrupted-
@@ -352,7 +377,7 @@ export class PostgresSchemaManager {
         appliedMigrations,
       };
     } finally {
-      await this.releaseLock(lock);
+      await this.releaseLock(lock, lockKey);
       lock.release();
     }
   }
@@ -425,8 +450,9 @@ export class PostgresSchemaManager {
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
     const lock = await this.database.driver.acquire();
+    const lockKey = this.resourceLockKey(resource);
     try {
-      await this.acquireLock(lock);
+      await this.acquireLock(lock, lockKey);
       await this.assertAdoptionAvailable(resource, schema, true);
       const existing = await this.readAdoption(resource);
       if (
@@ -497,7 +523,7 @@ export class PostgresSchemaManager {
       ).catch(() => {});
       throw error;
     } finally {
-      await this.releaseLock(lock);
+      await this.releaseLock(lock, lockKey);
       lock.release();
     }
   }
@@ -533,7 +559,34 @@ export class PostgresSchemaManager {
     }
   }
 
+  /**
+   * CREATE SCHEMA/TABLE IF NOT EXISTS are not race-safe in PostgreSQL: two
+   * processes can both pass the existence check and one then fails on the
+   * catalog's unique constraint. Metadata creation runs under its own
+   * advisory key (initialize() runs before any per-resource lock is taken),
+   * and a duplicate-object failure double-checks whether another process
+   * simply won the race.
+   */
   private async createMetadata(): Promise<void> {
+    const connection = await this.database.driver.acquire();
+    const key = advisoryLockKey(this.database.driver.databaseName, 'qbxsql:metadata');
+    try {
+      await this.acquireLock(connection, key);
+      try {
+        await this.createMetadataObjects();
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        const duplicate =
+          code === '42P06' || code === '42P07' || code === '23505';
+        if (!duplicate || !(await this.metadataExists())) throw error;
+      }
+    } finally {
+      await this.releaseLock(connection, key);
+      connection.release();
+    }
+  }
+
+  private async createMetadataObjects(): Promise<void> {
     await this.database.query('CREATE SCHEMA IF NOT EXISTS qbxsql_internal');
     await this.database.query(
       `CREATE TABLE IF NOT EXISTS qbxsql_internal.schema_registry (
@@ -593,29 +646,29 @@ export class PostgresSchemaManager {
    * lock_timeout does not apply to advisory locks, and pg_advisory_lock waits
    * forever, so a stalled holder would hang every later ensure() with no way
    * out. Poll pg_try_advisory_lock instead and give up the way MySQL's
-   * GET_LOCK('qbxsql:schema', 30) does.
+   * GET_LOCK does.
    */
-  private async acquireLock(connection: DatabaseConnection): Promise<void> {
-    const deadline = Date.now() + advisoryLockWaitMs;
+  private async acquireLock(connection: DatabaseConnection, key: number): Promise<void> {
+    const deadline = Date.now() + this.lockAcquireTimeout;
     for (;;) {
       const { rows } = await connection.query('SELECT pg_try_advisory_lock($1, $2) AS acquired', [
         advisoryLockNamespace,
-        1,
+        key,
       ]);
       const acquired = (Array.isArray(rows) ? (rows[0] as Row | undefined) : undefined)?.acquired;
       if (acquired === true || acquired === 't' || Number(acquired) === 1) return;
       if (Date.now() >= deadline) {
         throw new Error(
-          `Timed out after ${advisoryLockWaitMs}ms waiting for the qbxsql PostgreSQL schema lock.`,
+          `Timed out after ${this.lockAcquireTimeout}ms waiting for the qbxsql PostgreSQL schema lock.`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, advisoryLockPollMs));
     }
   }
 
-  private async releaseLock(connection: DatabaseConnection): Promise<void> {
+  private async releaseLock(connection: DatabaseConnection, key: number): Promise<void> {
     await connection
-      .query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, 1])
+      .query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, key])
       .catch(() => {});
     // The concurrent-DDL branch sets lock_timeout at session scope; reset it so
     // the setting does not follow this connection back into the pool.

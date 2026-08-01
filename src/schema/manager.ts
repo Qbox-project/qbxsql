@@ -84,6 +84,8 @@ export interface SchemaManagerOptions {
   mode?: 'auto' | 'plan' | 'off';
   allowBlocking?: boolean;
   applicationDatabase?: DatabaseService;
+  /** Milliseconds to wait for the schema advisory lock (default 30000). */
+  lockAcquireTimeout?: number;
 }
 
 function validateResourceName(resource: string): void {
@@ -213,6 +215,7 @@ export class SchemaManager {
   private readonly mode: 'auto' | 'plan' | 'off';
   private readonly allowBlocking: boolean;
   private readonly applicationDatabase: DatabaseService;
+  private readonly lockAcquireTimeout: number;
   private targetVerification: Promise<void> | null = null;
 
   public constructor(
@@ -222,6 +225,7 @@ export class SchemaManager {
     this.mode = options.mode ?? 'auto';
     this.allowBlocking = options.allowBlocking ?? false;
     this.applicationDatabase = options.applicationDatabase ?? database;
+    this.lockAcquireTimeout = options.lockAcquireTimeout ?? 30_000;
   }
 
   public initialize(): Promise<void> {
@@ -297,6 +301,7 @@ export class SchemaManager {
       for (const migration of pendingMigrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === 'success') continue;
+        await this.assertLockHeld(lock);
         await this.applyMigration(
           resource,
           migration,
@@ -312,6 +317,7 @@ export class SchemaManager {
       const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
 
+      await this.assertLockHeld(lock);
       const appliedActions = await this.applySchemaPlan(resource, plan);
 
       const remaining = planSchema(
@@ -326,6 +332,7 @@ export class SchemaManager {
         );
       }
 
+      await this.assertLockHeld(lock);
       await this.claimTables(resource, Object.keys(schema.tables));
       await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
 
@@ -506,6 +513,7 @@ export class SchemaManager {
       for (const migration of migrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === 'success') continue;
+        await this.assertLockHeld(lock);
         await this.applyMigration(
           resource,
           migration,
@@ -522,6 +530,7 @@ export class SchemaManager {
       if (plan.actions.some((entry) => !entry.automatic)) {
         throw new SchemaMigrationRequiredError(plan);
       }
+      await this.assertLockHeld(lock);
       const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
@@ -535,6 +544,7 @@ export class SchemaManager {
         );
       }
 
+      await this.assertLockHeld(lock);
       await this.claimTables(resource, Object.keys(schema.tables));
       await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
       await this.finishAdoption(resource);
@@ -658,10 +668,52 @@ export class SchemaManager {
     );
   }
 
+  /**
+   * GET_LOCK names are namespaced per MySQL instance, not per database, so the
+   * database name is part of the lock name: on shared hosting, one customer's
+   * slow index build must not block every other server on the instance. Names
+   * are capped at 64 characters, so long database names fall back to a hash.
+   */
+  private lockName(): string {
+    const database = this.database.driver.databaseName ?? 'default';
+    const name = `qbxsql:schema:${database}`;
+    if (name.length <= 64) return name;
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < database.length; index += 1) {
+      hash ^= database.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `qbxsql:schema:${(hash >>> 0).toString(16)}`;
+  }
+
   private async acquireLock(connection: DatabaseConnection): Promise<void> {
-    const result = await connection.query(`SELECT GET_LOCK('qbxsql:schema', 30) AS acquired`);
+    const seconds = Math.max(1, Math.ceil(this.lockAcquireTimeout / 1_000));
+    const result = await connection.query(`SELECT GET_LOCK(?, ?) AS acquired`, [
+      this.lockName(),
+      seconds,
+    ]);
     const rows = result.rows as Row[];
     if (Number(rows[0]?.acquired) !== 1) throw new Error('Timed out waiting for the qbxsql schema lock.');
+  }
+
+  /**
+   * The lock lives on one pooled connection while the DDL and metadata writes
+   * run on others. A reconnect mid-ensure tears down the old pool, which kills
+   * the lock session and releases the lock while this ensure keeps running on
+   * the new pool -- exactly the concurrent-DDL scenario the lock exists to
+   * prevent. Probing the lock connection detects both a dead session (the
+   * query throws) and a silently lost lock before anything irreversible runs.
+   */
+  private async assertLockHeld(connection: DatabaseConnection): Promise<void> {
+    const result = await connection.query(
+      `SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS held`,
+      [this.lockName()],
+    );
+    if (Number((result.rows as Row[])[0]?.held) !== 1) {
+      throw new Error(
+        'The qbxsql schema lock was lost mid-operation (connection reset); aborting.',
+      );
+    }
   }
 
   /**
@@ -671,7 +723,7 @@ export class SchemaManager {
    */
   private async releaseLock(connection: DatabaseConnection): Promise<void> {
     try {
-      await connection.query(`SELECT RELEASE_LOCK('qbxsql:schema')`);
+      await connection.query(`SELECT RELEASE_LOCK(?)`, [this.lockName()]);
       connection.release();
     } catch {
       // If the lock cannot be confirmed released, do not return the connection.
