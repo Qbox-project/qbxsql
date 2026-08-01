@@ -43,7 +43,7 @@ function actionName(value: unknown): string {
   return actions[String(value)] ?? String(value);
 }
 
-function checkExpression(definition: string): string {
+export function checkExpression(definition: string): string {
   const match = /^CHECK\s*\((.*)\)$/is.exec(definition.trim());
   return (match?.[1] ?? definition).trim();
 }

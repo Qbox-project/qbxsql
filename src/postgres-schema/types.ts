@@ -63,6 +63,11 @@ export interface PostgresColumnDefinition {
   identity?: 'always' | 'byDefault';
   primary?: boolean;
   comment?: string;
+  /**
+   * Server-deparsed default used only for drift comparison. Set by
+   * canonicalizePostgresSchema after validation; never author-provided.
+   */
+  canonicalDefault?: string;
 }
 
 export interface PostgresExtensionRequirement {
@@ -109,11 +114,21 @@ export interface PostgresIndexDefinition {
   include?: string[];
   options?: Record<string, PostgresIndexOption>;
   where?: string;
+  /**
+   * Server-deparsed predicate used only for drift comparison. Set by
+   * canonicalizePostgresSchema after validation; never author-provided.
+   */
+  canonicalPredicate?: string;
 }
 
 export interface PostgresCheckDefinition {
   name: string;
   expression: string;
+  /**
+   * Server-deparsed expression used only for drift comparison. Set by
+   * canonicalizePostgresSchema after validation; never author-provided.
+   */
+  canonicalExpression?: string;
 }
 
 export interface PostgresForeignKeyDefinition {
@@ -142,6 +157,11 @@ export interface PostgresExclusionDefinition {
   where?: string;
   deferrable?: boolean;
   initiallyDeferred?: boolean;
+  /**
+   * Server-deparsed constraint definition used only for drift comparison. Set
+   * by canonicalizePostgresSchema after validation; never author-provided.
+   */
+  canonicalDefinition?: string;
 }
 
 export interface PostgresTableDefinition {

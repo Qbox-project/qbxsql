@@ -24,13 +24,37 @@ import type {
   PostgresSchemaPlan,
 } from './types.js';
 
-function normalizeSql(value: string | null | undefined): string {
-  if (!value) return '';
-  let normalized = value.trim().replace(/\s+/g, ' ').replaceAll('"', '').toLowerCase();
+/**
+ * Strips an outer paren pair only when it actually wraps the whole text:
+ * '(a > 0) and (b > 0)' must not become 'a > 0) and (b > 0'. An unbalanced
+ * scan simply leaves the text alone, which at worst reports drift instead of
+ * corrupting the comparison.
+ */
+function stripOuterParens(value: string): string {
+  let normalized = value;
   while (normalized.startsWith('(') && normalized.endsWith(')')) {
+    let depth = 0;
+    let wraps = true;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const char = normalized[index];
+      if (char === '(') depth += 1;
+      else if (char === ')') {
+        depth -= 1;
+        if (depth === 0 && index < normalized.length - 1) {
+          wraps = false;
+          break;
+        }
+      }
+    }
+    if (!wraps || depth !== 0) break;
     normalized = normalized.slice(1, -1).trim();
   }
   return normalized;
+}
+
+export function normalizeSql(value: string | null | undefined): string {
+  if (!value) return '';
+  return stripOuterParens(value.trim().replace(/\s+/g, ' ').replaceAll('"', '').toLowerCase());
 }
 
 function normalizeDefault(value: string | null): string {
@@ -150,7 +174,7 @@ function indexMatches(
     sameArray(actual.include, desired.include ?? []) &&
     Object.keys(desiredOptions).length === Object.keys(actualOptions).length &&
     Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) &&
-    normalizeSql(actual.predicate) === normalizeSql(desired.where)
+    normalizeSql(actual.predicate) === normalizeSql(desired.canonicalPredicate ?? desired.where)
   );
 }
 
@@ -248,7 +272,11 @@ function planExistingTable(
     }
 
     const desiredDefault = postgresDefault(column);
-    if (normalizeDefault(current.defaultExpression) !== normalizeDefault(desiredDefault)) {
+    const comparableDefault =
+      column.canonicalDefault !== undefined && desiredDefault !== null
+        ? column.canonicalDefault
+        : desiredDefault;
+    if (normalizeDefault(current.defaultExpression) !== normalizeDefault(comparableDefault)) {
       actions.push(automaticAction({
         kind: desiredDefault === null ? 'dropDefault' : 'setDefault',
         sql: `ALTER TABLE ${qualifiedTable(name)} ALTER COLUMN ${quotePostgresIdentifier(columnName)} ${desiredDefault === null ? 'DROP DEFAULT' : `SET DEFAULT ${desiredDefault}`}`,
@@ -363,7 +391,10 @@ function planExistingTable(
         reason: `validate existing rows for ${check.name}`,
         table: name,
       }));
-    } else if (normalizeExpression(current.expression) !== normalizeExpression(check.expression)) {
+    } else if (
+      normalizeExpression(current.expression) !==
+      normalizeExpression(check.canonicalExpression ?? check.expression)
+    ) {
       actions.push(manualAction({
         kind: 'replaceCheck',
         sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresCheckSql(check, true)}`,
@@ -448,7 +479,10 @@ function planExistingTable(
         table: name,
         risk: 'high',
       }));
-    } else if (normalizeSql(current.definition) !== normalizeSql(desiredDefinition)) {
+    } else if (
+      normalizeSql(current.definition) !==
+      normalizeSql(exclusion.canonicalDefinition ?? desiredDefinition)
+    ) {
       actions.push(manualAction({
         kind: 'replaceExclusion',
         sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { planPostgresSchema } from '../../src/postgres-schema/planner.js';
+import { normalizeSql, planPostgresSchema } from '../../src/postgres-schema/planner.js';
 import {
   createPostgresIndexSql,
   createPostgresTableSql,
@@ -211,6 +211,112 @@ describe('PostgreSQL declarative schemas', () => {
         ['properties_owner_check', {
           name: 'properties_owner_check',
           expression: `owner <> ''`,
+          validated: true,
+        }],
+      ]),
+      foreignKeys: new Map(),
+      primaryKey: ['id'],
+      primaryKeyName: 'properties_pkey',
+    };
+
+    const plan = planPostgresSchema('housing', value, new Map([['properties', actual]]));
+    expect(plan.actions).toHaveLength(0);
+  });
+
+  test('strips only balanced outer parens when normalizing SQL text', () => {
+    expect(normalizeSql('((a > 0) AND (b > 0))')).toBe('(a > 0) and (b > 0)');
+    expect(normalizeSql('(a > 0) AND (b > 0)')).toBe('(a > 0) and (b > 0)');
+    expect(normalizeSql('((x))')).toBe('x');
+    expect(normalizeSql('(a) , (b')).toBe('(a) , (b');
+  });
+
+  test('prefers server-canonical text over author text when comparing', () => {
+    const input = schema();
+    input.tables.properties!.columns.status = {
+      type: 'varchar',
+      length: 20,
+      default: 'active',
+    };
+    input.tables.properties!.checks = [
+      { name: 'properties_status_check', expression: "status = 'active'" },
+    ];
+    input.tables.properties!.indexes = [{
+      name: 'properties_active_idx',
+      columns: ['owner'],
+      where: "status = 'active'",
+    }];
+    const value = validatePostgresSchema(input);
+    // What canonicalizePostgresSchema records from the server's deparser.
+    value.tables.properties!.columns.status!.canonicalDefault = `'active'::character varying`;
+    value.tables.properties!.checks![0]!.canonicalExpression =
+      `((status)::text = 'active'::text)`;
+    value.tables.properties!.indexes![0]!.canonicalPredicate =
+      `((status)::text = 'active'::text)`;
+
+    const actual: ActualPostgresTable = {
+      name: 'properties',
+      comment: '',
+      columns: new Map([
+        ['id', {
+          name: 'id',
+          formattedType: 'bigint',
+          nullable: false,
+          defaultExpression: null,
+          identity: 'd',
+          comment: '',
+        }],
+        ['owner', {
+          name: 'owner',
+          formattedType: 'character varying(64)',
+          nullable: false,
+          defaultExpression: null,
+          identity: '',
+          comment: '',
+        }],
+        ['metadata', {
+          name: 'metadata',
+          formattedType: 'jsonb',
+          nullable: false,
+          defaultExpression: `'{}'::jsonb`,
+          identity: '',
+          comment: '',
+        }],
+        ['created_at', {
+          name: 'created_at',
+          formattedType: 'timestamp with time zone',
+          nullable: false,
+          defaultExpression: 'CURRENT_TIMESTAMP',
+          identity: '',
+          comment: '',
+        }],
+        // The deparsed forms PostgreSQL actually reports for a varchar column,
+        // which never match the author text without canonicalization.
+        ['status', {
+          name: 'status',
+          formattedType: 'character varying(20)',
+          nullable: false,
+          defaultExpression: `'active'::character varying`,
+          identity: '',
+          comment: '',
+        }],
+      ]),
+      indexes: new Map([
+        ['properties_active_idx', {
+          name: 'properties_active_idx',
+          columns: ['owner'],
+          include: [],
+          unique: false,
+          primary: false,
+          valid: true,
+          method: 'btree',
+          columnOptions: [0],
+          predicate: `((status)::text = 'active'::text)`,
+        }],
+      ]),
+      checks: new Map([
+        ['properties_status_check', {
+          name: 'properties_status_check',
+          expression: `((status)::text = 'active'::text)`,
           validated: true,
         }],
       ]),

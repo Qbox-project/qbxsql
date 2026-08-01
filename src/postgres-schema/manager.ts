@@ -4,6 +4,7 @@ import { stableChecksum } from '../schema/validate.js';
 import {
   PostgresExtensionRegistry,
 } from '../postgres-extensions.js';
+import { canonicalizePostgresSchema } from './canonicalize.js';
 import { introspectPostgresDatabase } from './introspect.js';
 import { planPostgresSchema } from './planner.js';
 import {
@@ -228,9 +229,10 @@ export class PostgresSchemaManager {
     input: PostgresResourceSchema,
   ): Promise<PostgresSchemaEnsureResult> {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    const checksum = postgresSchemaChecksum(schema);
-    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
+    const validated = validatePostgresSchema(input);
+    const checksum = postgresSchemaChecksum(validated);
+    const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     // Planning is read-only. Calling initialize() here would create
     // qbxsql_internal and its tables as a side effect of a dry run, including
     // when the operator has set the schema mode to off to freeze the database.
@@ -282,14 +284,15 @@ export class PostgresSchemaManager {
     input: PostgresResourceSchema,
   ): Promise<PostgresSchemaEnsureResult> {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    const checksum = postgresSchemaChecksum(schema);
+    const validated = validatePostgresSchema(input);
+    const checksum = postgresSchemaChecksum(validated);
     if (this.mode === 'off') throw new PostgresSchemaDisabledError(resource);
     if (this.mode === 'plan') {
-      throw new PostgresSchemaPendingChangesError(await this.plan(resource, schema));
+      throw new PostgresSchemaPendingChangesError(await this.plan(resource, validated));
     }
 
-    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
+    const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
     const preflightRegistry = await this.readRegistry(resource);
     if (
@@ -359,12 +362,13 @@ export class PostgresSchemaManager {
     baselineVersion: number,
   ): Promise<PostgresSchemaAdoptionResult> {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    this.validateBaseline(schema, baselineVersion);
-    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
+    const validated = validatePostgresSchema(input);
+    this.validateBaseline(validated, baselineVersion);
+    const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
+    const checksum = postgresSchemaChecksum(validated);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
     await this.assertAdoptionAvailable(resource, schema);
-    const checksum = postgresSchemaChecksum(schema);
     const migrations = this.pendingMigrations(schema, baselineVersion);
     this.assertMigrationChecksums(
       schema.migrations ?? [],
@@ -398,16 +402,17 @@ export class PostgresSchemaManager {
     baselineVersion: number,
   ): Promise<PostgresSchemaAdoptionResult> {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    this.validateBaseline(schema, baselineVersion);
+    const validated = validatePostgresSchema(input);
+    this.validateBaseline(validated, baselineVersion);
     if (this.mode === 'off') throw new PostgresSchemaDisabledError(resource);
     if (this.mode === 'plan') {
-      const plan = await this.planAdoption(resource, schema, baselineVersion);
+      const plan = await this.planAdoption(resource, validated, baselineVersion);
       throw new PostgresSchemaPendingChangesError(plan);
     }
-    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
+    const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
+    const checksum = postgresSchemaChecksum(validated);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const checksum = postgresSchemaChecksum(schema);
     const lock = await this.database.driver.acquire();
     try {
       await this.acquireLock(lock);
