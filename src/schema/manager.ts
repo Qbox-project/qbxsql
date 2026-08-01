@@ -249,26 +249,6 @@ export class SchemaManager {
 
     await this.initialize();
 
-    const preflightRegistry = await this.readRegistry(resource);
-    if (!preflightRegistry) {
-      const preflightTables = this.relevantOwnershipTables(schema, schema.migrations ?? []);
-      await this.refuseImplicitAdoption(
-        resource,
-        preflightTables,
-        await introspectDatabase(this.database, preflightTables),
-      );
-    }
-    const preflightMigrations = preflightRegistry
-      ? (schema.migrations ?? [])
-          .filter(
-            (migration) =>
-              migration.version > preflightRegistry.version && migration.version <= schema.version,
-          )
-          .sort((left, right) => left.version - right.version)
-      : [];
-    this.assertOwnershipTransitions(preflightRegistry, schema, preflightMigrations);
-    this.assertBlockingPolicy(preflightMigrations);
-
     const lock = await this.database.driver.acquire();
     try {
       await this.acquireLock(lock);
@@ -286,6 +266,8 @@ export class SchemaManager {
             .filter((migration) => migration.version > registry.version && migration.version <= schema.version)
             .sort((left, right) => left.version - right.version)
         : [];
+      this.assertOwnershipTransitions(registry, schema, pendingMigrations);
+      this.assertBlockingPolicy(pendingMigrations);
       const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
       const introspectionTables = this.introspectionTables(
         schema,
@@ -295,6 +277,13 @@ export class SchemaManager {
       await this.assertOwnership(resource, relevantTables);
 
       let actual = await introspectDatabase(this.database, introspectionTables);
+      // Checked under the lock, and for every ensure: a declared or
+      // migration-referenced table that exists but has no ownership row is an
+      // implicit adoption whether or not this resource is already registered.
+      // Newly declared tables must not silently absorb existing unmanaged
+      // ones, and a pre-lock check left a window for another process to
+      // create one.
+      await this.refuseImplicitAdoption(resource, relevantTables, actual);
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings: string[] = [];
@@ -886,6 +875,15 @@ export class SchemaManager {
   }
 
   private async applySchemaPlan(resource: string, plan: SchemaPlan): Promise<string[]> {
+    // Claim tables before creating them. MySQL DDL autocommits, so the create
+    // and the claim can never be atomic; claimed-but-missing resumes cleanly
+    // (the row is just re-verified and the table created), while
+    // created-but-unclaimed would be refused as an implicit adoption on the
+    // next boot with no way to recover.
+    const created = plan.actions
+      .filter((entry) => entry.kind === 'createTable' && entry.table !== undefined)
+      .map((entry) => entry.table!);
+    if (created.length > 0) await this.claimTables(resource, created);
     const appliedActions: string[] = [];
     for (const schemaAction of plan.actions) {
       try {

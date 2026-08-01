@@ -205,6 +205,8 @@ export interface PostgresMigrationStatement {
   releaseOwnership?: string;
   renameOwnership?: { from: string; to: string };
   dropOwnership?: string;
+  /** Claim ownership of this table in the same transaction as the DDL. */
+  claimOwnership?: string;
 }
 
 export function postgresMigrationStatements(

@@ -562,6 +562,19 @@ function validateOperation(operation: PostgresMigrationOperation): PostgresMigra
     if (typeof operation.sql !== 'string' || operation.sql.trim().length === 0) {
       throw new Error('Raw migration SQL cannot be empty.');
     }
+    // Raw SQL cannot be ownership-checked, but the connector's own journal
+    // and ownership tables are never a legitimate target.
+    if (/qbxsql_internal/i.test(operation.sql)) {
+      throw new Error('Raw SQL migrations may not reference qbxsql metadata tables.');
+    }
+  }
+  // The type declares allowOwnershipTransfer: true, but Lua callers are not
+  // typechecked; enforce it at runtime like the MySQL lane does.
+  if (
+    operation.type === 'releaseTable' &&
+    (operation as { allowOwnershipTransfer?: unknown }).allowOwnershipTransfer !== true
+  ) {
+    throw new Error('releaseTable requires allowOwnershipTransfer=true.');
   }
   return operation;
 }

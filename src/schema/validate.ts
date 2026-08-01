@@ -291,6 +291,11 @@ function validateMigrationOperation(operation: MigrationOperation): void {
     case 'sql':
       if (!operation.sql.trim()) throw new Error('Raw SQL migration cannot be empty.');
       if (operation.allowDataLoss !== true) throw new Error('Raw SQL migration requires allowDataLoss=true.');
+      // Raw SQL cannot be ownership-checked, but the connector's own journal
+      // and ownership tables are never a legitimate target.
+      if (/qbxsql_schema_/i.test(operation.sql)) {
+        throw new Error('Raw SQL migrations may not reference qbxsql metadata tables.');
+      }
       break;
   }
 }

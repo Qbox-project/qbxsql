@@ -294,17 +294,18 @@ export class PostgresSchemaManager {
     const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const preflightRegistry = await this.readRegistry(resource);
-    if (
-      !preflightRegistry &&
-      !(await this.hasInterruptedReconciliation(resource, checksum))
-    ) {
-      await this.refuseImplicitAdoption(resource, Object.keys(schema.tables));
-    }
 
     const lock = await this.database.driver.acquire();
     try {
       await this.acquireLock(lock);
+      // Checked under the lock, and for every ensure: a declared table that
+      // exists but has no ownership row is an implicit adoption whether or
+      // not this resource is already registered. The interrupted-
+      // reconciliation escape covers journals from older runs that crashed
+      // before tables were claimed together with their creation.
+      if (!(await this.hasInterruptedReconciliation(resource, checksum))) {
+        await this.refuseImplicitAdoption(resource, Object.keys(schema.tables));
+      }
       const registry = await this.readRegistry(resource);
       if (registry && registry.version > schema.version) {
         throw new Error(
@@ -367,16 +368,26 @@ export class PostgresSchemaManager {
     const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
     const checksum = postgresSchemaChecksum(validated);
     const schema = await canonicalizePostgresSchema(this.database, validated);
-    await this.initialize();
-    await this.assertAdoptionAvailable(resource, schema);
     const migrations = this.pendingMigrations(schema, baselineVersion);
-    this.assertMigrationChecksums(
-      schema.migrations ?? [],
-      await this.readMigrationRows(resource),
-    );
+    // Planning is read-only: consult metadata only when it already exists
+    // rather than creating qbxsql_internal as a side effect of a dry run,
+    // matching plan().
+    const metadataReady = await this.metadataExists();
+    if (metadataReady) {
+      await this.assertAdoptionAvailable(resource, schema);
+      this.assertMigrationChecksums(
+        schema.migrations ?? [],
+        await this.readMigrationRows(resource),
+      );
+    }
     const actual = await introspectPostgresDatabase(
       this.database,
-      await this.relevantTables(resource, schema, migrations),
+      metadataReady
+        ? await this.relevantTables(resource, schema, migrations)
+        : [...new Set([
+            ...Object.keys(schema.tables),
+            ...migrations.flatMap((migration) => migration.operations.flatMap(operationTable)),
+          ])],
     );
     const drift = planPostgresSchema(resource, schema, actual);
     return {
@@ -836,7 +847,15 @@ export class PostgresSchemaManager {
         `PostgreSQL adoption for '${resource}' is already ${adoption.status}.`,
       );
     }
-    for (const table of Object.keys(schema.tables)) {
+    // Migration operations run against tables too, so an adoption migration
+    // must not be able to rename or drop a table another resource owns.
+    const tables = new Set([
+      ...Object.keys(schema.tables),
+      ...(schema.migrations ?? []).flatMap((migration) =>
+        migration.operations.flatMap(operationTable),
+      ),
+    ]);
+    for (const table of tables) {
       const owner = first(await this.database.query(
         `SELECT resource_name AS resource
            FROM qbxsql_internal.owned_tables
@@ -922,6 +941,12 @@ export class PostgresSchemaManager {
       const statement: PostgresMigrationStatement = {
         sql: action.sql,
         ...(action.algorithm === 'CONCURRENT' ? { concurrent: true } : {}),
+        // Claiming in the same transaction as CREATE TABLE means a crash can
+        // never leave an unowned table behind for the next boot to refuse as
+        // an implicit adoption.
+        ...(action.kind === 'createTable' && action.table !== undefined
+          ? { claimOwnership: action.table }
+          : {}),
       };
       try {
         await this.executeStatement(connection, resource, actionKey, statement, schemaChecksum);
@@ -988,6 +1013,32 @@ export class PostgresSchemaManager {
         try {
           await connection.query(`SET LOCAL lock_timeout = '${this.lockTimeout}ms'`);
           if (!statement.releaseOwnership) await connection.query(statement.sql);
+          if (statement.claimOwnership) {
+            await connection.query(
+              `INSERT INTO qbxsql_internal.owned_tables
+                 (table_schema, table_name, resource_name, updated_at)
+               VALUES ('public', $2, $1, CURRENT_TIMESTAMP)
+               ON CONFLICT (table_schema, table_name) DO UPDATE
+                 SET resource_name = CASE
+                   WHEN qbxsql_internal.owned_tables.resource_name = EXCLUDED.resource_name
+                   THEN EXCLUDED.resource_name
+                   ELSE qbxsql_internal.owned_tables.resource_name
+                 END,
+                 updated_at = CURRENT_TIMESTAMP`,
+              [resource, statement.claimOwnership],
+            );
+            const owner = first((await connection.query(
+              `SELECT resource_name AS resource
+                 FROM qbxsql_internal.owned_tables
+                WHERE table_schema = 'public' AND table_name = $1`,
+              [statement.claimOwnership],
+            )).rows as Row[]);
+            if (owner?.resource !== resource) {
+              throw new Error(
+                `PostgreSQL table public.${statement.claimOwnership} is owned by '${String(owner?.resource)}'.`,
+              );
+            }
+          }
           if (statement.renameOwnership) {
             await connection.query(
               `UPDATE qbxsql_internal.owned_tables
