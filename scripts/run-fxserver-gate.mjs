@@ -10,11 +10,24 @@ function option(name, fallback) {
   return index === -1 ? fallback : process.argv[index + 1];
 }
 
+// Connection strings carry database passwords; like the license key, they are
+// visible in process listings and shell history when passed as arguments.
+function secretOption(name, environmentName) {
+  const fromArgv = option(name);
+  if (fromArgv !== undefined) {
+    console.warn(
+      `${name} is visible in process listings and shell history; prefer the ${environmentName} environment variable.`,
+    );
+    return fromArgv;
+  }
+  return process.env[environmentName];
+}
+
 const binary = option('--binary');
-const connectionString = option('--connection-string', process.env.QBXSQL_TEST_CONNECTION_STRING);
-const postgresConnectionString = option(
+const connectionString = secretOption('--connection-string', 'QBXSQL_TEST_CONNECTION_STRING');
+const postgresConnectionString = secretOption(
   '--postgres-connection-string',
-  process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING,
+  'QBXSQL_TEST_POSTGRES_CONNECTION_STRING',
 );
 const licenseKey = process.env.CFX_LICENSE_KEY;
 const flavor = option('--flavor', 'stock');
@@ -84,6 +97,7 @@ async function runConflictGate() {
   const conflictConfig = [
     `sv_licenseKey "${configValue(licenseKey, 'the license key')}"`,
     'sv_hostname "qbxsql conflict gate"',
+    'sv_master1 ""',
     'sv_maxclients 1',
     `endpoint_add_tcp "127.0.0.1:${port + 1}"`,
     `endpoint_add_udp "127.0.0.1:${port + 1}"`,
@@ -201,6 +215,7 @@ try {
   const config = [
     `sv_licenseKey "${configValue(licenseKey, 'the license key')}"`,
     'sv_hostname "qbxsql release gate"',
+    'sv_master1 ""',
     'sv_maxclients 1',
     `endpoint_add_tcp "127.0.0.1:${port}"`,
     `endpoint_add_udp "127.0.0.1:${port}"`,

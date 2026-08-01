@@ -50,8 +50,12 @@ describe('containerized Linux FXServer gate', () => {
     expect(keyStore).toContain('CFX license key (hidden):');
     expect(keyStore).toContain('mode: 0o600');
     expect(fxserverGate).toContain('const licenseKey = process.env.CFX_LICENSE_KEY;');
-    expect(fxserverGate).toContain('process.env.QBXSQL_TEST_POSTGRES_CONNECTION_STRING');
+    expect(fxserverGate).toContain(
+      "secretOption(\n  '--postgres-connection-string',\n  'QBXSQL_TEST_POSTGRES_CONNECTION_STRING',\n)",
+    );
+    expect(fxserverGate).toContain('visible in process listings and shell history');
     expect(fxserverGate).toContain('createSecretSafeWriter');
+    expect(fxserverGate).toContain("'sv_master1 \"\"'");
     expect(fxserverGate).not.toContain("option('--license-key'");
     expect(JSON.parse(packageJson).scripts['test:fxserver']).toBe(
       'node scripts/run-local-linux-gate.mjs',

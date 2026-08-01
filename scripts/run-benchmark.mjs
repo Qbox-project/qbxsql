@@ -11,8 +11,21 @@ function option(name, fallback) {
   return index === -1 ? fallback : process.argv[index + 1];
 }
 
+// Connection strings carry database passwords; like the license key, they are
+// visible in process listings and shell history when passed as arguments.
+function secretOption(name, environmentName) {
+  const fromArgv = option(name);
+  if (fromArgv !== undefined) {
+    console.warn(
+      `${name} is visible in process listings and shell history; prefer the ${environmentName} environment variable.`,
+    );
+    return fromArgv;
+  }
+  return process.env[environmentName];
+}
+
 const binary = option('--binary');
-const connectionString = option('--connection-string', process.env.QBXSQL_TEST_CONNECTION_STRING);
+const connectionString = secretOption('--connection-string', 'QBXSQL_TEST_CONNECTION_STRING');
 // Read from the environment only: a command argument is visible in process
 // listings and shell history.
 const licenseKey = process.env.CFX_LICENSE_KEY;
