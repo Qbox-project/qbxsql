@@ -3,12 +3,15 @@ import type { DatabaseService } from '../core/database.js';
 import { introspectDatabase } from './introspect.js';
 import { capabilitiesForVersion, compareColumn, planSchema } from './planner.js';
 import {
+  addForeignKeySql,
   migrationOperationSql,
   onlineMigrationOperationSql,
+  operationOnlineCapable,
   quoteIdentifier,
 } from './sql.js';
 import type {
   ActualTable,
+  ForeignKeyDefinition,
   MigrationDefinition,
   MigrationOperation,
   ResourceSchema,
@@ -863,7 +866,10 @@ export class SchemaManager {
         if (needed) {
           if (operation.type === 'releaseTable') {
             await this.releaseTable(resource, operation.table);
+          } else if (operation.type === 'addForeignKey' && !blockingAllowed) {
+            await this.applyOnlineForeignKey(resource, operation.table, operation.definition);
           } else {
+            this.assertOnlineEnforceable(operation, blockingAllowed);
             const sql = this.migrationSql(operation, blockingAllowed, actual);
             try {
               await this.database.query(sql, [], { invokingResource: resource });
@@ -974,6 +980,82 @@ export class SchemaManager {
         ? migrationOperationSql(operation)
         : onlineMigrationOperationSql(operation, capabilities))
     );
+  }
+
+  private assertOnlineEnforceable(operation: MigrationOperation, blockingAllowed: boolean): void {
+    if (blockingAllowed) return;
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    if (!operationOnlineCapable(operation, capabilities)) {
+      throw new Error(
+        `Migration operation '${operation.type}' cannot be enforced as online DDL on ${
+          this.database.driver.serverVersion ?? 'an unknown server version'
+        }, and there is no automatic fallback to blocking DDL. Set migration allowBlocking=true and qbxsql_schema_allow_blocking=true to run it as blocking DDL.`,
+      );
+    }
+  }
+
+  /**
+   * InnoDB only permits ALGORITHM=INPLACE for ADD FOREIGN KEY while
+   * foreign_key_checks is disabled; with the default checks on, the server
+   * demands a validating COPY, so the enforced online statement always
+   * failed. Mirror the PostgreSQL lane's NOT VALID rollout instead: verify
+   * there are no orphans, add the constraint online on a session with checks
+   * off (new writes are enforced from that moment), and re-verify afterwards.
+   * The session is destroyed rather than pooled on any failure so checks-off
+   * never leaks into other queries.
+   */
+  private async applyOnlineForeignKey(
+    resource: string,
+    table: string,
+    foreignKey: ForeignKeyDefinition,
+  ): Promise<void> {
+    this.assertOnlineEnforceable({ type: 'addForeignKey', table, definition: foreignKey }, false);
+    const before = await this.countForeignKeyOrphans(resource, table, foreignKey);
+    if (before > 0) {
+      throw new Error(
+        `Cannot add foreign key '${foreignKey.name}' online: ${before} row(s) in '${table}' reference missing rows in '${foreignKey.references.table}'. Clean them up first, or set migration allowBlocking=true and qbxsql_schema_allow_blocking=true to run a validating blocking ALTER.`,
+      );
+    }
+
+    const connection = await this.database.driver.acquire();
+    let healthy = false;
+    try {
+      await connection.query('SET SESSION foreign_key_checks = 0');
+      await connection.query(`${addForeignKeySql(table, foreignKey)}, ALGORITHM=INPLACE, LOCK=NONE`);
+      await connection.query('SET SESSION foreign_key_checks = 1');
+      healthy = true;
+    } finally {
+      if (healthy) connection.release();
+      else connection.destroy();
+    }
+
+    const after = await this.countForeignKeyOrphans(resource, table, foreignKey);
+    if (after > 0) {
+      console.warn(
+        `[qbxsql] foreign key '${foreignKey.name}' on '${table}' was added online, but ${after} orphaned row(s) appeared while it was being created. New writes are enforced; these rows predate the constraint and need manual cleanup.`,
+      );
+    }
+  }
+
+  private async countForeignKeyOrphans(
+    resource: string,
+    table: string,
+    foreignKey: ForeignKeyDefinition,
+  ): Promise<number> {
+    const join = foreignKey.columns
+      .map((column, index) =>
+        `child.${quoteIdentifier(column)} = parent.${quoteIdentifier(foreignKey.references.columns[index]!)}`)
+      .join(' AND ');
+    const notNull = foreignKey.columns
+      .map((column) => `child.${quoteIdentifier(column)} IS NOT NULL`)
+      .join(' AND ');
+    return Number(await this.database.scalar(
+      `SELECT COUNT(*) FROM ${quoteIdentifier(table)} child
+        LEFT JOIN ${quoteIdentifier(foreignKey.references.table)} parent ON ${join}
+       WHERE parent.${quoteIdentifier(foreignKey.references.columns[0]!)} IS NULL AND ${notNull}`,
+      [],
+      { invokingResource: resource },
+    ));
   }
 
   private async operationNeeded(

@@ -156,7 +156,11 @@ export function onlineMigrationOperationSql(
   const sql = migrationOperationSql(operation);
   switch (operation.type) {
     case 'addColumn':
-      return capabilities.instantAddColumn ? `${sql}, ALGORITHM=INSTANT` : sql;
+      return capabilities.instantAddColumn
+        ? `${sql}, ALGORITHM=INSTANT`
+        : capabilities.inplaceAlterColumn
+          ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE`
+          : sql;
     case 'dropColumn':
       return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     case 'renameColumn':
@@ -170,5 +174,36 @@ export function onlineMigrationOperationSql(
       return capabilities.inplaceAddIndex ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     default:
       return sql;
+  }
+}
+
+/**
+ * Whether the server can actually enforce the online algorithm the migration
+ * path promises. When this is false and blocking DDL has not been authorized,
+ * the operation must be refused: onlineMigrationOperationSql would fall back
+ * to a bare statement the server is free to run as a locking COPY, which
+ * silently breaks the "no automatic fallback to blocking DDL" contract.
+ */
+export function operationOnlineCapable(
+  operation: MigrationOperation,
+  capabilities: SchemaCapabilities,
+): boolean {
+  switch (operation.type) {
+    case 'addColumn':
+      return capabilities.instantAddColumn || capabilities.inplaceAlterColumn;
+    case 'dropColumn':
+    case 'renameColumn':
+    case 'alterColumn':
+    case 'addForeignKey':
+    case 'dropForeignKey':
+    case 'setPrimaryKey':
+      return capabilities.inplaceAlterColumn;
+    case 'addIndex':
+    case 'dropIndex':
+      return capabilities.inplaceAddIndex;
+    default:
+      // Remaining operations are metadata-only or already gated behind
+      // blocking authorization, which skips this check entirely.
+      return true;
   }
 }
