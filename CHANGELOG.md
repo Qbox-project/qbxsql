@@ -6,6 +6,66 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 - Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
 
+## 0.6.0 - 2026-08-01
+
+Correctness release for the schema managers, driven by a full external-style
+review. Prerelease installs that already ran 0.5.0 schema management should
+expect one-time journal churn: PostgreSQL reconcile action keys and any
+in-flight `running` migration rows are interpreted more strictly.
+
+- Fixed MySQL/MariaDB drift comparison for literal column defaults: MariaDB
+  10.2.7+ reports them quoted, so any string default produced a spurious
+  MODIFY COLUMN and ensure() failed to converge on every boot.
+- Fixed PostgreSQL drift comparison by canonicalizing declared defaults, check
+  expressions, partial-index predicates, and exclusion definitions through the
+  server's own deparser (session-local scratch table) instead of string
+  normalizers, and fixed the outer-paren strip corrupting compound
+  expressions. Ordinary schemas with dates, casts, or varchar comparisons now
+  converge instead of failing ensure() unrecoverably.
+- Fixed crash-window migration replay: MySQL raw-SQL migrations stuck at
+  `running` are refused instead of blindly re-run, the original migration
+  error survives a failed status write, PostgreSQL journal completion commits
+  atomically with its DDL, and concurrent index builds are replayable.
+- Closed the implicit-adoption holes: the refusal now runs under the advisory
+  lock on every ensure (not only before the first registration), tables are
+  claimed before/with their creation so interrupted first runs resume,
+  PostgreSQL adoption migrations cannot touch tables another resource owns,
+  raw SQL may not reference qbxsql metadata tables, and `releaseTable`
+  enforces `allowOwnershipTransfer` at runtime in both lanes.
+- Hardened expression fragments against ALTER-subcommand smuggling: balanced
+  parentheses are required and comment tokens and dollar quoting are rejected
+  outside quoted spans.
+- Reworked the schema advisory locks: MySQL lock names are scoped per
+  database, lock liveness is verified before migrations and metadata writes
+  so a mid-ensure reconnect aborts instead of running unlocked, PostgreSQL
+  uses per-resource keys with a separate metadata-creation key and races on
+  `CREATE ... IF NOT EXISTS` are tolerated, and the acquisition wait is
+  configurable via `qbxsql_schema_lock_acquire_timeout`.
+- Made `addForeignKey` migrations actually work online: orphan pre-check, the
+  constraint is added with `ALGORITHM=INPLACE, LOCK=NONE` on a dedicated
+  `foreign_key_checks=0` session that is destroyed on failure, then
+  re-verified -- mirroring the PostgreSQL `NOT VALID` rollout. Authorized
+  blocking migrations keep the fully validating ALTER.
+- Refused silently-unenforceable online DDL: when the server version cannot
+  enforce the promised algorithm, the migration errors with the dual
+  authorization required instead of emitting a bare statement the server may
+  run as a locking COPY. `addColumn` falls back from INSTANT to enforced
+  INPLACE first.
+- Fixed `setPrimaryKey` blocking classification to be data-dependent: adding a
+  table's first primary key is an online INPLACE rebuild and no longer
+  demands operator signoff; replacing one still does. Adoption plans now
+  render migration statements with the same capabilities and introspection
+  data `adopt()` executes with.
+- Fixed the pool-connection isolation-level setup to handle errors and discard
+  the connection, and removed double normalization on the prepared paths.
+- Gate scripts now warn when database connection strings are passed as
+  command arguments, and gate/probe FXServer configs set `sv_master1 ""`.
+- Extended CI integration coverage: quoted/deparsed default and expression
+  convergence in both lanes, raw-SQL resume and implicit-adoption guards,
+  online foreign keys, real outage recovery by killing server-side
+  connections, and an entry-point wiring smoke test that executes
+  `src/index.ts` under faked CFX globals against live databases.
+
 ## 0.5.0 - 2026-07-24
 
 - Added verify-only PostgreSQL extension requirements with minimum versions,

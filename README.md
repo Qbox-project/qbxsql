@@ -34,7 +34,7 @@ set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox
 ensure qbxsql
 ```
 
-The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.5.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
+The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.6.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
 
 Existing resources can keep their normal imports:
 

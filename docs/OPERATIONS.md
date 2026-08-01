@@ -25,6 +25,7 @@
 | `qbxsql_mysql_schema_connection_string` | unset | Optional MySQL schema-only credentials |
 | `qbxsql_postgres_schema_connection_string` | unset | Optional PostgreSQL schema-only credentials |
 | `qbxsql_schema_lock_timeout` | MySQL `30000`, PostgreSQL `2000` | Shared schema DDL lock wait (ms) |
+| `qbxsql_schema_lock_acquire_timeout` | `30000` | Wait for the schema advisory lock before giving up (ms) |
 | `qbxsql_postgres_parse_vector_results` | `true` | Parse pgvector `vector`/`halfvec` results into Lua arrays |
 
 Every shared pool, timeout, slow-query, result-set, queue, health, retry, transaction, and schema-lock option also accepts a `qbxsql_mysql_` or `qbxsql_postgres_` prefixed form. The per-lane form wins over the shared value. Native MySQL names win over legacy names. Invalid typed values are rejected with sanitized warnings. Enabling MySQL `multipleStatements` emits a prominent warning because it increases the impact of SQL injection.
@@ -66,6 +67,14 @@ Status never contains connection strings, credentials, or query parameter values
 
 ## Schema incidents
 
-Never enable blocking DDL globally to bypass an unexplained plan. Switch to `plan`, save the structured action/risk/algorithm output, verify a backup, and schedule a reviewed migration. Failed migrations remain journaled. Raw SQL migrations that failed are not retried automatically.
+Never enable blocking DDL globally to bypass an unexplained plan. Switch to `plan`, save the structured action/risk/algorithm output, verify a backup, and schedule a reviewed migration. Failed migrations remain journaled. Raw SQL migrations that failed -- or that never recorded completion because of a crash -- are not retried automatically; clear the journal row after inspecting the database, or supersede the migration.
+
+Schema advisory locks are scoped per database (MySQL `GET_LOCK` names include
+the database; PostgreSQL uses per-resource keys derived from the database and
+resource names), so servers on separate databases of a shared instance do not
+contend. The acquisition wait is `qbxsql_schema_lock_acquire_timeout`. On
+MySQL, lock liveness is re-verified before migrations and metadata writes: if
+a reconnect silently released the lock mid-ensure, the run aborts instead of
+continuing unlocked.
 
 When separate schema credentials are configured, qbxsql verifies both pools identify the same server and database before granting schema access. This check is performed independently for MySQL and PostgreSQL.

@@ -19,7 +19,7 @@ ensure qbxsql
 
 Remove or disable the real `oxmysql` directory. qbxsql deliberately diagnoses the conflict and leaves its connector inactive if a real resource named `oxmysql` is already running.
 
-The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.5.0'`.
+The resource reports manifest `version '2.14.1'` so dependency checks compare against the oxmysql contract it implements. Its independent prerelease identity is available as `qbxsql_version '0.6.0'`.
 
 New resources may add PostgreSQL without changing legacy consumers:
 

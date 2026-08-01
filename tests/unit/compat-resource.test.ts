@@ -13,7 +13,7 @@ describe('qbxsql compatibility metadata and providers', () => {
     const manifest = await fixture('fxmanifest.lua');
 
     expect(manifest).toContain("version '2.14.1'");
-    expect(manifest).toContain("qbxsql_version '0.5.0'");
+    expect(manifest).toContain("qbxsql_version '0.6.0'");
     expect(manifest).toContain("provide 'oxmysql'");
     expect(manifest).toContain("provide 'mysql-async'");
     expect(manifest).toContain("provide 'ghmattimysql'");

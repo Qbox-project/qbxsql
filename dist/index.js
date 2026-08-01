@@ -25566,6 +25566,11 @@ function databaseConfig(options) {
       options.dialect === "postgresql" ? 2e3 : 3e4,
       1
     ).value,
+    schemaLockAcquireTimeout: integerOption(
+      [`${prefix}schema_lock_acquire_timeout`, "qbxsql_schema_lock_acquire_timeout"],
+      3e4,
+      1e3
+    ).value,
     ...options.schemaConnectionString ? { schemaConnectionString: options.schemaConnectionString } : {}
   };
 }
@@ -25862,7 +25867,10 @@ ${message}`;
         return;
       }
       callbackOperation(
-        database2.prepare(normalizedQuery, normalizedValues, { invokingResource: resource }),
+        database2.prepare(normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
@@ -25889,7 +25897,10 @@ ${message}`;
         return;
       }
       callbackOperation(
-        database2.rawExecute(normalizedQuery, normalizedValues, { invokingResource: resource }),
+        database2.rawExecute(normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
@@ -26502,6 +26513,9 @@ function validateMigrationOperation(operation) {
     case "sql":
       if (!operation.sql.trim()) throw new Error("Raw SQL migration cannot be empty.");
       if (operation.allowDataLoss !== true) throw new Error("Raw SQL migration requires allowDataLoss=true.");
+      if (/qbxsql_schema_/i.test(operation.sql)) {
+        throw new Error("Raw SQL migrations may not reference qbxsql metadata tables.");
+      }
       break;
   }
 }
@@ -27067,10 +27081,44 @@ function orderedArray2(value, label) {
   );
 }
 __name(orderedArray2, "orderedArray");
+function skipQuotedSpan(text2, start, quote) {
+  let index = start + 1;
+  while (index < text2.length) {
+    if (text2[index] === quote) {
+      if (text2[index + 1] === quote) index += 2;
+      else return index;
+    } else {
+      index += 1;
+    }
+  }
+  return text2.length;
+}
+__name(skipQuotedSpan, "skipQuotedSpan");
 function sqlFragment(value, label) {
   if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0") || value.includes(";")) {
     throw new Error(`${label} must be one SQL expression without a semicolon.`);
   }
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "'" || char === '"') {
+      index = skipQuotedSpan(value, index, char);
+      continue;
+    }
+    const next = value[index + 1];
+    if (char === "-" && next === "-" || char === "/" && next === "*") {
+      throw new Error(`${label} must not contain SQL comments.`);
+    }
+    if (char === "$" && next !== void 0 && /[$A-Za-z_]/.test(next)) {
+      throw new Error(`${label} must not contain dollar quoting.`);
+    }
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) throw new Error(`${label} must have balanced parentheses.`);
+    }
+  }
+  if (depth !== 0) throw new Error(`${label} must have balanced parentheses.`);
   return value.trim();
 }
 __name(sqlFragment, "sqlFragment");
@@ -27417,6 +27465,12 @@ function validateOperation(operation) {
     if (typeof operation.sql !== "string" || operation.sql.trim().length === 0) {
       throw new Error("Raw migration SQL cannot be empty.");
     }
+    if (/qbxsql_internal/i.test(operation.sql)) {
+      throw new Error("Raw SQL migrations may not reference qbxsql metadata tables.");
+    }
+  }
+  if (operation.type === "releaseTable" && operation.allowOwnershipTransfer !== true) {
+    throw new Error("releaseTable requires allowOwnershipTransfer=true.");
   }
   return operation;
 }
@@ -27670,12 +27724,12 @@ function createPostgresTableSql(name, table) {
 )`;
 }
 __name(createPostgresTableSql, "createPostgresTableSql");
-function createPostgresIndexSql(table, index, concurrently) {
+function createPostgresIndexSql(table, index, concurrently, ifNotExists = false) {
   const method = (index.method ?? "btree").toUpperCase();
   const include = index.include && index.include.length > 0 ? ` INCLUDE (${index.include.map(quotePostgresIdentifier).join(", ")})` : "";
   const predicate = index.where ? ` WHERE (${index.where})` : "";
   const options = index.options && Object.keys(index.options).length > 0 ? ` WITH (${Object.entries(index.options).map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`).join(", ")})` : "";
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX${concurrently ? " CONCURRENTLY" : ""} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(", ")})${include}${options}${predicate}`;
+  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX${concurrently ? " CONCURRENTLY" : ""}${ifNotExists ? " IF NOT EXISTS" : ""} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(", ")})${include}${options}${predicate}`;
 }
 __name(createPostgresIndexSql, "createPostgresIndexSql");
 function postgresMigrationStatements(operation) {
@@ -27719,7 +27773,7 @@ function postgresMigrationStatements(operation) {
     }
     case "addIndex":
       return [{
-        sql: createPostgresIndexSql(operation.table, operation.definition, true),
+        sql: createPostgresIndexSql(operation.table, operation.definition, true, true),
         concurrent: true
       }];
     case "dropIndex":
@@ -27784,14 +27838,156 @@ function commentOnColumnSql(table, column, comment) {
 }
 __name(commentOnColumnSql, "commentOnColumnSql");
 
+// src/postgres-schema/canonicalize.ts
+var scratchTable = "qbxsql_canonicalize_scratch";
+var probeColumn = "qbxsql_canonicalize_probe";
+var scratchRegclass = `'pg_temp.${scratchTable}'::regclass`;
+function resultRows(result) {
+  return Array.isArray(result.rows) ? result.rows : [];
+}
+__name(resultRows, "resultRows");
+function needsCanonicalization(table) {
+  return Object.values(table.columns).some(
+    (column) => column.default !== void 0 || column.defaultExpression !== void 0
+  ) || (table.checks ?? []).length > 0 || (table.exclusions ?? []).length > 0 || (table.indexes ?? []).some((index) => index.where !== void 0);
+}
+__name(needsCanonicalization, "needsCanonicalization");
+async function canonicalizeTable(connection, table) {
+  if (table.columns[probeColumn]) {
+    throw new Error(`column name '${probeColumn}' is reserved for canonicalization`);
+  }
+  const definitions = [`${quotePostgresIdentifier(probeColumn)} integer`];
+  for (const [column, definition] of Object.entries(table.columns)) {
+    const parts = [quotePostgresIdentifier(column), postgresType(definition)];
+    const defaultValue = postgresDefault(definition);
+    if (defaultValue !== null) parts.push(`DEFAULT ${defaultValue}`);
+    definitions.push(parts.join(" "));
+  }
+  await connection.query(
+    `CREATE TEMPORARY TABLE ${quotePostgresIdentifier(scratchTable)} (${definitions.join(", ")})`
+  );
+  const hasDefaults = Object.values(table.columns).some(
+    (column) => column.default !== void 0 || column.defaultExpression !== void 0
+  );
+  if (hasDefaults) {
+    const defaults2 = new Map(
+      resultRows(await connection.query(
+        `SELECT a.attname AS name, pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS expression
+           FROM pg_catalog.pg_attrdef d
+           JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+          WHERE d.adrelid = ${scratchRegclass}`
+      )).map((row) => [String(row.name), String(row.expression)])
+    );
+    for (const [column, definition] of Object.entries(table.columns)) {
+      if (definition.default === void 0 && definition.defaultExpression === void 0) continue;
+      const expression = defaults2.get(column);
+      if (expression !== void 0) definition.canonicalDefault = expression;
+    }
+  }
+  for (const check of table.checks ?? []) {
+    try {
+      await connection.query(
+        `ALTER TABLE pg_temp.${quotePostgresIdentifier(scratchTable)} ADD ${postgresCheckSql(check)}`
+      );
+      const row = resultRows(await connection.query(
+        `SELECT pg_catalog.pg_get_constraintdef(con.oid, TRUE) AS definition
+           FROM pg_catalog.pg_constraint con
+          WHERE con.conrelid = ${scratchRegclass} AND con.conname = $1`,
+        [check.name]
+      ))[0];
+      if (row?.definition) check.canonicalExpression = checkExpression(String(row.definition));
+    } catch {
+    }
+  }
+  const predicated = (table.indexes ?? []).filter((index) => index.where !== void 0);
+  for (let position = 0; position < predicated.length; position += 1) {
+    const index = predicated[position];
+    const probeName = `${scratchTable}_p${position}`;
+    try {
+      await connection.query(
+        `CREATE INDEX ${quotePostgresIdentifier(probeName)} ON pg_temp.${quotePostgresIdentifier(scratchTable)} (${quotePostgresIdentifier(probeColumn)}) WHERE (${index.where})`
+      );
+      const row = resultRows(await connection.query(
+        `SELECT pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) AS predicate
+           FROM pg_catalog.pg_index idx
+           JOIN pg_catalog.pg_class index_class ON index_class.oid = idx.indexrelid
+          WHERE idx.indrelid = ${scratchRegclass} AND index_class.relname = $1`,
+        [probeName]
+      ))[0];
+      if (row?.predicate) index.canonicalPredicate = String(row.predicate);
+    } catch {
+    }
+  }
+  for (const exclusion of table.exclusions ?? []) {
+    try {
+      await connection.query(
+        `ALTER TABLE pg_temp.${quotePostgresIdentifier(scratchTable)} ADD ${postgresExclusionSql(exclusion)}`
+      );
+      const row = resultRows(await connection.query(
+        `SELECT pg_catalog.pg_get_constraintdef(con.oid, TRUE) AS definition
+           FROM pg_catalog.pg_constraint con
+          WHERE con.conrelid = ${scratchRegclass} AND con.conname = $1`,
+        [exclusion.name]
+      ))[0];
+      if (row?.definition) exclusion.canonicalDefinition = String(row.definition);
+    } catch {
+    }
+  }
+}
+__name(canonicalizeTable, "canonicalizeTable");
+async function canonicalizePostgresSchema(database2, schema) {
+  const targets = Object.keys(schema.tables).filter(
+    (name) => needsCanonicalization(schema.tables[name])
+  );
+  if (targets.length === 0) return schema;
+  const canonical = structuredClone(schema);
+  const connection = await database2.driver.acquire();
+  try {
+    for (const name of targets) {
+      try {
+        await canonicalizeTable(connection, canonical.tables[name]);
+      } catch (error) {
+        console.warn(
+          `[qbxsql] Falling back to text comparison for PostgreSQL table '${name}': ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        await connection.query(`DROP TABLE IF EXISTS pg_temp.${quotePostgresIdentifier(scratchTable)}`).catch(() => {
+        });
+      }
+    }
+  } finally {
+    connection.release();
+  }
+  return canonical;
+}
+__name(canonicalizePostgresSchema, "canonicalizePostgresSchema");
+
 // src/postgres-schema/planner.ts
-function normalizeSql(value) {
-  if (!value) return "";
-  let normalized = value.trim().replace(/\s+/g, " ").replaceAll('"', "").toLowerCase();
+function stripOuterParens(value) {
+  let normalized = value;
   while (normalized.startsWith("(") && normalized.endsWith(")")) {
+    let depth = 0;
+    let wraps = true;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const char = normalized[index];
+      if (char === "(") depth += 1;
+      else if (char === ")") {
+        depth -= 1;
+        if (depth === 0 && index < normalized.length - 1) {
+          wraps = false;
+          break;
+        }
+      }
+    }
+    if (!wraps || depth !== 0) break;
     normalized = normalized.slice(1, -1).trim();
   }
   return normalized;
+}
+__name(stripOuterParens, "stripOuterParens");
+function normalizeSql(value) {
+  if (!value) return "";
+  return stripOuterParens(value.trim().replace(/\s+/g, " ").replaceAll('"', "").toLowerCase());
 }
 __name(normalizeSql, "normalizeSql");
 function normalizeDefault(value) {
@@ -27868,7 +28064,7 @@ function indexMatches(actual, desired) {
     Object.entries(desired.options ?? {}).map(([key, value]) => [key, String(value)])
   );
   const actualOptions = actual.options ?? {};
-  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desiredColumns) && desired.columns.every((column, index) => typeof column === "string" || column.operatorClass === void 0 || (actual.operatorClasses ?? [])[index] === column.operatorClass) && indexOrderingMatches(actual, desired) && sameArray(actual.include, desired.include ?? []) && Object.keys(desiredOptions).length === Object.keys(actualOptions).length && Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) && normalizeSql(actual.predicate) === normalizeSql(desired.where);
+  return actual.valid && actual.unique === (desired.unique ?? false) && actual.method === (desired.method ?? "btree") && sameArray(actual.columns, desiredColumns) && desired.columns.every((column, index) => typeof column === "string" || column.operatorClass === void 0 || (actual.operatorClasses ?? [])[index] === column.operatorClass) && indexOrderingMatches(actual, desired) && sameArray(actual.include, desired.include ?? []) && Object.keys(desiredOptions).length === Object.keys(actualOptions).length && Object.entries(desiredOptions).every(([key, value]) => actualOptions[key] === value) && normalizeSql(actual.predicate) === normalizeSql(desired.canonicalPredicate ?? desired.where);
 }
 __name(indexMatches, "indexMatches");
 function foreignKeyMatches(actual, desired) {
@@ -27934,7 +28130,8 @@ function planExistingTable(name, desired, actual, actions, warnings) {
       }));
     }
     const desiredDefault = postgresDefault(column);
-    if (normalizeDefault(current.defaultExpression) !== normalizeDefault(desiredDefault)) {
+    const comparableDefault = column.canonicalDefault !== void 0 && desiredDefault !== null ? column.canonicalDefault : desiredDefault;
+    if (normalizeDefault(current.defaultExpression) !== normalizeDefault(comparableDefault)) {
       actions.push(automaticAction({
         kind: desiredDefault === null ? "dropDefault" : "setDefault",
         sql: `ALTER TABLE ${qualifiedTable(name)} ALTER COLUMN ${quotePostgresIdentifier(columnName)} ${desiredDefault === null ? "DROP DEFAULT" : `SET DEFAULT ${desiredDefault}`}`,
@@ -28039,7 +28236,7 @@ function planExistingTable(name, desired, actual, actions, warnings) {
         reason: `validate existing rows for ${check.name}`,
         table: name
       }));
-    } else if (normalizeExpression(current.expression) !== normalizeExpression(check.expression)) {
+    } else if (normalizeExpression(current.expression) !== normalizeExpression(check.canonicalExpression ?? check.expression)) {
       actions.push(manualAction({
         kind: "replaceCheck",
         sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresCheckSql(check, true)}`,
@@ -28121,7 +28318,7 @@ function planExistingTable(name, desired, actual, actions, warnings) {
         table: name,
         risk: "high"
       }));
-    } else if (normalizeSql(current.definition) !== normalizeSql(desiredDefinition)) {
+    } else if (normalizeSql(current.definition) !== normalizeSql(exclusion.canonicalDefinition ?? desiredDefinition)) {
       actions.push(manualAction({
         kind: "replaceExclusion",
         sql: `ALTER TABLE ${qualifiedTable(name)} ADD ${postgresExclusionSql(exclusion)}`,
@@ -28201,8 +28398,17 @@ __name(planPostgresSchema, "planPostgresSchema");
 
 // src/postgres-schema/manager.ts
 var advisoryLockNamespace = 196798833;
-var advisoryLockWaitMs = 3e4;
 var advisoryLockPollMs = 100;
+function advisoryLockKey(database2, subject) {
+  const text2 = `${database2 ?? ""}:${subject}`;
+  let hash = 2166136261;
+  for (let index = 0; index < text2.length; index += 1) {
+    hash ^= text2.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash | 0;
+}
+__name(advisoryLockKey, "advisoryLockKey");
 var PostgresSchemaMigrationRequiredError = class extends Error {
   constructor(plan) {
     const blocked = plan.actions.filter((action2) => !action2.automatic);
@@ -28342,6 +28548,7 @@ var PostgresSchemaManager = class {
     this.mode = options.mode ?? "auto";
     this.allowBlocking = options.allowBlocking ?? false;
     this.lockTimeout = options.lockTimeout ?? 2e3;
+    this.lockAcquireTimeout = options.lockAcquireTimeout ?? 3e4;
     this.applicationDatabase = options.applicationDatabase ?? database2;
     this.extensions = options.extensionRegistry ?? new PostgresExtensionRegistry(database2);
   }
@@ -28353,8 +28560,12 @@ var PostgresSchemaManager = class {
   mode;
   allowBlocking;
   lockTimeout;
+  lockAcquireTimeout;
   applicationDatabase;
   extensions;
+  resourceLockKey(resource) {
+    return advisoryLockKey(this.database.driver.databaseName, resource);
+  }
   initialize() {
     this.initialization ??= this.verifySchemaTarget().then(() => this.createMetadata()).catch((error) => {
       this.initialization = null;
@@ -28364,9 +28575,10 @@ var PostgresSchemaManager = class {
   }
   async plan(resource, input) {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    const checksum = postgresSchemaChecksum(schema);
-    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
+    const validated = validatePostgresSchema(input);
+    const checksum = postgresSchemaChecksum(validated);
+    const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     const metadataReady = await this.metadataExists();
     let registry = null;
     let migrations = [];
@@ -28409,21 +28621,22 @@ var PostgresSchemaManager = class {
   }
   async ensure(resource, input) {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    const checksum = postgresSchemaChecksum(schema);
+    const validated = validatePostgresSchema(input);
+    const checksum = postgresSchemaChecksum(validated);
     if (this.mode === "off") throw new PostgresSchemaDisabledError(resource);
     if (this.mode === "plan") {
-      throw new PostgresSchemaPendingChangesError(await this.plan(resource, schema));
+      throw new PostgresSchemaPendingChangesError(await this.plan(resource, validated));
     }
-    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
+    const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const preflightRegistry = await this.readRegistry(resource);
-    if (!preflightRegistry && !await this.hasInterruptedReconciliation(resource, checksum)) {
-      await this.refuseImplicitAdoption(resource, Object.keys(schema.tables));
-    }
     const lock = await this.database.driver.acquire();
+    const lockKey = this.resourceLockKey(resource);
     try {
-      await this.acquireLock(lock);
+      await this.acquireLock(lock, lockKey);
+      if (!await this.hasInterruptedReconciliation(resource, checksum)) {
+        await this.refuseImplicitAdoption(resource, Object.keys(schema.tables));
+      }
       const registry = await this.readRegistry(resource);
       if (registry && registry.version > schema.version) {
         throw new Error(
@@ -28466,26 +28679,32 @@ var PostgresSchemaManager = class {
         appliedMigrations
       };
     } finally {
-      await this.releaseLock(lock);
+      await this.releaseLock(lock, lockKey);
       lock.release();
     }
   }
   async planAdoption(resource, input, baselineVersion) {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    this.validateBaseline(schema, baselineVersion);
-    const extensionReport = await this.extensions.check(resource, schema.extensions ?? []);
-    await this.initialize();
-    await this.assertAdoptionAvailable(resource, schema);
-    const checksum = postgresSchemaChecksum(schema);
+    const validated = validatePostgresSchema(input);
+    this.validateBaseline(validated, baselineVersion);
+    const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
+    const checksum = postgresSchemaChecksum(validated);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     const migrations = this.pendingMigrations(schema, baselineVersion);
-    this.assertMigrationChecksums(
-      schema.migrations ?? [],
-      await this.readMigrationRows(resource)
-    );
+    const metadataReady = await this.metadataExists();
+    if (metadataReady) {
+      await this.assertAdoptionAvailable(resource, schema);
+      this.assertMigrationChecksums(
+        schema.migrations ?? [],
+        await this.readMigrationRows(resource)
+      );
+    }
     const actual = await introspectPostgresDatabase(
       this.database,
-      await this.relevantTables(resource, schema, migrations)
+      metadataReady ? await this.relevantTables(resource, schema, migrations) : [.../* @__PURE__ */ new Set([
+        ...Object.keys(schema.tables),
+        ...migrations.flatMap((migration) => migration.operations.flatMap(operationTable))
+      ])]
     );
     const drift = planPostgresSchema(resource, schema, actual);
     return {
@@ -28506,19 +28725,21 @@ var PostgresSchemaManager = class {
   }
   async adopt(resource, input, baselineVersion) {
     validateResource(resource);
-    const schema = validatePostgresSchema(input);
-    this.validateBaseline(schema, baselineVersion);
+    const validated = validatePostgresSchema(input);
+    this.validateBaseline(validated, baselineVersion);
     if (this.mode === "off") throw new PostgresSchemaDisabledError(resource);
     if (this.mode === "plan") {
-      const plan = await this.planAdoption(resource, schema, baselineVersion);
+      const plan = await this.planAdoption(resource, validated, baselineVersion);
       throw new PostgresSchemaPendingChangesError(plan);
     }
-    const extensionReport = await this.extensions.require(resource, schema.extensions ?? []);
+    const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
+    const checksum = postgresSchemaChecksum(validated);
+    const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const checksum = postgresSchemaChecksum(schema);
     const lock = await this.database.driver.acquire();
+    const lockKey = this.resourceLockKey(resource);
     try {
-      await this.acquireLock(lock);
+      await this.acquireLock(lock, lockKey);
       await this.assertAdoptionAvailable(resource, schema, true);
       const existing = await this.readAdoption(resource);
       if (existing && (existing.baselineVersion !== baselineVersion || existing.targetVersion !== schema.version || existing.checksum !== checksum)) {
@@ -28583,7 +28804,7 @@ var PostgresSchemaManager = class {
       });
       throw error;
     } finally {
-      await this.releaseLock(lock);
+      await this.releaseLock(lock, lockKey);
       lock.release();
     }
   }
@@ -28611,7 +28832,32 @@ var PostgresSchemaManager = class {
       );
     }
   }
+  /**
+   * CREATE SCHEMA/TABLE IF NOT EXISTS are not race-safe in PostgreSQL: two
+   * processes can both pass the existence check and one then fails on the
+   * catalog's unique constraint. Metadata creation runs under its own
+   * advisory key (initialize() runs before any per-resource lock is taken),
+   * and a duplicate-object failure double-checks whether another process
+   * simply won the race.
+   */
   async createMetadata() {
+    const connection = await this.database.driver.acquire();
+    const key = advisoryLockKey(this.database.driver.databaseName, "qbxsql:metadata");
+    try {
+      await this.acquireLock(connection, key);
+      try {
+        await this.createMetadataObjects();
+      } catch (error) {
+        const code = error.code;
+        const duplicate = code === "42P06" || code === "42P07" || code === "23505";
+        if (!duplicate || !await this.metadataExists()) throw error;
+      }
+    } finally {
+      await this.releaseLock(connection, key);
+      connection.release();
+    }
+  }
+  async createMetadataObjects() {
     await this.database.query("CREATE SCHEMA IF NOT EXISTS qbxsql_internal");
     await this.database.query(
       `CREATE TABLE IF NOT EXISTS qbxsql_internal.schema_registry (
@@ -28670,27 +28916,27 @@ var PostgresSchemaManager = class {
    * lock_timeout does not apply to advisory locks, and pg_advisory_lock waits
    * forever, so a stalled holder would hang every later ensure() with no way
    * out. Poll pg_try_advisory_lock instead and give up the way MySQL's
-   * GET_LOCK('qbxsql:schema', 30) does.
+   * GET_LOCK does.
    */
-  async acquireLock(connection) {
-    const deadline = Date.now() + advisoryLockWaitMs;
+  async acquireLock(connection, key) {
+    const deadline = Date.now() + this.lockAcquireTimeout;
     for (; ; ) {
       const { rows: rows4 } = await connection.query("SELECT pg_try_advisory_lock($1, $2) AS acquired", [
         advisoryLockNamespace,
-        1
+        key
       ]);
       const acquired = (Array.isArray(rows4) ? rows4[0] : void 0)?.acquired;
       if (acquired === true || acquired === "t" || Number(acquired) === 1) return;
       if (Date.now() >= deadline) {
         throw new Error(
-          `Timed out after ${advisoryLockWaitMs}ms waiting for the qbxsql PostgreSQL schema lock.`
+          `Timed out after ${this.lockAcquireTimeout}ms waiting for the qbxsql PostgreSQL schema lock.`
         );
       }
       await new Promise((resolve) => setTimeout(resolve, advisoryLockPollMs));
     }
   }
-  async releaseLock(connection) {
-    await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, 1]).catch(() => {
+  async releaseLock(connection, key) {
+    await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, key]).catch(() => {
     });
     await connection.query("RESET lock_timeout").catch(() => {
     });
@@ -28871,7 +29117,13 @@ var PostgresSchemaManager = class {
         `PostgreSQL adoption for '${resource}' is already ${adoption.status}.`
       );
     }
-    for (const table of Object.keys(schema.tables)) {
+    const tables = /* @__PURE__ */ new Set([
+      ...Object.keys(schema.tables),
+      ...(schema.migrations ?? []).flatMap(
+        (migration) => migration.operations.flatMap(operationTable)
+      )
+    ]);
+    for (const table of tables) {
       const owner = first(await this.database.query(
         `SELECT resource_name AS resource
            FROM qbxsql_internal.owned_tables
@@ -28942,7 +29194,11 @@ var PostgresSchemaManager = class {
       if (await this.actionCompleted(resource, actionKey, schemaChecksum2)) continue;
       const statement = {
         sql: action2.sql,
-        ...action2.algorithm === "CONCURRENT" ? { concurrent: true } : {}
+        ...action2.algorithm === "CONCURRENT" ? { concurrent: true } : {},
+        // Claiming in the same transaction as CREATE TABLE means a crash can
+        // never leave an unowned table behind for the next boot to refuse as
+        // an implicit adoption.
+        ...action2.kind === "createTable" && action2.table !== void 0 ? { claimOwnership: action2.table } : {}
       };
       try {
         await this.executeStatement(connection, resource, actionKey, statement, schemaChecksum2);
@@ -28981,15 +29237,48 @@ var PostgresSchemaManager = class {
              updated_at = CURRENT_TIMESTAMP`,
       [resource, actionKey, checksum]
     );
+    const markCompleted = /* @__PURE__ */ __name((runner) => runner.query(
+      `UPDATE qbxsql_internal.schema_actions
+          SET status = 'completed', error = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE resource_name = $1 AND action_key = $2`,
+      [resource, actionKey]
+    ), "markCompleted");
     try {
       if (statement.concurrent) {
         await connection.query(`SET lock_timeout = '${this.lockTimeout}ms'`);
         await connection.query(statement.sql);
+        await markCompleted(connection);
       } else {
         await connection.beginTransaction();
         try {
           await connection.query(`SET LOCAL lock_timeout = '${this.lockTimeout}ms'`);
           if (!statement.releaseOwnership) await connection.query(statement.sql);
+          if (statement.claimOwnership) {
+            await connection.query(
+              `INSERT INTO qbxsql_internal.owned_tables
+                 (table_schema, table_name, resource_name, updated_at)
+               VALUES ('public', $2, $1, CURRENT_TIMESTAMP)
+               ON CONFLICT (table_schema, table_name) DO UPDATE
+                 SET resource_name = CASE
+                   WHEN qbxsql_internal.owned_tables.resource_name = EXCLUDED.resource_name
+                   THEN EXCLUDED.resource_name
+                   ELSE qbxsql_internal.owned_tables.resource_name
+                 END,
+                 updated_at = CURRENT_TIMESTAMP`,
+              [resource, statement.claimOwnership]
+            );
+            const owner = first((await connection.query(
+              `SELECT resource_name AS resource
+                 FROM qbxsql_internal.owned_tables
+                WHERE table_schema = 'public' AND table_name = $1`,
+              [statement.claimOwnership]
+            )).rows);
+            if (owner?.resource !== resource) {
+              throw new Error(
+                `PostgreSQL table public.${statement.claimOwnership} is owned by '${String(owner?.resource)}'.`
+              );
+            }
+          }
           if (statement.renameOwnership) {
             await connection.query(
               `UPDATE qbxsql_internal.owned_tables
@@ -29005,6 +29294,7 @@ var PostgresSchemaManager = class {
               [resource, statement.dropOwnership ?? statement.releaseOwnership]
             );
           }
+          await markCompleted(connection);
           await connection.commit();
         } catch (error) {
           await connection.rollback().catch(() => {
@@ -29012,12 +29302,6 @@ var PostgresSchemaManager = class {
           throw error;
         }
       }
-      await connection.query(
-        `UPDATE qbxsql_internal.schema_actions
-            SET status = 'completed', error = NULL, updated_at = CURRENT_TIMESTAMP
-          WHERE resource_name = $1 AND action_key = $2`,
-        [resource, actionKey]
-      );
     } catch (error) {
       await connection.query(
         `UPDATE qbxsql_internal.schema_actions
@@ -29506,7 +29790,7 @@ function onlineMigrationOperationSql(operation, capabilities = allOnlineCapabili
   const sql = migrationOperationSql(operation);
   switch (operation.type) {
     case "addColumn":
-      return capabilities.instantAddColumn ? `${sql}, ALGORITHM=INSTANT` : sql;
+      return capabilities.instantAddColumn ? `${sql}, ALGORITHM=INSTANT` : capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     case "dropColumn":
       return capabilities.inplaceAlterColumn ? `${sql}, ALGORITHM=INPLACE, LOCK=NONE` : sql;
     case "renameColumn":
@@ -29523,6 +29807,25 @@ function onlineMigrationOperationSql(operation, capabilities = allOnlineCapabili
   }
 }
 __name(onlineMigrationOperationSql, "onlineMigrationOperationSql");
+function operationOnlineCapable(operation, capabilities) {
+  switch (operation.type) {
+    case "addColumn":
+      return capabilities.instantAddColumn || capabilities.inplaceAlterColumn;
+    case "dropColumn":
+    case "renameColumn":
+    case "alterColumn":
+    case "addForeignKey":
+    case "dropForeignKey":
+    case "setPrimaryKey":
+      return capabilities.inplaceAlterColumn;
+    case "addIndex":
+    case "dropIndex":
+      return capabilities.inplaceAddIndex;
+    default:
+      return true;
+  }
+}
+__name(operationOnlineCapable, "operationOnlineCapable");
 
 // src/schema/planner.ts
 var currentCapabilities = {
@@ -29559,10 +29862,18 @@ function expectedType(column) {
 __name(expectedType, "expectedType");
 function normalizedDefault(value) {
   if (value === null || value === void 0) return null;
-  const normalized = String(value).toLowerCase().replace(/\(\)$/, "");
+  const source = String(value);
+  if (source.length >= 2 && source.startsWith("'") && source.endsWith("'")) {
+    return source.slice(1, -1).replace(/''/g, "'").toLowerCase();
+  }
+  const normalized = source.toLowerCase().replace(/\(\)$/, "");
   return normalized === "null" ? null : normalized;
 }
 __name(normalizedDefault, "normalizedDefault");
+function normalizedDesiredDefault(value) {
+  return String(value).toLowerCase();
+}
+__name(normalizedDesiredDefault, "normalizedDesiredDefault");
 function parseEnumValues(columnType) {
   if (!columnType.toLowerCase().startsWith("enum(") || !columnType.endsWith(")")) return [];
   const source = columnType.slice(columnType.indexOf("(") + 1, -1);
@@ -29659,7 +29970,9 @@ function compareColumn(name, desired, actual) {
     changed = true;
     reasons.push(desiredOnUpdate ? "add ON UPDATE CURRENT_TIMESTAMP" : "remove ON UPDATE CURRENT_TIMESTAMP");
   }
-  const expectedDefault = desired.defaultExpression !== void 0 ? normalizedDefault(desired.defaultExpression) : desired.default !== void 0 ? normalizedDefault(typeof desired.default === "boolean" ? Number(desired.default) : desired.default) : null;
+  const expectedDefault = desired.defaultExpression !== void 0 ? normalizedDefault(desired.defaultExpression) : desired.default !== void 0 ? normalizedDesiredDefault(
+    typeof desired.default === "boolean" ? Number(desired.default) : desired.default
+  ) : null;
   if (expectedDefault !== normalizedDefault(actual.defaultValue)) {
     changed = true;
     reasons.push("change default");
@@ -30015,8 +30328,12 @@ function operationAlgorithm(operation) {
   }
 }
 __name(operationAlgorithm, "operationAlgorithm");
-function requiresBlockingAuthorization(operation) {
-  return operation.type === "renameTable" || operation.type === "dropTable" || operation.type === "sql" || operation.type === "setTableOptions" || operation.type === "dropColumn" || operation.type === "dropPrimaryKey" || operation.type === "setPrimaryKey";
+function requiresBlockingAuthorization(operation, actual) {
+  if (operation.type === "setPrimaryKey") {
+    const table = actual?.get(operation.table);
+    return table ? table.indexes.has("PRIMARY") : true;
+  }
+  return operation.type === "renameTable" || operation.type === "dropTable" || operation.type === "sql" || operation.type === "setTableOptions" || operation.type === "dropColumn" || operation.type === "dropPrimaryKey";
 }
 __name(requiresBlockingAuthorization, "requiresBlockingAuthorization");
 function enforcedAlgorithm(action2) {
@@ -30039,7 +30356,7 @@ function migrationActions(migrations, operatorAllowsBlocking, capabilities, actu
   return migrations.flatMap(
     (migration) => migration.operations.map((operation) => {
       const blockingAllowed = migration.allowBlocking === true && operatorAllowsBlocking;
-      const requiresBlocking2 = requiresBlockingAuthorization(operation);
+      const requiresBlocking2 = requiresBlockingAuthorization(operation, actual);
       const algorithm = blockingAllowed ? "MANUAL" : operationAlgorithm(operation);
       return {
         kind: `migration:${operation.type}`,
@@ -30063,6 +30380,7 @@ var SchemaManager = class {
     this.mode = options.mode ?? "auto";
     this.allowBlocking = options.allowBlocking ?? false;
     this.applicationDatabase = options.applicationDatabase ?? database2;
+    this.lockAcquireTimeout = options.lockAcquireTimeout ?? 3e4;
   }
   database;
   static {
@@ -30072,6 +30390,7 @@ var SchemaManager = class {
   mode;
   allowBlocking;
   applicationDatabase;
+  lockAcquireTimeout;
   targetVerification = null;
   initialize() {
     this.initialization ??= this.verifySchemaTarget().then(() => this.createMetadataTables()).catch((error) => {
@@ -30088,20 +30407,6 @@ var SchemaManager = class {
     if (this.mode === "off") throw new SchemaDisabledError(resource);
     if (this.mode === "plan") throw new SchemaPendingChangesError(await this.plan(resource, schema));
     await this.initialize();
-    const preflightRegistry = await this.readRegistry(resource);
-    if (!preflightRegistry) {
-      const preflightTables = this.relevantOwnershipTables(schema, schema.migrations ?? []);
-      await this.refuseImplicitAdoption(
-        resource,
-        preflightTables,
-        await introspectDatabase(this.database, preflightTables)
-      );
-    }
-    const preflightMigrations = preflightRegistry ? (schema.migrations ?? []).filter(
-      (migration) => migration.version > preflightRegistry.version && migration.version <= schema.version
-    ).sort((left, right) => left.version - right.version) : [];
-    this.assertOwnershipTransitions(preflightRegistry, schema, preflightMigrations);
-    this.assertBlockingPolicy(preflightMigrations);
     const lock = await this.database.driver.acquire();
     try {
       await this.acquireLock(lock);
@@ -30114,6 +30419,7 @@ var SchemaManager = class {
       const migrationRows = await this.readMigrationRows(resource);
       this.assertMigrationChecksums(schema.migrations ?? [], migrationRows);
       const pendingMigrations = registry ? (schema.migrations ?? []).filter((migration) => migration.version > registry.version && migration.version <= schema.version).sort((left, right) => left.version - right.version) : [];
+      this.assertOwnershipTransitions(registry, schema, pendingMigrations);
       const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
       const introspectionTables = this.introspectionTables(
         schema,
@@ -30122,6 +30428,8 @@ var SchemaManager = class {
       );
       await this.assertOwnership(resource, relevantTables);
       let actual = await introspectDatabase(this.database, introspectionTables);
+      this.assertBlockingPolicy(pendingMigrations, actual);
+      await this.refuseImplicitAdoption(resource, relevantTables, actual);
       const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
       let plan = planSchema(resource, schema, actual, capabilities);
       const managerWarnings = [];
@@ -30134,6 +30442,7 @@ var SchemaManager = class {
       for (const migration of pendingMigrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === "success") continue;
+        await this.assertLockHeld(lock);
         await this.applyMigration(
           resource,
           migration,
@@ -30147,6 +30456,7 @@ var SchemaManager = class {
       plan = planSchema(resource, schema, actual, capabilities);
       const blocked = plan.actions.filter((entry) => !entry.automatic);
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
+      await this.assertLockHeld(lock);
       const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
@@ -30159,6 +30469,7 @@ var SchemaManager = class {
           `Schema reconciliation for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join("; ")}`
         );
       }
+      await this.assertLockHeld(lock);
       await this.claimTables(resource, Object.keys(schema.tables));
       await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
       return {
@@ -30243,15 +30554,16 @@ var SchemaManager = class {
     const scope = this.introspectionTables(schema, migrations, null);
     const actual = await introspectDatabase(this.database, scope);
     this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
-    const plan = planSchema(
-      resource,
-      schema,
-      actual,
-      capabilitiesForVersion(this.database.driver.serverVersion)
-    );
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    const plan = planSchema(resource, schema, actual, capabilities);
     return {
       ...plan,
-      actions: [...migrationActions(migrations, this.allowBlocking), ...plan.actions],
+      // Capabilities and introspection data are passed so the plan renders the
+      // statements adopt() will actually run; the two must not disagree.
+      actions: [
+        ...migrationActions(migrations, this.allowBlocking, capabilities, actual),
+        ...plan.actions
+      ],
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -30294,10 +30606,10 @@ var SchemaManager = class {
       const migrations = (schema.migrations ?? []).filter(
         (migration) => migration.version > baselineVersion && migration.version <= schema.version
       ).sort((left, right) => left.version - right.version);
-      this.assertBlockingPolicy(migrations);
       const relevantTables = this.relevantOwnershipTables(schema, migrations);
       const introspectionTables = this.introspectionTables(schema, migrations, null);
       let actual = await introspectDatabase(this.database, introspectionTables);
+      this.assertBlockingPolicy(migrations, actual);
       if (!adoptionRecorded) {
         await this.assertAdoptionOwnership(resource, relevantTables);
         this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
@@ -30310,6 +30622,7 @@ var SchemaManager = class {
       for (const migration of migrations) {
         const existing = migrationRows.get(migration.version);
         if (existing?.status === "success") continue;
+        await this.assertLockHeld(lock);
         await this.applyMigration(
           resource,
           migration,
@@ -30325,6 +30638,7 @@ var SchemaManager = class {
       if (plan.actions.some((entry) => !entry.automatic)) {
         throw new SchemaMigrationRequiredError(plan);
       }
+      await this.assertLockHeld(lock);
       const appliedActions = await this.applySchemaPlan(resource, plan);
       const remaining = planSchema(
         resource,
@@ -30337,6 +30651,7 @@ var SchemaManager = class {
           `Schema adoption for '${resource}' did not converge: ${remaining.actions.map((entry) => entry.reason).join("; ")}`
         );
       }
+      await this.assertLockHeld(lock);
       await this.claimTables(resource, Object.keys(schema.tables));
       await this.writeRegistry(resource, schema.version, checksum, Object.keys(schema.tables));
       await this.finishAdoption(resource);
@@ -30454,10 +30769,50 @@ var SchemaManager = class {
       )
     ) === 1;
   }
+  /**
+   * GET_LOCK names are namespaced per MySQL instance, not per database, so the
+   * database name is part of the lock name: on shared hosting, one customer's
+   * slow index build must not block every other server on the instance. Names
+   * are capped at 64 characters, so long database names fall back to a hash.
+   */
+  lockName() {
+    const database2 = this.database.driver.databaseName ?? "default";
+    const name = `qbxsql:schema:${database2}`;
+    if (name.length <= 64) return name;
+    let hash = 2166136261;
+    for (let index = 0; index < database2.length; index += 1) {
+      hash ^= database2.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `qbxsql:schema:${(hash >>> 0).toString(16)}`;
+  }
   async acquireLock(connection) {
-    const result = await connection.query(`SELECT GET_LOCK('qbxsql:schema', 30) AS acquired`);
+    const seconds = Math.max(1, Math.ceil(this.lockAcquireTimeout / 1e3));
+    const result = await connection.query(`SELECT GET_LOCK(?, ?) AS acquired`, [
+      this.lockName(),
+      seconds
+    ]);
     const rows4 = result.rows;
     if (Number(rows4[0]?.acquired) !== 1) throw new Error("Timed out waiting for the qbxsql schema lock.");
+  }
+  /**
+   * The lock lives on one pooled connection while the DDL and metadata writes
+   * run on others. A reconnect mid-ensure tears down the old pool, which kills
+   * the lock session and releases the lock while this ensure keeps running on
+   * the new pool -- exactly the concurrent-DDL scenario the lock exists to
+   * prevent. Probing the lock connection detects both a dead session (the
+   * query throws) and a silently lost lock before anything irreversible runs.
+   */
+  async assertLockHeld(connection) {
+    const result = await connection.query(
+      `SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS held`,
+      [this.lockName()]
+    );
+    if (Number(result.rows[0]?.held) !== 1) {
+      throw new Error(
+        "The qbxsql schema lock was lost mid-operation (connection reset); aborting."
+      );
+    }
   }
   /**
    * GET_LOCK is session scoped, so the lock has to be dropped explicitly before
@@ -30466,7 +30821,7 @@ var SchemaManager = class {
    */
   async releaseLock(connection) {
     try {
-      await connection.query(`SELECT RELEASE_LOCK('qbxsql:schema')`);
+      await connection.query(`SELECT RELEASE_LOCK(?)`, [this.lockName()]);
       connection.release();
     } catch {
       connection.destroy();
@@ -30551,15 +30906,16 @@ var SchemaManager = class {
   async applyMigration(resource, migration, existing, actual, introspectionTables) {
     const checksum = stableChecksum(migration);
     const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
-    const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+    const blockedOperation = migration.operations.find((operation) => requiresBlockingAuthorization(operation, actual));
     if (blockedOperation && !blockingAllowed) {
       throw new Error(
         `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`
       );
     }
-    if (existing?.status === "failed" && migration.operations.some((operation) => operation.type === "sql")) {
+    if (existing && existing.status !== "success" && migration.operations.some((operation) => operation.type === "sql")) {
+      const history = existing.status === "failed" ? "previously failed" : `did not record completion (status '${existing.status}')`;
       throw new Error(
-        `Migration ${migration.version} contains raw SQL and previously failed; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`
+        `Migration ${migration.version} contains raw SQL and ${history}; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`
       );
     }
     await this.database.update(
@@ -30577,7 +30933,10 @@ var SchemaManager = class {
         if (needed) {
           if (operation.type === "releaseTable") {
             await this.releaseTable(resource, operation.table);
+          } else if (operation.type === "addForeignKey" && !blockingAllowed) {
+            await this.applyOnlineForeignKey(resource, operation.table, operation.definition);
           } else {
+            this.assertOnlineEnforceable(operation, blockingAllowed);
             const sql = this.migrationSql(operation, blockingAllowed, actual);
             try {
               await this.database.query(sql, [], { invokingResource: resource });
@@ -30620,16 +30979,25 @@ var SchemaManager = class {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      await this.database.update(
-        `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
-         WHERE resource_name = ? AND version = ?`,
-        [message.slice(0, 65535), resource, migration.version],
-        { invokingResource: resource }
-      );
+      try {
+        await this.database.update(
+          `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
+           WHERE resource_name = ? AND version = ?`,
+          [message.slice(0, 65535), resource, migration.version],
+          { invokingResource: resource }
+        );
+      } catch (statusError) {
+        console.error(
+          `[qbxsql] could not record failed status for migration ${migration.version} [${resource}]`,
+          statusError
+        );
+      }
       throw error;
     }
   }
   async applySchemaPlan(resource, plan) {
+    const created = plan.actions.filter((entry) => entry.kind === "createTable" && entry.table !== void 0).map((entry) => entry.table);
+    if (created.length > 0) await this.claimTables(resource, created);
     const appliedActions = [];
     for (const schemaAction of plan.actions) {
       try {
@@ -30656,6 +31024,62 @@ var SchemaManager = class {
   migrationSql(operation, blockingAllowed, actual) {
     const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
     return primaryKeyMigrationSql(operation, blockingAllowed, capabilities, actual) ?? (blockingAllowed ? migrationOperationSql(operation) : onlineMigrationOperationSql(operation, capabilities));
+  }
+  assertOnlineEnforceable(operation, blockingAllowed) {
+    if (blockingAllowed) return;
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    if (!operationOnlineCapable(operation, capabilities)) {
+      throw new Error(
+        `Migration operation '${operation.type}' cannot be enforced as online DDL on ${this.database.driver.serverVersion ?? "an unknown server version"}, and there is no automatic fallback to blocking DDL. Set migration allowBlocking=true and qbxsql_schema_allow_blocking=true to run it as blocking DDL.`
+      );
+    }
+  }
+  /**
+   * InnoDB only permits ALGORITHM=INPLACE for ADD FOREIGN KEY while
+   * foreign_key_checks is disabled; with the default checks on, the server
+   * demands a validating COPY, so the enforced online statement always
+   * failed. Mirror the PostgreSQL lane's NOT VALID rollout instead: verify
+   * there are no orphans, add the constraint online on a session with checks
+   * off (new writes are enforced from that moment), and re-verify afterwards.
+   * The session is destroyed rather than pooled on any failure so checks-off
+   * never leaks into other queries.
+   */
+  async applyOnlineForeignKey(resource, table, foreignKey) {
+    this.assertOnlineEnforceable({ type: "addForeignKey", table, definition: foreignKey }, false);
+    const before = await this.countForeignKeyOrphans(resource, table, foreignKey);
+    if (before > 0) {
+      throw new Error(
+        `Cannot add foreign key '${foreignKey.name}' online: ${before} row(s) in '${table}' reference missing rows in '${foreignKey.references.table}'. Clean them up first, or set migration allowBlocking=true and qbxsql_schema_allow_blocking=true to run a validating blocking ALTER.`
+      );
+    }
+    const connection = await this.database.driver.acquire();
+    let healthy = false;
+    try {
+      await connection.query("SET SESSION foreign_key_checks = 0");
+      await connection.query(`${addForeignKeySql(table, foreignKey)}, ALGORITHM=INPLACE, LOCK=NONE`);
+      await connection.query("SET SESSION foreign_key_checks = 1");
+      healthy = true;
+    } finally {
+      if (healthy) connection.release();
+      else connection.destroy();
+    }
+    const after = await this.countForeignKeyOrphans(resource, table, foreignKey);
+    if (after > 0) {
+      console.warn(
+        `[qbxsql] foreign key '${foreignKey.name}' on '${table}' was added online, but ${after} orphaned row(s) appeared while it was being created. New writes are enforced; these rows predate the constraint and need manual cleanup.`
+      );
+    }
+  }
+  async countForeignKeyOrphans(resource, table, foreignKey) {
+    const join = foreignKey.columns.map((column, index) => `child.${quoteIdentifier(column)} = parent.${quoteIdentifier(foreignKey.references.columns[index])}`).join(" AND ");
+    const notNull = foreignKey.columns.map((column) => `child.${quoteIdentifier(column)} IS NOT NULL`).join(" AND ");
+    return Number(await this.database.scalar(
+      `SELECT COUNT(*) FROM ${quoteIdentifier(table)} child
+        LEFT JOIN ${quoteIdentifier(foreignKey.references.table)} parent ON ${join}
+       WHERE parent.${quoteIdentifier(foreignKey.references.columns[0])} IS NULL AND ${notNull}`,
+      [],
+      { invokingResource: resource }
+    ));
   }
   async operationNeeded(resource, operation, actual) {
     switch (operation.type) {
@@ -30901,9 +31325,9 @@ var SchemaManager = class {
       }
     }
   }
-  assertBlockingPolicy(migrations) {
+  assertBlockingPolicy(migrations, actual) {
     for (const migration of migrations) {
-      const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+      const blockedOperation = migration.operations.find((operation) => requiresBlockingAuthorization(operation, actual));
       if (blockedOperation && !(migration.allowBlocking === true && this.allowBlocking)) {
         throw new Error(
           `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`
@@ -31433,7 +31857,7 @@ var DatabaseService = class {
     const results = [];
     try {
       for (const parameters of parameterSets) {
-        const [query, values] = this.normalize(sql, parameters);
+        const [query, values] = options.normalized ? [sql, parameters ?? []] : this.normalize(sql, parameters);
         results.push(
           await this.measureQuery(query, resource, () => connection.execute(query, values))
         );
@@ -32192,8 +32616,17 @@ var MySqlDriver = class {
     if (this.config.connectTimeoutExplicit) options.connectTimeout = this.config.connectTimeout;
     const pool = (0, import_promise.createPool)(options);
     pool.on("connection", (connection) => {
-      connection.query(
-        `SET SESSION TRANSACTION ISOLATION LEVEL ${this.config.transactionIsolationLevel}`
+      const raw = connection;
+      raw.query(
+        `SET SESSION TRANSACTION ISOLATION LEVEL ${this.config.transactionIsolationLevel}`,
+        (error) => {
+          if (!error) return;
+          console.error(
+            "[qbxsql] failed to set the session transaction isolation level; discarding the connection",
+            error
+          );
+          raw.destroy();
+        }
       );
     });
     try {
@@ -32708,7 +33141,8 @@ function createRuntime() {
     mysqlSchemas: mysqlSchemaDatabase2 && mysqlDatabase2 ? new SchemaManager(mysqlSchemaDatabase2, {
       mode: config.schemaMode,
       allowBlocking: config.schemaAllowBlocking,
-      applicationDatabase: mysqlDatabase2
+      applicationDatabase: mysqlDatabase2,
+      ...config.mysql?.schemaLockAcquireTimeout !== void 0 ? { lockAcquireTimeout: config.mysql.schemaLockAcquireTimeout } : {}
     }) : null,
     postgresSchemaDatabase: postgresSchemaDatabase2,
     postgresSchemas: postgresSchemaDatabase2 && postgresDatabase2 ? new PostgresSchemaManager(postgresSchemaDatabase2, {
@@ -32716,7 +33150,8 @@ function createRuntime() {
       allowBlocking: config.schemaAllowBlocking,
       applicationDatabase: postgresDatabase2,
       extensionRegistry: postgresExtensions2,
-      ...config.postgres?.schemaLockTimeout !== void 0 ? { lockTimeout: config.postgres.schemaLockTimeout } : {}
+      ...config.postgres?.schemaLockTimeout !== void 0 ? { lockTimeout: config.postgres.schemaLockTimeout } : {},
+      ...config.postgres?.schemaLockAcquireTimeout !== void 0 ? { lockAcquireTimeout: config.postgres.schemaLockAcquireTimeout } : {}
     }) : null,
     primaryDatabase: mysqlDatabase2 ?? postgresDatabase2
   };
