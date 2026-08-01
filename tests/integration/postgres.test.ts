@@ -714,4 +714,103 @@ describe('PostgreSQL driver and schema integration', () => {
     expect(actual.get('pg_ownership_conflict')?.columns.get('note')?.formattedType)
       .toBe('character varying(64)');
   });
+
+  test('converges on defaults, checks, and predicates PostgreSQL rewrites', async () => {
+    const schema: PostgresResourceSchema = {
+      version: 1,
+      tables: {
+        pg_canonical: {
+          columns: {
+            id: { type: 'bigint', identity: 'byDefault', primary: true },
+            status: { type: 'varchar', length: 20, default: 'active' },
+            started_on: { type: 'date', default: '2024-01-01' },
+            offset_value: { type: 'integer', default: -5 },
+            metadata: { type: 'jsonb', default: { enabled: true, tier: 1 } },
+            address: { type: 'inet', default: '127.0.0.1' },
+          },
+          checks: [
+            {
+              name: 'pg_canonical_status_check',
+              expression: "(status = 'active') OR (status = 'retired')",
+            },
+            { name: 'pg_canonical_offset_check', expression: 'offset_value > -100' },
+          ],
+          indexes: [{
+            name: 'pg_canonical_active_idx',
+            columns: ['status'],
+            where: "status = 'active'",
+          }],
+        },
+      },
+    };
+    await manager.ensure('pg_canonical_resource', schema);
+    // The deparsed catalog text for every one of these (casts, re-quoted
+    // literals, re-parenthesized expressions) differs from the author text; a
+    // brand-new manager re-planning from the catalog must still see zero
+    // drift, or every boot would fail to converge.
+    const again = await new PostgresSchemaManager(database, { lockTimeout: 2_000 })
+      .ensure('pg_canonical_resource', schema);
+    expect(again.actions).toHaveLength(0);
+    expect((await manager.plan('pg_canonical_resource', schema)).actions).toHaveLength(0);
+  });
+
+  test('refuses to absorb an existing unmanaged table added to a managed declaration', async () => {
+    const columns = { id: { type: 'int', primary: true } } as const;
+    await manager.ensure('pg_adoption_hole_resource', {
+      version: 1,
+      tables: { pg_adoption_hole_a: { columns: { ...columns } } },
+    });
+    await database.query('CREATE TABLE pg_adoption_hole_b (id INT PRIMARY KEY)');
+    let caught: unknown = null;
+    try {
+      await manager.ensure('pg_adoption_hole_resource', {
+        version: 2,
+        tables: {
+          pg_adoption_hole_a: { columns: { ...columns } },
+          pg_adoption_hole_b: { columns: { ...columns } },
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('unmanaged tables');
+  });
+
+  test('reconnects after the server terminates its backends', async () => {
+    await database.connect();
+    const reconnected = new Promise<void>((resolve) => {
+      const unsubscribe = database.onLifecycle((event) => {
+        if (event === 'reconnected') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+
+    const admin = new Pool({ connectionString: adminConnection });
+    await admin.query(
+      `SELECT pg_terminate_backend(pid)
+         FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [databaseName],
+    );
+    await admin.end();
+
+    // Queries fail until the dead pool is detected and rebuilt; the service
+    // must classify the failure as fatal and recover on its own.
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      try {
+        await database.query('SELECT 1');
+        break;
+      } catch (error) {
+        if (Date.now() > deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    await reconnected;
+    expect(database.getStatus().totals.reconnects).toBeGreaterThanOrEqual(1);
+    expect(database.getStatus().state).toBe('ready');
+  });
 });

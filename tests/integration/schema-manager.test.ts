@@ -12,6 +12,7 @@ import {
   SchemaPendingChangesError,
 } from '../../src/schema/manager.js';
 import type { ResourceSchema } from '../../src/schema/types.js';
+import { stableChecksum, validateSchema } from '../../src/schema/validate.js';
 
 const databaseName = 'qbxsql_schema_test';
 const schemaUser = 'qbxsql_schema_agent';
@@ -840,6 +841,160 @@ describe('resource schema manager integration', () => {
     );
     expect(actual?.columns.has('note')).toBe(true);
     expect(actual?.indexes.has('manual_drift_note_idx')).toBe(true);
+  });
+
+  test('converges on literal defaults MariaDB reports quoted', async () => {
+    const schema: ResourceSchema = {
+      version: 1,
+      tables: {
+        default_convergence: {
+          columns: {
+            id: { type: 'int', primary: true },
+            status: { type: 'varchar', length: 20, default: 'active' },
+            note: { type: 'varchar', length: 40, default: "o'brien" },
+            started_on: { type: 'date', default: '2024-01-01' },
+            offset_value: { type: 'int', default: -5 },
+            enabled: { type: 'boolean', default: true },
+            tier: { type: 'enum', values: ['Bronze', 'Silver'], default: 'Bronze' },
+          },
+        },
+      },
+    };
+    await manager.ensure('default_convergence_resource', schema);
+    // A brand-new manager re-planning purely from INFORMATION_SCHEMA must see
+    // zero drift, or every boot would apply a pointless MODIFY and fail to
+    // converge.
+    const again = await new SchemaManager(database).ensure('default_convergence_resource', schema);
+    expect(again.actions).toHaveLength(0);
+    expect((await manager.plan('default_convergence_resource', schema)).actions).toHaveLength(0);
+  });
+
+  test('refuses to resume a raw-SQL migration that never recorded completion', async () => {
+    const v1: ResourceSchema = {
+      version: 1,
+      tables: { raw_resume_table: { columns: { id: { type: 'int', primary: true } } } },
+    };
+    await manager.ensure('raw_resume_resource', v1);
+    const v2: ResourceSchema = {
+      version: 2,
+      tables: { raw_resume_table: { columns: { id: { type: 'int', primary: true } } } },
+      migrations: [
+        {
+          version: 2,
+          name: 'backfill',
+          allowBlocking: true,
+          operations: [
+            { type: 'sql', sql: 'UPDATE raw_resume_table SET id = id', allowDataLoss: true },
+          ],
+        },
+      ],
+    };
+    // Simulate a crash mid-migration: the journal row exists with the real
+    // checksum but was never flipped to success or failed.
+    await database.query(
+      `INSERT INTO qbxsql_schema_migrations
+        (resource_name, version, name, checksum, status, error, started_at, applied_at)
+       VALUES ('raw_resume_resource', 2, 'backfill', ?, 'running', NULL, CURRENT_TIMESTAMP(6), NULL)`,
+      [stableChecksum(validateSchema(v2).migrations![0])],
+    );
+    // Explicit try/catch: expect().rejects hangs under bun 1.3.5 for this
+    // specific rejection timing (journal write on the pool followed by an
+    // under-lock throw).
+    let caught: unknown = null;
+    try {
+      await new SchemaManager(database, { allowBlocking: true }).ensure('raw_resume_resource', v2);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('did not record completion');
+  });
+
+  test('refuses to absorb an existing unmanaged table added to a managed declaration', async () => {
+    const columns = { id: { type: 'int', primary: true } } as const;
+    await manager.ensure('adoption_hole_resource', {
+      version: 1,
+      tables: { adoption_hole_a: { columns: { ...columns } } },
+    });
+    await database.query('CREATE TABLE `adoption_hole_b` (id INT PRIMARY KEY)');
+    let caught: unknown = null;
+    try {
+      await manager.ensure('adoption_hole_resource', {
+        version: 2,
+        tables: {
+          adoption_hole_a: { columns: { ...columns } },
+          adoption_hole_b: { columns: { ...columns } },
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SchemaAdoptionRequiredError);
+  });
+
+  test('adds a foreign key online with orphan verification', async () => {
+    const schema: ResourceSchema = {
+      version: 2,
+      tables: {
+        fk_parent: { columns: { id: { type: 'int', primary: true } } },
+        fk_child: {
+          columns: {
+            id: { type: 'int', primary: true },
+            parent_id: { type: 'int', nullable: true },
+          },
+        },
+      },
+      migrations: [
+        {
+          version: 2,
+          name: 'link child to parent',
+          operations: [
+            {
+              type: 'addForeignKey',
+              table: 'fk_child',
+              definition: {
+                name: 'fk_child_parent_fk',
+                columns: ['parent_id'],
+                references: { table: 'fk_parent', columns: ['id'] },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    await manager.ensure('fk_online_resource', {
+      version: 1,
+      tables: schema.tables,
+    });
+    await database.query('INSERT INTO `fk_parent` (id) VALUES (1)');
+    await database.query('INSERT INTO `fk_child` (id, parent_id) VALUES (1, 99)');
+
+    // Orphaned rows must block the online path with an actionable error.
+    let caught: unknown = null;
+    try {
+      await manager.ensure('fk_online_resource', schema);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('reference missing rows');
+
+    await database.query('UPDATE `fk_child` SET parent_id = 1 WHERE id = 1');
+    const result = await manager.ensure('fk_online_resource', schema);
+    expect(result.appliedMigrations).toEqual([2]);
+    expect(
+      (await introspectDatabase(database, ['fk_child']))
+        .get('fk_child')
+        ?.foreignKeys.has('fk_child_parent_fk'),
+    ).toBe(true);
+    // The constraint is live for new writes.
+    let violation: unknown = null;
+    try {
+      await database.query('INSERT INTO `fk_child` (id, parent_id) VALUES (2, 424242)');
+    } catch (error) {
+      violation = error;
+    }
+    expect(violation).toBeInstanceOf(Error);
   });
 
 });

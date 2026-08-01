@@ -329,4 +329,42 @@ describe('MySQL driver integration', () => {
     const queryAsync = directExports.get('query_async')!;
     expect(await queryAsync('SELECT ? AS value', [99])).toEqual([{ value: 99 }]);
   });
+
+  test('reconnects after the server kills its connections', async () => {
+    await database.connect();
+    const reconnected = new Promise<void>((resolve) => {
+      const unsubscribe = database.onLifecycle((event) => {
+        if (event === 'reconnected') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+
+    const admin = await createConnection(adminConnection);
+    const [rows] = await admin.query(
+      `SELECT id FROM information_schema.processlist WHERE db = ?`,
+      [databaseName],
+    );
+    for (const row of rows as Array<{ id: number }>) {
+      await admin.query(`KILL ${Number(row.id)}`).catch(() => {});
+    }
+    await admin.end();
+
+    // Queries fail until the dead pool is detected and rebuilt; the service
+    // must classify the failure as fatal and recover on its own.
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      try {
+        await database.query('SELECT 1');
+        break;
+      } catch (error) {
+        if (Date.now() > deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    await reconnected;
+    expect(database.getStatus().totals.reconnects).toBeGreaterThanOrEqual(1);
+    expect(database.getStatus().state).toBe('ready');
+  });
 });

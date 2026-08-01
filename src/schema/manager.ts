@@ -125,16 +125,26 @@ function operationAlgorithm(operation: MigrationOperation): SchemaAction['algori
  * the operator, so destructive column and key changes belong here too --
  * otherwise a resource could drop a column on the next server start with no
  * human in the loop.
+ *
+ * setPrimaryKey is data-dependent: replacing an existing key needs the
+ * COPY-only DROP PRIMARY KEY, while adding the first one is an online INPLACE
+ * rebuild. Without introspection data the conservative answer stands.
  */
-function requiresBlockingAuthorization(operation: MigrationOperation): boolean {
+function requiresBlockingAuthorization(
+  operation: MigrationOperation,
+  actual?: Map<string, ActualTable>,
+): boolean {
+  if (operation.type === 'setPrimaryKey') {
+    const table = actual?.get(operation.table);
+    return table ? table.indexes.has('PRIMARY') : true;
+  }
   return (
     operation.type === 'renameTable' ||
     operation.type === 'dropTable' ||
     operation.type === 'sql' ||
     operation.type === 'setTableOptions' ||
     operation.type === 'dropColumn' ||
-    operation.type === 'dropPrimaryKey' ||
-    operation.type === 'setPrimaryKey'
+    operation.type === 'dropPrimaryKey'
   );
 }
 
@@ -186,7 +196,7 @@ export function migrationActions(
   return migrations.flatMap((migration) =>
     migration.operations.map((operation) => {
       const blockingAllowed = migration.allowBlocking === true && operatorAllowsBlocking;
-      const requiresBlocking = requiresBlockingAuthorization(operation);
+      const requiresBlocking = requiresBlockingAuthorization(operation, actual);
       const algorithm = blockingAllowed ? 'MANUAL' : operationAlgorithm(operation);
       return {
         kind: `migration:${operation.type}`,
@@ -274,7 +284,6 @@ export class SchemaManager {
             .sort((left, right) => left.version - right.version)
         : [];
       this.assertOwnershipTransitions(registry, schema, pendingMigrations);
-      this.assertBlockingPolicy(pendingMigrations);
       const relevantTables = this.relevantOwnershipTables(schema, pendingMigrations);
       const introspectionTables = this.introspectionTables(
         schema,
@@ -284,6 +293,7 @@ export class SchemaManager {
       await this.assertOwnership(resource, relevantTables);
 
       let actual = await introspectDatabase(this.database, introspectionTables);
+      this.assertBlockingPolicy(pendingMigrations, actual);
       // Checked under the lock, and for every ensure: a declared or
       // migration-referenced table that exists but has no ownership row is an
       // implicit adoption whether or not this resource is already registered.
@@ -434,15 +444,16 @@ export class SchemaManager {
     const scope = this.introspectionTables(schema, migrations, null);
     const actual = await introspectDatabase(this.database, scope);
     this.assertAdoptionHasLegacyTables(resource, schema, migrations, actual);
-    const plan = planSchema(
-      resource,
-      schema,
-      actual,
-      capabilitiesForVersion(this.database.driver.serverVersion),
-    );
+    const capabilities = capabilitiesForVersion(this.database.driver.serverVersion);
+    const plan = planSchema(resource, schema, actual, capabilities);
     return {
       ...plan,
-      actions: [...migrationActions(migrations, this.allowBlocking), ...plan.actions],
+      // Capabilities and introspection data are passed so the plan renders the
+      // statements adopt() will actually run; the two must not disagree.
+      actions: [
+        ...migrationActions(migrations, this.allowBlocking, capabilities, actual),
+        ...plan.actions,
+      ],
       checksum,
       dryRun: true,
       appliedActions: [],
@@ -498,10 +509,10 @@ export class SchemaManager {
           (migration) => migration.version > baselineVersion && migration.version <= schema.version,
         )
         .sort((left, right) => left.version - right.version);
-      this.assertBlockingPolicy(migrations);
       const relevantTables = this.relevantOwnershipTables(schema, migrations);
       const introspectionTables = this.introspectionTables(schema, migrations, null);
       let actual = await introspectDatabase(this.database, introspectionTables);
+      this.assertBlockingPolicy(migrations, actual);
 
       if (!adoptionRecorded) {
         await this.assertAdoptionOwnership(resource, relevantTables);
@@ -827,7 +838,8 @@ export class SchemaManager {
   ): Promise<void> {
     const checksum = stableChecksum(migration);
     const blockingAllowed = migration.allowBlocking === true && this.allowBlocking;
-    const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+    const blockedOperation = migration.operations.find((operation) =>
+      requiresBlockingAuthorization(operation, actual));
     if (blockedOperation && !blockingAllowed) {
       throw new Error(
         `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`,
@@ -1367,9 +1379,13 @@ export class SchemaManager {
     }
   }
 
-  private assertBlockingPolicy(migrations: MigrationDefinition[]): void {
+  private assertBlockingPolicy(
+    migrations: MigrationDefinition[],
+    actual?: Map<string, ActualTable>,
+  ): void {
     for (const migration of migrations) {
-      const blockedOperation = migration.operations.find(requiresBlockingAuthorization);
+      const blockedOperation = migration.operations.find((operation) =>
+        requiresBlockingAuthorization(operation, actual));
       if (blockedOperation && !(migration.allowBlocking === true && this.allowBlocking)) {
         throw new Error(
           `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`,
