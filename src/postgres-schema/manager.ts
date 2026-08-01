@@ -972,10 +972,17 @@ export class PostgresSchemaManager {
              updated_at = CURRENT_TIMESTAMP`,
       [resource, actionKey, checksum],
     );
+    const markCompleted = (runner: DatabaseConnection) => runner.query(
+      `UPDATE qbxsql_internal.schema_actions
+          SET status = 'completed', error = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE resource_name = $1 AND action_key = $2`,
+      [resource, actionKey],
+    );
     try {
       if (statement.concurrent) {
         await connection.query(`SET lock_timeout = '${this.lockTimeout}ms'`);
         await connection.query(statement.sql);
+        await markCompleted(connection);
       } else {
         await connection.beginTransaction();
         try {
@@ -996,18 +1003,17 @@ export class PostgresSchemaManager {
               [resource, statement.dropOwnership ?? statement.releaseOwnership],
             );
           }
+          // The completion mark commits atomically with the DDL. Written
+          // separately, a crash in between would leave the journal 'pending'
+          // and replay non-idempotent statements (renames, ADD CONSTRAINT)
+          // on the next boot until an operator edits the journal by hand.
+          await markCompleted(connection);
           await connection.commit();
         } catch (error) {
           await connection.rollback().catch(() => {});
           throw error;
         }
       }
-      await connection.query(
-        `UPDATE qbxsql_internal.schema_actions
-            SET status = 'completed', error = NULL, updated_at = CURRENT_TIMESTAMP
-          WHERE resource_name = $1 AND action_key = $2`,
-        [resource, actionKey],
-      );
     } catch (error) {
       await connection.query(
         `UPDATE qbxsql_internal.schema_actions

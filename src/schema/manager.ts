@@ -789,9 +789,20 @@ export class SchemaManager {
         `Migration ${migration.version} operation '${blockedOperation.type}' requires both migration allowBlocking=true and qbxsql_schema_allow_blocking=true.`,
       );
     }
-    if (existing?.status === 'failed' && migration.operations.some((operation) => operation.type === 'sql')) {
+    // A row still at 'running' means a crash or disconnect interrupted the
+    // previous attempt before it recorded success or failure. Raw SQL cannot
+    // be resumed from either state: qbxsql cannot tell how much of it applied,
+    // and blindly re-running a backfill would double-apply it.
+    if (
+      existing &&
+      existing.status !== 'success' &&
+      migration.operations.some((operation) => operation.type === 'sql')
+    ) {
+      const history = existing.status === 'failed'
+        ? 'previously failed'
+        : `did not record completion (status '${existing.status}')`;
       throw new Error(
-        `Migration ${migration.version} contains raw SQL and previously failed; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`,
+        `Migration ${migration.version} contains raw SQL and ${history}; qbxsql cannot tell how much of it applied. Inspect the database, then either clear the row from qbxsql_schema_migrations to retry it or supersede it with a new migration version.`,
       );
     }
 
@@ -854,12 +865,22 @@ export class SchemaManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      await this.database.update(
-        `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
-         WHERE resource_name = ? AND version = ?`,
-        [message.slice(0, 65_535), resource, migration.version],
-        { invokingResource: resource },
-      );
+      try {
+        await this.database.update(
+          `UPDATE qbxsql_schema_migrations SET status = 'failed', error = ?
+           WHERE resource_name = ? AND version = ?`,
+          [message.slice(0, 65_535), resource, migration.version],
+          { invokingResource: resource },
+        );
+      } catch (statusError) {
+        // The migration failure is the error worth surfacing; a failed status
+        // write (usually the same outage) must not replace it. The row stays
+        // 'running', which the raw-SQL guard above treats as unresumable.
+        console.error(
+          `[qbxsql] could not record failed status for migration ${migration.version} [${resource}]`,
+          statusError,
+        );
+      }
       throw error;
     }
   }

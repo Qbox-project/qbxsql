@@ -183,6 +183,7 @@ export function createPostgresIndexSql(
   table: string,
   index: PostgresIndexDefinition,
   concurrently: boolean,
+  ifNotExists = false,
 ): string {
   const method = (index.method ?? 'btree').toUpperCase();
   const include =
@@ -195,7 +196,7 @@ export function createPostgresIndexSql(
       .map(([key, value]) => `${quotePostgresIdentifier(key)} = ${postgresIndexOptionSql(value)}`)
       .join(', ')})`
     : '';
-  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX${concurrently ? ' CONCURRENTLY' : ''} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(', ')})${include}${options}${predicate}`;
+  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX${concurrently ? ' CONCURRENTLY' : ''}${ifNotExists ? ' IF NOT EXISTS' : ''} ${quotePostgresIdentifier(index.name)} ON ${qualifiedTable(table)} USING ${method} (${index.columns.map(postgresIndexColumnSql).join(', ')})${include}${options}${predicate}`;
 }
 
 export interface PostgresMigrationStatement {
@@ -248,8 +249,12 @@ export function postgresMigrationStatements(
       return statements;
     }
     case 'addIndex':
+      // IF NOT EXISTS makes the statement replayable when a crash lands
+      // between the concurrent build and its journal mark. If the crash was
+      // mid-build instead, the leftover is invalid and the next ensure()'s
+      // drift plan drops and rebuilds it automatically.
       return [{
-        sql: createPostgresIndexSql(operation.table, operation.definition, true),
+        sql: createPostgresIndexSql(operation.table, operation.definition, true, true),
         concurrent: true,
       }];
     case 'dropIndex':
