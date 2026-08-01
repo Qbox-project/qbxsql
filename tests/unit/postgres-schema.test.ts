@@ -70,6 +70,43 @@ describe('PostgreSQL declarative schemas', () => {
     expect(() => validatePostgresSchema(unsafe)).toThrow('without a semicolon');
   });
 
+  test('rejects ALTER subcommand smuggling through expression fragments', () => {
+    const smuggled = schema();
+    smuggled.tables.properties!.checks = [{
+      name: 'properties_price_check',
+      expression: 'x > 0) NOT VALID, DROP COLUMN owner --',
+    }];
+    // The unbalanced ')' is caught before the comment token is even reached.
+    expect(() => validatePostgresSchema(smuggled)).toThrow('balanced parentheses');
+
+    const unbalanced = schema();
+    unbalanced.tables.properties!.checks = [{
+      name: 'properties_price_check',
+      expression: 'x > 0) NOT VALID, DROP COLUMN owner',
+    }];
+    expect(() => validatePostgresSchema(unbalanced)).toThrow('balanced parentheses');
+
+    const commented = schema();
+    commented.tables.properties!.indexes![0]!.where = 'owner IS NOT NULL /* hide */';
+    expect(() => validatePostgresSchema(commented)).toThrow('SQL comments');
+
+    const dollarQuoted = schema();
+    dollarQuoted.tables.properties!.checks = [{
+      name: 'properties_price_check',
+      expression: 'owner <> $$) DROP COLUMN owner$$',
+    }];
+    expect(() => validatePostgresSchema(dollarQuoted)).toThrow('dollar quoting');
+
+    // Legitimate expressions keep working, including literals that contain
+    // comment-looking or paren-looking text inside quotes.
+    const legitimate = schema();
+    legitimate.tables.properties!.checks = [{
+      name: 'properties_owner_check',
+      expression: "(owner <> 'a--b') AND (owner <> '(')",
+    }];
+    expect(() => validatePostgresSchema(legitimate)).not.toThrow();
+  });
+
   test('requires allowDataLoss for destructive migrations', () => {
     const drop = schema();
     drop.migrations = [

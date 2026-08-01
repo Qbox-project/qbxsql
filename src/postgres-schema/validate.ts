@@ -118,6 +118,28 @@ function orderedArray<T>(value: unknown, label: string): T[] {
   );
 }
 
+function skipQuotedSpan(text: string, start: number, quote: "'" | '"'): number {
+  let index = start + 1;
+  while (index < text.length) {
+    if (text[index] === quote) {
+      if (text[index + 1] === quote) index += 2;
+      else return index;
+    } else {
+      index += 1;
+    }
+  }
+  return text.length;
+}
+
+/**
+ * Expression fragments are interpolated into DDL inside a parenthesized
+ * wrapper. A comment token could disarm the wrapper's tail (turning a NOT
+ * VALID online rollout into a blocking validation), an unbalanced ')' could
+ * close the wrapper and smuggle extra ALTER TABLE subcommands past the
+ * dataSafe/onlineSafe classification, and dollar quoting could hide either
+ * from this scan. All three are rejected outside quoted spans, so legitimate
+ * literals like 'a--b' still pass.
+ */
 function sqlFragment(value: unknown, label: string): string {
   if (
     typeof value !== 'string' ||
@@ -127,6 +149,27 @@ function sqlFragment(value: unknown, label: string): string {
   ) {
     throw new Error(`${label} must be one SQL expression without a semicolon.`);
   }
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    if (char === "'" || char === '"') {
+      index = skipQuotedSpan(value, index, char);
+      continue;
+    }
+    const next = value[index + 1];
+    if ((char === '-' && next === '-') || (char === '/' && next === '*')) {
+      throw new Error(`${label} must not contain SQL comments.`);
+    }
+    if (char === '$' && next !== undefined && /[$A-Za-z_]/.test(next)) {
+      throw new Error(`${label} must not contain dollar quoting.`);
+    }
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth < 0) throw new Error(`${label} must have balanced parentheses.`);
+    }
+  }
+  if (depth !== 0) throw new Error(`${label} must have balanced parentheses.`);
   return value.trim();
 }
 
