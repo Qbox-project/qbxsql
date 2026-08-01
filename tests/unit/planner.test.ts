@@ -219,6 +219,70 @@ describe('declarative schema planner', () => {
     expect(plan.actions).toHaveLength(0);
   });
 
+  test('converges on MariaDB-quoted string defaults', () => {
+    const current = actual(50);
+    current.columns.set('status', {
+      name: 'status',
+      type: 'varchar',
+      columnType: 'varchar(20)',
+      columnTypeRaw: 'varchar(20)',
+      nullable: false,
+      defaultValue: "'active'",
+      extra: '',
+      maximumLength: 20,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    current.columns.set('note', {
+      name: 'note',
+      type: 'varchar',
+      columnType: 'varchar(40)',
+      columnTypeRaw: 'varchar(40)',
+      nullable: false,
+      defaultValue: "'o''brien'",
+      extra: '',
+      maximumLength: 40,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.columns.status = { type: 'varchar', length: 20, default: 'active' };
+    desired.tables.properties!.columns.note = { type: 'varchar', length: 40, default: "o'brien" };
+
+    const plan = planSchema('housing', desired, new Map([['properties', current]]));
+    expect(plan.actions).toHaveLength(0);
+  });
+
+  test('reads a quoted null default as the string literal, not as no default', () => {
+    const current = actual(50);
+    current.columns.set('status', {
+      name: 'status',
+      type: 'varchar',
+      columnType: 'varchar(20)',
+      columnTypeRaw: 'varchar(20)',
+      nullable: false,
+      defaultValue: "'null'",
+      extra: '',
+      maximumLength: 20,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    const matching = schema(50);
+    matching.tables.properties!.columns.status = { type: 'varchar', length: 20, default: 'null' };
+    expect(
+      planSchema('housing', matching, new Map([['properties', current]])).actions,
+    ).toHaveLength(0);
+
+    const withoutDefault = schema(50);
+    withoutDefault.tables.properties!.columns.status = { type: 'varchar', length: 20 };
+    expect(
+      planSchema('housing', withoutDefault, new Map([['properties', current]])).actions[0]?.reason,
+    ).toContain('change default');
+  });
+
   test('detects engine, charset, and collation drift', () => {
     const current = actual(50);
     current.engine = 'MyISAM';

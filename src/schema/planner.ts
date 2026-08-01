@@ -62,8 +62,26 @@ function expectedType(column: ColumnDefinition): string {
 
 function normalizedDefault(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  const normalized = String(value).toLowerCase().replace(/\(\)$/, '');
+  const source = String(value);
+  // MariaDB >= 10.2.7 reports literal defaults quoted ('active', doubling
+  // embedded quotes), while MySQL reports them bare. Unquote so both servers
+  // compare equal against the bare desired value. A quoted 'null' is the
+  // four-character string literal, so the no-default sentinel below must only
+  // match the bare word.
+  if (source.length >= 2 && source.startsWith("'") && source.endsWith("'")) {
+    return source.slice(1, -1).replace(/''/g, "'").toLowerCase();
+  }
+  const normalized = source.toLowerCase().replace(/\(\)$/, '');
   return normalized === 'null' ? null : normalized;
+}
+
+/**
+ * Desired literal defaults are values, never SQL: the bare-null sentinel and
+ * the trailing-parens strip only apply to introspected text and expressions,
+ * or a declared string default of 'null' would read as "no default".
+ */
+function normalizedDesiredDefault(value: unknown): string {
+  return String(value).toLowerCase();
 }
 
 export function parseEnumValues(columnType: string): string[] {
@@ -184,7 +202,9 @@ export function compareColumn(
     desired.defaultExpression !== undefined
       ? normalizedDefault(desired.defaultExpression)
       : desired.default !== undefined
-        ? normalizedDefault(typeof desired.default === 'boolean' ? Number(desired.default) : desired.default)
+        ? normalizedDesiredDefault(
+            typeof desired.default === 'boolean' ? Number(desired.default) : desired.default,
+          )
         : null;
   if (expectedDefault !== normalizedDefault(actual.defaultValue)) {
     changed = true;
