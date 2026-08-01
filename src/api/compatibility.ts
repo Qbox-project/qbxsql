@@ -328,7 +328,10 @@ export function registerCompatibilityExports(
         return;
       }
       callbackOperation(
-        database.prepare(normalizedQuery, normalizedValues, { invokingResource: resource }),
+        database.prepare(normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true,
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,
@@ -361,7 +364,10 @@ export function registerCompatibilityExports(
         return;
       }
       callbackOperation(
-        database.rawExecute(normalizedQuery, normalizedValues, { invokingResource: resource }),
+        database.rawExecute(normalizedQuery, normalizedValues, {
+          invokingResource: resource,
+          normalized: true,
+        }),
         resolvedCallback,
         resource,
         returnCallbackErrors,

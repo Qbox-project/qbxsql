@@ -453,8 +453,24 @@ export class MySqlDriver implements DatabaseDriver {
 
     const pool = createPool(options);
     pool.on('connection', (connection) => {
-      connection.query(
+      // The event delivers the underlying callback-API connection. Without a
+      // callback, a failure here would surface as an unhandled 'error' event;
+      // with one, a connection whose isolation level could not be set is
+      // discarded instead of serving queries at the wrong level.
+      const raw = connection as unknown as {
+        query(sql: string, callback: (error: unknown) => void): void;
+        destroy(): void;
+      };
+      raw.query(
         `SET SESSION TRANSACTION ISOLATION LEVEL ${this.config.transactionIsolationLevel}`,
+        (error: unknown) => {
+          if (!error) return;
+          console.error(
+            '[qbxsql] failed to set the session transaction isolation level; discarding the connection',
+            error,
+          );
+          raw.destroy();
+        },
       );
     });
 

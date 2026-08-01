@@ -306,7 +306,9 @@ export class DatabaseService {
     const results: DriverResult[] = [];
     try {
       for (const parameters of parameterSets) {
-        const [query, values] = this.normalize(sql, parameters);
+        const [query, values] = options.normalized
+          ? [sql, (parameters ?? []) as SqlParameter[]]
+          : this.normalize(sql, parameters);
         results.push(
           await this.measureQuery(query, resource, () => connection.execute(query, values)),
         );
