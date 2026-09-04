@@ -27,5 +27,6 @@ Behavioral ground rules worth knowing before you propose a change:
   documented and deliberate. Don't change contract behavior casually.
 - The schema manager never trades safety for convenience: no silent blocking
   DDL, no destructive reconciliation, no unjournaled migrations.
-- Nothing may ever log credentials, connection strings, or query parameter
-  values.
+- Nothing may ever log credentials or connection strings. Query text and
+  bound values appear only where oxmysql prints them too — query errors and
+  debug mode — and never in status output.

@@ -4,6 +4,24 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
+- Fixed `qbxsql_schema_lock_timeout` being ignored on MySQL/MariaDB. Schema
+  DDL now runs on the schema-lock session with `lock_wait_timeout` set from
+  it, so a statement queued behind a long transaction's metadata lock fails
+  after the configured wait instead of holding the schema lock, and every
+  other resource's startup, indefinitely.
+- Fixed PostgreSQL `addForeignKey` migrations skipping the referential-action
+  and identifier validation that table-level foreign keys receive; a crafted
+  `onDelete`/`onUpdate` could smuggle statements past the online, data-safe
+  classification.
+- MySQL `plan` now refuses version downgrades and edited applied migrations
+  exactly as `ensure` does, and PostgreSQL `plan`/`planAdoption` verify that a
+  separate schema connection targets the application database before
+  introspecting it.
+- Rejected object and array MySQL column defaults at validation time instead
+  of passing them to the DDL generator.
+- Made the MySQL reconnect integration test deterministic: mysql2 silently
+  replaces a killed idle connection, so the test now holds one and fails a
+  query on it.
 - Fixed `@qbxsql/lib/Postgres.lua` crashing at load ("attempt to index a
   function value") and leaving the `Postgres` global unpublished for every
   resource that imports it: the facade's `__index` fallthrough turned the
