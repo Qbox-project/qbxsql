@@ -464,6 +464,7 @@ function validateCheck(check: PostgresCheckDefinition): PostgresCheckDefinition 
 function validateForeignKey(
   foreignKey: PostgresForeignKeyDefinition,
   columns: Record<string, PostgresColumnDefinition>,
+  checkColumnExistence = true,
 ): PostgresForeignKeyDefinition {
   assertPostgresIdentifier(foreignKey.name, 'foreign key name');
   assertPostgresIdentifier(foreignKey.references?.table, `foreign key '${foreignKey.name}' table`);
@@ -477,7 +478,7 @@ function validateForeignKey(
   }
   for (const column of local) {
     assertPostgresIdentifier(column, `foreign key '${foreignKey.name}' column`);
-    if (!columns[column]) {
+    if (checkColumnExistence && !columns[column]) {
       throw new Error(`Foreign key '${foreignKey.name}' references missing local column '${column}'.`);
     }
   }
@@ -593,7 +594,10 @@ function validateOperation(operation: PostgresMigrationOperation): PostgresMigra
     } else if (operation.type === 'addCheck') {
       return { ...operation, definition: validateCheck(operation.definition) };
     } else if (operation.type === 'addForeignKey') {
-      assertPostgresIdentifier(operation.definition.name, 'migration foreign key name');
+      return {
+        ...operation,
+        definition: validateForeignKey(operation.definition, {}, false),
+      };
     } else if (operation.type === 'addExclusion') {
       return {
         ...operation,
@@ -702,13 +706,18 @@ function validateMigrations(
   version: number,
 ): PostgresMigrationDefinition[] {
   const migrations = orderedArray<PostgresMigrationDefinition>(source ?? [], 'Migrations')
-    .map((migration) => ({
-      ...migration,
-      operations: orderedArray<PostgresMigrationOperation>(
-        migration.operations,
-        `Migration ${migration.version} operations`,
-      ).map(validateOperation),
-    }));
+    .map((migration) => {
+      if (!migration || typeof migration !== 'object') {
+        throw new Error('Each migration must be an object.');
+      }
+      return {
+        ...migration,
+        operations: orderedArray<PostgresMigrationOperation>(
+          migration.operations,
+          `Migration ${migration.version} operations`,
+        ).map(validateOperation),
+      };
+    });
   const versions = migrations.map((migration) => migration.version);
   if (
     migrations.some(

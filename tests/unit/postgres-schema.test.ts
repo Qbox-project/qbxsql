@@ -153,6 +153,53 @@ describe('PostgreSQL declarative schemas', () => {
     expect(
       validatePostgresSchema(canonical).tables.properties!.foreignKeys![0]!.onDelete,
     ).toBe('CASCADE');
+
+    // addForeignKey migrations are classified online and data-safe, so a
+    // smuggled subcommand there would also bypass the operator gate.
+    const migration = schema();
+    migration.migrations = [
+      {
+        version: 1,
+        name: 'add owner foreign key',
+        operations: [
+          {
+            type: 'addForeignKey',
+            table: 'properties',
+            definition: {
+              name: 'properties_owner_fk',
+              columns: ['owner'],
+              references: { table: 'users', columns: ['identifier'] },
+              onUpdate: 'CASCADE; DROP TABLE users; --' as 'CASCADE',
+            },
+          },
+        ],
+      },
+    ];
+    expect(() => validatePostgresSchema(migration)).toThrow('onUpdate must be one of');
+
+    const canonicalMigration = schema();
+    canonicalMigration.migrations = [
+      {
+        version: 1,
+        name: 'add owner foreign key',
+        operations: [
+          {
+            type: 'addForeignKey',
+            table: 'properties',
+            definition: {
+              name: 'properties_owner_fk',
+              columns: { 1: 'owner' } as unknown as string[],
+              references: { table: 'users', columns: ['identifier'] },
+              onDelete: 'set null' as 'SET NULL',
+            },
+          },
+        ],
+      },
+    ];
+    expect(validatePostgresSchema(canonicalMigration).migrations![0]!.operations[0]).toMatchObject({
+      type: 'addForeignKey',
+      definition: { columns: ['owner'], onDelete: 'SET NULL' },
+    });
   });
 
   test('renders tables, JSON defaults, partial indexes, and concurrent migrations', () => {
