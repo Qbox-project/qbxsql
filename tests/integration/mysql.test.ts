@@ -332,6 +332,11 @@ describe('MySQL driver integration', () => {
 
   test('reconnects after the server kills its connections', async () => {
     await database.connect();
+    // mysql2 silently discards a pooled connection the server closed and opens
+    // a fresh one, so a pooled query after KILL may never observe an error.
+    // Holding a connection guarantees the failure lands on it, where the
+    // service must classify it as fatal and rebuild the pool.
+    const held = await database.driver.acquire();
     const reconnected = new Promise<void>((resolve) => {
       const unsubscribe = database.onLifecycle((event) => {
         if (event === 'reconnected') {
@@ -351,20 +356,27 @@ describe('MySQL driver integration', () => {
     }
     await admin.end();
 
-    // Queries fail until the dead pool is detected and rebuilt; the service
-    // must classify the failure as fatal and recover on its own.
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-      try {
-        await database.query('SELECT 1');
-        break;
-      } catch (error) {
-        if (Date.now() > deadline) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 250));
+    const deadline = Date.now() + 10_000;
+    let failure: unknown;
+    try {
+      for (;;) {
+        try {
+          await held.query('SELECT 1');
+        } catch (error) {
+          failure = error;
+          break;
+        }
+        if (Date.now() > deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
+    } finally {
+      held.destroy();
     }
+    expect(failure).toBeDefined();
+
     await reconnected;
+    expect(await database.scalar('SELECT 1')).toBe(1);
     expect(database.getStatus().totals.reconnects).toBeGreaterThanOrEqual(1);
     expect(database.getStatus().state).toBe('ready');
-  });
+  }, 30_000);
 });
