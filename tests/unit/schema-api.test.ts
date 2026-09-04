@@ -93,6 +93,27 @@ describe('schema exports', () => {
     expect(calls).toEqual(['evil_resource', 'evil_resource']);
   });
 
+  test('accepts the shim name when the runtime attributes the call to the connector itself', async () => {
+    const calls: string[] = [];
+    const manager = {
+      ensure: async (resource: string) => {
+        calls.push(resource);
+        return { resource };
+      },
+    };
+    const exports = new Map<string, ExportFunction>();
+    registerSchemaExports(manager as never, {
+      addExport: (name, callback) => exports.set(name, callback),
+      addProviderExport() {},
+      // Some server builds report the connector as the invoker of its own
+      // cross-runtime exports; the claimed name must stand in, as for 'unknown'.
+      invokingResource: () => 'qbxsql',
+    });
+
+    await exports.get('ensureSchema_async')!({ version: 1, tables: {} }, 'qbx_core');
+    expect(calls).toEqual(['qbx_core']);
+  });
+
   test('preserves the structured pending plan across callback and promise exports', async () => {
     const pending: SchemaEnsureResult = {
       resource: 'housing',
@@ -143,5 +164,44 @@ describe('schema exports', () => {
       code: 'QBXSQL_SCHEMA_PENDING_CHANGES',
       result: pending,
     });
+  });
+
+  test('delivers refusals without unhandled rejections when the callback returns a rejecting promise', async () => {
+    const manager = {
+      ensure: async () => {
+        throw new Error('dropColumn requires allowDataLoss=true.');
+      },
+    };
+    const exports = new Map<string, ExportFunction>();
+    registerSchemaExports(manager as never, {
+      addExport: (name, callback) => exports.set(name, callback),
+      addProviderExport() {},
+      invokingResource: () => 'housing',
+    });
+
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', listener);
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const delivered = await new Promise<unknown>((resolve) => {
+        exports.get('ensureSchema')!({ version: 1, tables: {} }, (_result: unknown, error: unknown) => {
+          resolve(error);
+          // CFX function references return a promise for the invoking
+          // runtime's completion; simulate that continuation failing after
+          // the refusal was already delivered and handled.
+          return Promise.reject(new Error('mirrored continuation failure'));
+        });
+      });
+      expect(delivered).toMatchObject({ code: 'QBXSQL_SCHEMA_ERROR' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      console.error = originalError;
+      process.off('unhandledRejection', listener);
+    }
+    expect(unhandled).toEqual([]);
   });
 });

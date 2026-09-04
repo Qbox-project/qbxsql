@@ -169,6 +169,8 @@ export interface SchemaCapabilities {
   instantAddColumn: boolean;
   inplaceAlterColumn: boolean;
   inplaceAddIndex: boolean;
+  /** MariaDB has no native JSON type: JSON columns are LONGTEXT aliases. */
+  jsonStoredAsLongtext?: boolean;
 }
 
 export interface SchemaAction {

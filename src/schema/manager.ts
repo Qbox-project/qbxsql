@@ -1106,7 +1106,12 @@ export class SchemaManager {
       case 'alterColumn': {
         const column = actual.get(operation.table)?.columns.get(operation.column);
         if (!column) throw new Error(`Cannot alter missing column '${operation.table}.${operation.column}'.`);
-        const comparison = compareColumn(operation.column, operation.definition, column);
+        const comparison = compareColumn(
+          operation.column,
+          operation.definition,
+          column,
+          capabilitiesForVersion(this.database.driver.serverVersion),
+        );
         if (!comparison.changed) return false;
         if (!comparison.safe && operation.allowDataLoss !== true) {
           throw new Error(

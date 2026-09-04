@@ -1,0 +1,40 @@
+name: Bug report
+description: Something misbehaves, errors, or breaks
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: qbxsql version
+      description: The `qbxsql_version` from fxmanifest.lua or the release you installed.
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: FXServer artifact and database family/version.
+      placeholder: FXServer 12913, MariaDB 11.4
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest snippet or steps that trigger it. For schema issues, include the declaration and the printed plan or error.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant console output
+      description: Remove connection strings and credentials before pasting.
+      render: text

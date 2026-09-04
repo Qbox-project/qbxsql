@@ -2,24 +2,34 @@
 
 ## Reporting a vulnerability
 
-Report suspected vulnerabilities privately to the repository maintainer or through the repository's private security-advisory channel. Do not include credentials, production connection strings, player data, or an exploitable proof in a public issue.
+Use [GitHub private vulnerability reporting](https://github.com/Qbox-project/qbxsql/security/advisories/new)
+for anything exploitable. Do not include credentials, production connection
+strings, player data, or a working exploit in a public issue.
 
-Include the affected `qbxsql_version`, oxmysql compatibility-facing manifest version, FXServer artifact, database family/version, a minimal reproduction, and the security impact. The maintainer should acknowledge the report, reproduce it on a supported matrix entry, prepare a coordinated fix, and publish remediation guidance before public disclosure.
+Include the affected `qbxsql_version`, the FXServer artifact, the database
+family and version, a minimal reproduction, and the impact.
 
 ## Supported versions
 
-The newest prerelease receives security fixes while qbxsql remains `0.x`. After `1.0.0`, the latest stable minor line is supported. The oxmysql compatibility version remains pinned to `2.14.1` until a newer upstream contract has been reviewed and gated.
+The newest prerelease receives security fixes while qbxsql remains `0.x`.
+After `1.0.0`, the latest stable minor line is supported.
 
-## Operational security
+## Operational guidance
 
-- Use a least-privilege application account and a separate schema account where practical.
-- Never paste connection strings into logs or bug reports.
-- Keep `multipleStatements` disabled unless a reviewed resource strictly requires it.
-- Restrict destructive/blocking schema authorization to controlled maintenance windows.
-- Take and verify a database backup before schema adoption, destructive migrations, or a connector canary.
+- Use a least-privilege application account, and a separate schema account
+  where practical (`qbxsql_*_schema_connection_string`).
+- Never paste connection strings into logs or bug reports; qbxsql redacts
+  them from its own output, so a string you see came from somewhere else.
+- Keep MySQL `multipleStatements` disabled unless a reviewed resource
+  strictly requires it.
+- Restrict `qbxsql_schema_allow_blocking` to maintenance windows, and take a
+  verified backup before schema adoption or destructive migrations.
 
-## Local FXServer test credentials
+## Local test credentials
 
-Run `bun run cfx-key:save` to enter the test license through a hidden prompt and store it at `.cache/qbxsql/cfx-license-key`. The entire `.cache/` directory is gitignored, and the writer requests mode `0600` (Windows does not provide equivalent protection through Unix mode bits, so normal account and disk protections still matter). `bun run test:fxserver` uses that file automatically; a temporary `CFX_LICENSE_KEY` environment value takes precedence.
-
-The harness removes the value from preparation-process environments, passes it to the test container by environment name rather than a command argument, redacts the license key and both the MySQL and PostgreSQL connection strings from streamed FXServer output (in the packaged gate, the benchmark, and the contract probe alike), writes `server.cfg` with mode `0600`, and deletes that configuration after the run. Never commit the key, place it in a command argument, or include it in an issue log. Rotate it immediately if a tool ever prints an unmasked value.
+`bun run cfx-key:save` stores your CFX license key for the local FXServer
+gate at `.cache/qbxsql/cfx-license-key` (gitignored, mode `0600` where the OS
+supports it). The gate passes the key by environment, redacts it and both
+database connection strings from streamed output, and deletes its generated
+`server.cfg` after the run. Never commit the key or put it in a command
+argument; rotate it if a tool ever prints an unmasked value.

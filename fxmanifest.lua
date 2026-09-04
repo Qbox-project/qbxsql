@@ -3,7 +3,7 @@ game 'common'
 
 name 'qbxsql'
 author 'ChatDisabled'
-description 'Database adapter, compatibility layer, and schema manager for FiveM'
+description 'Database connector and declarative schema manager for FiveM'
 version '2.14.1'
 qbxsql_version '0.6.0'
 license 'MIT'

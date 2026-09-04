@@ -197,6 +197,32 @@ describe('database connection lifecycle', () => {
     expect(JSON.stringify(database.getStatus())).not.toContain('mysql://test');
   });
 
+  test('excludes internal schema introspection from slow-query accounting', async () => {
+    const driver = new FakeDriver();
+    driver.query = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return result;
+    };
+    const database = new DatabaseService(driver, { ...config, slowQueryWarning: 1 });
+    databases.push(database);
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(' '));
+    };
+    try {
+      await database.query('SELECT 1', [], { invokingResource: 'qbxsql:schema' });
+      await database.query('SELECT 1', [], { invokingResource: 'consumer' });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(database.getStatus().totals.slowQueries).toBe(1);
+    const slowLines = lines.filter((line) => line.includes('slow query'));
+    expect(slowLines).toHaveLength(1);
+    expect(slowLines[0]).toContain('[consumer]');
+  });
+
   test('warns on large result sets using the oxmysql convar threshold', async () => {
     const driver = new FakeDriver();
     driver.query = async () => ({ ...result, rows: [{ id: 1 }, { id: 2 }] });

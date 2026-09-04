@@ -2,6 +2,7 @@ node_modules/
 coverage/
 release/
 .cache/
+.claude/
 *.log
 .env
 .DS_Store

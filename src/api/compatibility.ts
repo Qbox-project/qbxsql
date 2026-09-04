@@ -1,3 +1,4 @@
+import { detachCallbackResult } from './callback.js';
 import type { DatabaseService } from '../core/database.js';
 import type { SqlParameters, TransactionStatement } from '../core/types.js';
 
@@ -68,6 +69,13 @@ export function schemaResource(explicit: unknown, bindings: RuntimeBindings): st
   const claimed = typeof explicit === 'string' && explicit.length > 0 ? explicit : null;
   if (!claimed) return invoking;
   if (invoking === 'unknown' || invoking === claimed) return claimed;
+  // Some server builds report the connector itself as the invoker of its own
+  // cross-runtime exports. qbxsql never calls these exports internally, so its
+  // own name carries no attribution; the shim-supplied name stands in exactly
+  // as it does when the runtime cannot resolve the invoker at all.
+  const own =
+    typeof GetCurrentResourceName === 'function' ? GetCurrentResourceName() : 'qbxsql';
+  if (invoking === own) return claimed;
   throw new SchemaResourceMismatchError(invoking, claimed);
 }
 
@@ -185,7 +193,7 @@ export function registerCompatibilityExports(
   function invokeCallback(callback: CfxCallback | undefined, resource: string, ...args: unknown[]): void {
     if (!callback) return;
     try {
-      callback(...(args as [unknown, string?]));
+      detachCallbackResult(callback(...(args as [unknown, string?])));
     } catch (error) {
       if (typeof error !== 'string') {
         console.error(`[qbxsql] callback from ${resource} threw`, error);
@@ -550,7 +558,7 @@ export function registerMySqlUnavailableExports(
       | undefined;
     console.error(`[qbxsql] ${message}`);
     if (callback) {
-      callback(null, message);
+      detachCallbackResult(callback(null, message));
       return;
     }
     throw error();

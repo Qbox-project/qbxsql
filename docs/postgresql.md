@@ -1,6 +1,10 @@
-# PostgreSQL-native lane
+# PostgreSQL
 
-qbxsql can run PostgreSQL by itself or beside MySQL/MariaDB. The pools, lifecycle state, outage queues, transactions, health checks, and schema credentials are independent. There is deliberately no SQL translation and no cross-database transaction coordinator.
+qbxsql can run PostgreSQL by itself or beside MySQL/MariaDB. The pools,
+lifecycle state, outage queues, transactions, health checks, and schema
+credentials are independent per lane. There is deliberately no SQL
+translation and no cross-database transaction coordinator: legacy APIs always
+mean MySQL, and `Postgres.*` always means PostgreSQL.
 
 ## Configuration
 
@@ -186,7 +190,7 @@ schemas must declare the `postgis` extension.
 
 PostgreSQL columns use `identity = 'always'` or `identity = 'byDefault'`, not MySQL `autoIncrement`. MySQL-only fields such as `unsigned`, `engine`, `charset`, and `collation` are rejected.
 
-Tables support primary keys, named indexes, partial indexes (`where`), included columns (`include`), btree/gin/gist/spgist/brin/hash/hnsw/ivfflat methods, per-column operator classes, index storage options, named checks, foreign keys, exclusion constraints, and comments. The complete example is [postgres-properties-schema.lua](../examples/postgres-properties-schema.lua).
+Tables support primary keys, named indexes, partial indexes (`where`), included columns (`include`), btree/gin/gist/spgist/brin/hash/hnsw/ivfflat methods, per-column operator classes, index storage options, named checks, foreign keys, exclusion constraints, and comments. The complete example is [postgres-properties-schema.lua](../examples/postgres-properties-schema.lua); the shared policy model (modes, migrations, gates, ownership, adoption) is described in [schemas.md](schemas.md).
 
 The same `auto`, `plan`, and `off` policy applies to both dialects. PostgreSQL automatic reconciliation uses transactional DDL for ordinary safe changes, `CREATE INDEX CONCURRENTLY`, and `NOT VALID` plus `VALIDATE CONSTRAINT`. A per-resource session advisory lock serializes schema work, and action journals allow interrupted work to be reconciled.
 

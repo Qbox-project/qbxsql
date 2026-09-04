@@ -2,9 +2,15 @@
   "name": "qbxsql",
   "version": "0.6.0",
   "private": true,
-  "description": "Database adapter, compatibility layer, and schema manager for FiveM",
+  "description": "Database connector and declarative schema manager for FiveM",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Qbox-project/qbxsql.git"
+  },
+  "bugs": "https://github.com/Qbox-project/qbxsql/issues",
+  "homepage": "https://github.com/Qbox-project/qbxsql",
   "scripts": {
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
@@ -20,12 +26,8 @@
     "benchmark:compare": "node scripts/compare-benchmarks.mjs",
     "contract:probe": "node scripts/run-contract-probe.mjs",
     "contract:compare": "node scripts/compare-contract-probes.mjs",
-    "evidence:runtime": "node scripts/write-runtime-evidence.mjs",
     "cfx-key:save": "node scripts/save-local-cfx-key.mjs",
-    "test:fxserver": "node scripts/run-local-linux-gate.mjs",
-    "certification:validate": "node scripts/validate-qbox-certification.mjs",
-    "soak:validate": "node scripts/validate-soak.mjs",
-    "canary:validate": "node scripts/validate-canary.mjs"
+    "test:fxserver": "node scripts/run-local-linux-gate.mjs"
   },
   "dependencies": {
     "mysql2": "3.23.1",

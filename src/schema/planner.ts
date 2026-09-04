@@ -44,6 +44,7 @@ export function capabilitiesForVersion(serverVersion: string | null): SchemaCapa
     instantAddColumn: mariaDb ? major > 10 || (major === 10 && minor >= 3) : major >= 8,
     inplaceAlterColumn: mariaDb ? major >= 10 : major >= 8,
     inplaceAddIndex: mariaDb ? major >= 10 : major >= 8,
+    jsonStoredAsLongtext: mariaDb,
   };
 }
 
@@ -56,8 +57,10 @@ function desiredPrimaryKey(table: TableDefinition): string[] {
   );
 }
 
-function expectedType(column: ColumnDefinition): string {
-  return column.type === 'boolean' ? 'tinyint' : column.type;
+function expectedType(column: ColumnDefinition, capabilities?: SchemaCapabilities): string {
+  if (column.type === 'boolean') return 'tinyint';
+  if (column.type === 'json' && capabilities?.jsonStoredAsLongtext === true) return 'longtext';
+  return column.type;
 }
 
 function normalizedDefault(value: unknown): string | null {
@@ -119,11 +122,12 @@ export function compareColumn(
   name: string,
   desired: ColumnDefinition,
   actual: ActualColumn,
+  capabilities?: SchemaCapabilities,
 ): { changed: boolean; safe: boolean; reasons: string[] } {
   let changed = false;
   let safe = true;
   const reasons: string[] = [];
-  const targetType = expectedType(desired);
+  const targetType = expectedType(desired, capabilities);
 
   if (targetType !== actual.type) {
     changed = true;
@@ -378,7 +382,7 @@ export function planSchema(
         continue;
       }
 
-      const change = compareColumn(columnName, column, actualColumn);
+      const change = compareColumn(columnName, column, actualColumn, capabilities);
       if (change.changed) {
         const onlineSafe =
           capabilities.inplaceAlterColumn && varcharWideningIsOnline(column, actualColumn, actual);

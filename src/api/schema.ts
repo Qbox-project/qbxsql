@@ -1,3 +1,4 @@
+import { detachCallbackResult } from './callback.js';
 import {
   SchemaDisabledError,
   SchemaMigrationRequiredError,
@@ -53,7 +54,7 @@ export function registerSchemaUnavailableExports(
       | SchemaCallback
       | undefined;
     if (callback) {
-      callback(null, failure);
+      detachCallbackResult(callback(null, failure));
       return;
     }
     throw Object.assign(new Error(failure.message), { code: failure.code });
@@ -89,7 +90,7 @@ export function registerSchemaExports(
   ): void {
     if (!callback) return;
     try {
-      callback(result, error);
+      detachCallbackResult(callback(result, error));
     } catch (callbackError) {
       console.error('[qbxsql] schema callback failed', callbackError);
     }

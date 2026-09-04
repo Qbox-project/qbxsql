@@ -1,3 +1,4 @@
+import { detachCallbackResult } from './callback.js';
 import type { DatabaseService } from '../core/database.js';
 import type { DriverResult, SqlParameters } from '../core/types.js';
 import {
@@ -56,7 +57,7 @@ function invokeCallback(
 ): void {
   if (!callback) return;
   try {
-    callback(result, error);
+    detachCallbackResult(callback(result, error));
   } catch (callbackError) {
     console.error('[qbxsql] PostgreSQL callback failed', callbackError);
   }

@@ -1,28 +1,51 @@
+<div align="center">
+
 # qbxsql
 
-qbxsql is a dual-database connector and declarative schema manager for Cfx.re/FiveM. One resource can run MySQL/MariaDB, PostgreSQL, or both at the same time. The MySQL lane targets the oxmysql 2.14.1, mysql-async, and ghmattimysql query contracts; new resources can use the explicit PostgreSQL-native API.
+**Database connector and declarative schema manager for FiveM.**
 
-This is a `0.x` prerelease. Promote it only after the lean automated checks, a stock-FXServer smoke test, and the relevant real-Qbox checks pass.
+[![CI](https://github.com/Qbox-project/qbxsql/actions/workflows/ci.yml/badge.svg)](https://github.com/Qbox-project/qbxsql/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+One resource that replaces oxmysql, adds an optional PostgreSQL lane, and lets
+resources declare their database schema in Lua instead of shipping `.sql` files.
+
+</div>
+
+---
+
+## What it does
+
+**Drop-in oxmysql replacement.** qbxsql implements the oxmysql 2.14.1 query
+contract and provides the `oxmysql`, `mysql-async`, and `ghmattimysql` export
+names. Existing resources keep their imports and their SQL — no source changes.
+
+**Declarative schemas.** A resource declares what its tables should look like;
+qbxsql creates them on a fresh database, verifies them on every start, and
+applies safe changes online. Anything destructive or blocking requires an
+explicit versioned migration, signed off by both the script author and the
+server owner. No more "import this .sql file before starting".
+
+**Optional PostgreSQL.** A separate PostgreSQL 16+ lane with its own pools,
+lifecycle, and schema manager. Run MySQL/MariaDB only, PostgreSQL only, or both
+side by side. Legacy APIs always route to MySQL; qbxsql never translates SQL
+between dialects.
 
 ## Installation
 
-Use the generated release artifact, which contains one resource directory:
-
-```text
-resources/
-└── qbxsql/
-```
-
-Remove any real `oxmysql`, `mysql-async`, or `ghmattimysql` connector resources. Configure one or both database lanes before qbxsql starts, then start it before database consumers:
+Download the latest [release](https://github.com/Qbox-project/qbxsql/releases)
+(or clone this repository — the built resource is committed) into your
+`resources/` folder, remove any real `oxmysql`, `mysql-async`, or
+`ghmattimysql` resource, and configure a database before qbxsql starts:
 
 ```cfg
-# MySQL/MariaDB only
+# MySQL/MariaDB
 set mysql_connection_string "mysql://user:password@127.0.0.1/qbox"
 ensure qbxsql
 ```
 
 ```cfg
-# PostgreSQL only
+# PostgreSQL
 set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox"
 ensure qbxsql
 ```
@@ -34,161 +57,131 @@ set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox
 ensure qbxsql
 ```
 
-The manifest reports `version '2.14.1'` for oxmysql dependency and version checks while `qbxsql_version '0.6.0'` records the connector's own release. The public `version` stays at the greater of the qbxsql release and the supported oxmysql version, so it will follow qbxsql after qbxsql surpasses `2.14.1`. qbxsql remains client-visible and provides `oxmysql`, `mysql-async`, and `ghmattimysql` directly. It refuses to run alongside a real resource named `oxmysql`.
+Start qbxsql before any resource that touches the database. If a real resource
+named `oxmysql` is still running, qbxsql refuses to start its connector and
+says so, instead of fighting over exports.
 
-Existing resources can keep their normal imports:
+> [!NOTE]
+> The manifest reports `version '2.14.1'` so other resources' oxmysql
+> dependency checks keep passing. qbxsql's own version lives in
+> `qbxsql_version`.
+
+## Queries
+
+Existing resources keep working as-is:
 
 ```lua
-server_script '@oxmysql/lib/MySQL.lua'
--- or @mysql-async/lib/MySQL.lua
+server_script '@oxmysql/lib/MySQL.lua'   -- or @mysql-async/lib/MySQL.lua
 ```
 
-Modern qbxsql-native resources may instead load:
+New resources can import the same API under qbxsql's own name:
 
 ```lua
 server_script '@qbxsql/lib/MySQL.lua'
 ```
 
-Callback, `.await`, `_async`, `Sync`, `Async`, stored-query, prepared batch, raw execute, and transaction APIs are supported. Positional `?`/`??` and named `:name`/`@name` parameters are normalized before reaching the driver.
+Callbacks, `.await`, `_async`, `Sync`/`Async`, stored queries, prepared
+batches, raw execute, and transactions all follow oxmysql 2.14.1 semantics,
+including the subtle ones (boolean casting, epoch-millisecond dates, byte-array
+blobs). The differences that exist are deliberate and documented in
+[docs/compatibility.md](docs/compatibility.md).
 
-The legacy names always route to MySQL. They are intentionally unavailable in a PostgreSQL-only installation because qbxsql does not translate MySQL SQL into PostgreSQL SQL.
+## Schemas
 
-## PostgreSQL-native resources
-
-Load the dedicated facade and use PostgreSQL `$1`, `$2`, ... parameters:
-
-```lua
-server_scripts {
-    '@qbxsql/lib/Postgres.lua',
-    'server.lua'
-}
-
-local rows = Postgres.query.await(
-    'SELECT id, metadata FROM properties WHERE owner = $1',
-    { ownerId }
-)
-
-local result = Postgres.execute.await(
-    'UPDATE properties SET metadata = $1 WHERE id = $2 RETURNING id',
-    { metadata, propertyId }
-)
-print(result.command, result.rowCount, result.rows[1].id)
-```
-
-`Postgres.query`, `single`, `scalar`, and `execute` have callback and `.await` forms. `Postgres.transaction` executes a statement list on one pinned connection, and `Postgres.startTransaction` supports callback-controlled work. PostgreSQL errors are structured and preserve fields such as `code`, `detail`, `hint`, and `constraint` without exposing credentials or bind values.
-
-PostgreSQL 16 or newer is required. `BIGINT` and `NUMERIC` values remain strings to prevent precision loss, timestamps become epoch milliseconds, `BYTEA` becomes a byte array, and JSON/JSONB remains a Lua table. See [the PostgreSQL guide](docs/POSTGRESQL.md).
-
-NUI profiling, oxmysql UI commands, and external logger plugins are intentionally not included. See [the migration guide](docs/MIGRATION.md) and [compatibility matrix](docs/COMPATIBILITY.md) before replacing a production connector.
-
-## Resource-owned schemas
-
-Load the schema facade before the declaring resource's bootstrap:
+Declare tables instead of shipping `.sql` files:
 
 ```lua
 server_scripts {
+    '@qbxsql/lib/MySQL.lua',
     '@qbxsql/lib/Schema.lua',
     'schema.lua',
     'server.lua'
 }
 ```
 
-Then declare and await the required schema:
-
 ```lua
+-- schema.lua
 QBXSQL.Schema.ensure.await({
     version = 1,
     tables = {
-        properties = {
+        myscript_players = {
             columns = {
-                id = {
-                    type = 'bigint',
-                    unsigned = true,
-                    autoIncrement = true,
-                    primary = true
-                },
-                label = { type = 'varchar', length = 100 }
-            }
-        }
-    }
-})
-```
-
-The default `auto` mode applies only changes that are data-safe and enforced online by the database. qbxsql never falls back from `INSTANT` or `INPLACE/LOCK=NONE` to blocking DDL. Destructive, blocking, or data-dependent work requires explicit versioned migrations and operator approval where applicable.
-
-Use `QBXSQL.Schema.plan.await(schema)` for a no-DDL plan. Existing unmanaged tables require explicit `planAdoption` and `adopt` calls with a baseline version. Removing a table from a declaration never deletes or releases it implicitly. See [schema operations](docs/SCHEMAS.md) and [the complete example](examples/properties-schema.lua).
-
-PostgreSQL resources use `Postgres.Schema` with PostgreSQL-native types and operations:
-
-```lua
-Postgres.Schema.ensure.await({
-    version = 1,
-    tables = {
-        properties = {
-            columns = {
-                id = { type = 'bigint', identity = 'byDefault', primary = true },
-                owner = { type = 'uuid' },
-                metadata = { type = 'jsonb', default = {} },
-                created_at = {
-                    type = 'timestamptz',
-                    defaultExpression = 'CURRENT_TIMESTAMP'
-                }
+                id = { type = 'bigint', unsigned = true, autoIncrement = true, primary = true },
+                citizenid = { type = 'varchar', length = 50 },
+                cash = { type = 'int', unsigned = true, default = 0 },
+                metadata = { type = 'json', nullable = true }
             },
             indexes = {
-                { name = 'properties_owner_idx', columns = { 'owner' } }
+                { name = 'myscript_players_citizenid_idx', columns = { 'citizenid' }, unique = true }
             }
         }
     }
 })
 ```
 
-The PostgreSQL manager uses transactions for ordinary DDL, concurrent index creation where needed, `NOT VALID` followed by `VALIDATE CONSTRAINT` for online constraint rollout, advisory locks, action journaling, ownership, adoption, and resumable reconciliation. It never accepts MySQL-only schema fields.
+On a fresh database this creates the table. On every later start it verifies
+the declaration against the live database: safe changes (new columns, wider
+varchars, new indexes) are applied with enforced online DDL, and anything that
+could lose data or lock a live table is refused until you write a versioned
+migration for it. Tables that already exist — every server migrating from
+`.sql` imports — are brought under management explicitly with the adoption API.
 
-Resources can also declare required PostgreSQL extensions and minimum versions.
-qbxsql verifies server availability and database enablement before schema DDL,
-but intentionally leaves package installation and `CREATE EXTENSION` to the
-operator. pgvector columns (`vector`, `halfvec`, `sparsevec`), HNSW/IVFFlat
-indexes, operator classes, storage options, exclusion constraints, validated
-Lua vector parameters, and dense-vector result parsing are supported. See the
-[extension installation and schema guide](docs/POSTGRESQL.md#extensions).
+The full model (migrations, safety gates, ownership, adoption, dry-run plans)
+is documented in [docs/schemas.md](docs/schemas.md), and
+[qbxsql_example](https://github.com/Qbox-project/qbxsql_example) is a runnable
+walkthrough resource that demonstrates all of it against a live test server.
 
-## Health and operations
+## PostgreSQL
 
 ```lua
-local primary = exports.qbxsql:getStatus()
-local postgres = exports.qbxsql:getStatus('postgresql')
-local both = exports.qbxsql:getStatuses()
+server_script '@qbxsql/lib/Postgres.lua'
+
+local row = Postgres.single.await(
+    'SELECT id, profile FROM characters WHERE license = $1',
+    { license }
+)
 ```
 
-Each sanitized result includes the dialect, lifecycle state, database family/version/name, pool counts, queue depth, process-memory counters, query/error/slow-query totals, and reconnect count. The same information is available through the server-console command `qbxsql_status`; use `qbxsql_extensions` for PostgreSQL extension requirements and installed versions. The primary lane emits `qbxsql:ready`, `qbxsql:disconnected`, and `qbxsql:reconnected`; explicit lane events use `qbxsql:mysql:*` and `qbxsql:postgres:*`.
+`Postgres.query`/`single`/`scalar`/`execute` with callback and `.await` forms,
+transactions, structured errors, precision-safe type conversion, a
+PostgreSQL-native schema manager (identity columns, JSONB, partial indexes,
+`NOT VALID` constraint rollout), and verify-only extension requirements
+including pgvector types and indexes. See
+[docs/postgresql.md](docs/postgresql.md).
 
-See the [operations runbook](docs/OPERATIONS.md) for convars, outage behavior, monitoring, shutdown, and recovery.
+## Monitoring
 
-## Development and releases
-
-```sh
-bun install
-bun run typecheck
-bun test
-bun run release
-bun run release:validate
+```lua
+local status  = exports.qbxsql:getStatus()              -- primary lane
+local pg      = exports.qbxsql:getStatus('postgresql')  -- one lane
+local both    = exports.qbxsql:getStatuses()
 ```
 
-With Docker available, the packaged resources can be exercised locally on the pinned official stock-Linux artifact:
+The same information is available from the server console via `qbxsql_status`
+(and `qbxsql_extensions` for PostgreSQL extension state). Lifecycle events:
+`qbxsql:ready`, `qbxsql:disconnected`, `qbxsql:reconnected`, plus per-lane
+`qbxsql:mysql:*` and `qbxsql:postgres:*`. Status output never contains
+credentials or query values.
 
-```sh
-bun run cfx-key:save
-bun run test:fxserver
-```
+## Documentation
 
-`cfx-key:save` securely prompts once and stores the key in `.cache/qbxsql/cfx-license-key`, which is gitignored and restricted to the local user where the operating system supports Unix file modes. `test:fxserver` uses `CFX_LICENSE_KEY` first, then the saved key, and otherwise shows the same hidden prompt without saving it. It rebuilds the release, downloads and verifies the stock artifact once, and reuses it from `.cache/`. The command creates isolated MariaDB 11.4 and PostgreSQL 16 containers plus a Docker network, runs the complete packaged dual-database FXServer gate, then removes the databases, network, and temporary server configuration. No external database, GitHub secret, `act` installation, or self-hosted runner is required.
+| Document | Contents |
+| --- | --- |
+| [docs/compatibility.md](docs/compatibility.md) | oxmysql compatibility details, deliberate deviations, switching from oxmysql, supported databases |
+| [docs/schemas.md](docs/schemas.md) | Declarative schemas: modes, migrations, safety gates, ownership, adoption |
+| [docs/postgresql.md](docs/postgresql.md) | The PostgreSQL lane: queries, types, schemas, extensions |
+| [docs/operations.md](docs/operations.md) | Every convar, lifecycle and outage behavior, incident guidance |
+| [docs/development.md](docs/development.md) | Building, the test suites, benchmarks, releases |
 
-GitHub Actions intentionally contains only `CI`: one hosted job for typechecking, unit/contract tests, the build, and MariaDB 11.4 plus PostgreSQL 16 integration tests on pushes to `main` and pull requests. FXServer execution is deliberately local because it requires each tester's own CFX key.
+## Status
 
-The deterministic builder produces `release/qbxsql/`, a versioned ZIP, and its SHA-256 checksum. Development servers can consume the verified artifact through a guarded junction:
+qbxsql is a `0.x` prerelease. The query layer is contract-tested against
+oxmysql 2.14.1 fixtures, integration-tested against live MariaDB and
+PostgreSQL on every push, and exercised on a real packaged FXServer through a
+local containerized gate. Treat it accordingly: test on staging with a
+verified backup before putting it in front of players, and report anything
+surprising in the [issues](https://github.com/Qbox-project/qbxsql/issues).
 
-```sh
-bun run install:dev -- --resources C:\path\to\server\resources
-```
+## License
 
-Broader database checks, benchmarks, and canary tooling remain available for targeted local validation; they are not continuously scheduled workflows. See [release policy](docs/RELEASE.md) and [optional benchmark checks](docs/BENCHMARKS.md).
+[MIT](LICENSE)

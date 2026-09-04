@@ -1,3 +1,4 @@
+import { detachCallbackResult } from './callback.js';
 import {
   PostgresSchemaDisabledError,
   PostgresSchemaMigrationRequiredError,
@@ -28,7 +29,7 @@ function invokeCallback(
 ): void {
   if (!callback) return;
   try {
-    callback(result, error);
+    detachCallbackResult(callback(result, error));
   } catch (callbackError) {
     console.error('[qbxsql] PostgreSQL schema callback failed', callbackError);
   }
@@ -198,7 +199,7 @@ export function registerPostgresSchemaUnavailableExports(
       code: 'QBXSQL_POSTGRES_NOT_CONFIGURED',
       message: 'PostgreSQL is not configured. Set qbxsql_postgres_connection_string.',
     };
-    if (callback) callback(null, error);
+    if (callback) detachCallbackResult(callback(null, error));
     else throw Object.assign(new Error(error.message), { code: error.code });
   };
   for (const name of [

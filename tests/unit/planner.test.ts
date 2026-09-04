@@ -219,6 +219,43 @@ describe('declarative schema planner', () => {
     expect(plan.actions).toHaveLength(0);
   });
 
+  test('converges on MariaDB JSON columns introspected as longtext', () => {
+    const current = actual(50);
+    current.columns.set('metadata', {
+      name: 'metadata',
+      type: 'longtext',
+      columnType: 'longtext',
+      columnTypeRaw: 'longtext',
+      nullable: true,
+      defaultValue: null,
+      extra: '',
+      maximumLength: 4294967295,
+      numericPrecision: null,
+      numericScale: null,
+      comment: '',
+    });
+    const desired = schema(50);
+    desired.tables.properties!.columns.metadata = { type: 'json', nullable: true };
+
+    const mariadb = planSchema(
+      'housing',
+      desired,
+      new Map([['properties', current]]),
+      capabilitiesForVersion('11.4.2-MariaDB'),
+    );
+    expect(mariadb.actions).toHaveLength(0);
+
+    const mysql = planSchema(
+      'housing',
+      desired,
+      new Map([['properties', current]]),
+      capabilitiesForVersion('8.4.0'),
+    );
+    expect(mysql.actions).toHaveLength(1);
+    expect(mysql.actions[0]).toMatchObject({ kind: 'alterColumn', safe: false });
+    expect(mysql.actions[0]?.reason).toContain('longtext -> json');
+  });
+
   test('converges on MariaDB-quoted string defaults', () => {
     const current = actual(50);
     current.columns.set('status', {

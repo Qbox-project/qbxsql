@@ -227,7 +227,10 @@ local function schemaAwait(method, schema)
     return awaitCall(function(done) return schemaCall(method, schema, done) end)
 end
 
-Postgres.Schema = Postgres.Schema or {}
+-- rawget: the facade's __index turns any missing key into a passthrough
+-- function, so a plain read would never yield nil and Schema would stay a
+-- function, crashing the loop below.
+Postgres.Schema = rawget(Postgres, 'Schema') or {}
 
 for name, exportName in pairs({
     ensure = 'postgresEnsureSchema',

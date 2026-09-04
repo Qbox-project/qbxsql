@@ -4,7 +4,25 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
-- Hosted release workflow evidence, completed real-client Qbox certification, and the seven-day canary are still required before `1.0.0`.
+- Fixed `@qbxsql/lib/Postgres.lua` crashing at load ("attempt to index a
+  function value") and leaving the `Postgres` global unpublished for every
+  resource that imports it: the facade's `__index` fallthrough turned the
+  `Postgres.Schema` read into a passthrough function.
+- Fixed declared `json` columns never converging on MariaDB, which stores
+  JSON as `longtext`; the first `ensure` failed with "did not converge".
+- Fixed `QBXSQL_SCHEMA_RESOURCE_MISMATCH` refusals of every legitimate schema
+  call on server builds that attribute qbxsql's own cross-runtime exports to
+  qbxsql itself; the connector's own name now counts as unresolvable
+  attribution, like `unknown`.
+- Stopped "Unhandled promise rejection" warnings when a schema refusal or
+  query error is delivered to a Lua callback: CFX function references return
+  a promise for the caller's completion, and its mirrored rejection now gets
+  a handler at every callback site.
+- Stopped counting and warning about qbxsql's own schema introspection in the
+  slow-query accounting; on servers with slow `INFORMATION_SCHEMA` these
+  warnings drowned real output. Debug mode still shows the queries.
+- Removed internal release-evidence tooling (certification template, runtime
+  evidence, soak/canary validators) and reorganized the documentation.
 
 ## 0.6.0 - 2026-08-01
 

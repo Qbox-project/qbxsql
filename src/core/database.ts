@@ -495,7 +495,13 @@ export class DatabaseService {
       throw error;
     } finally {
       const duration = performance.now() - started;
-      const slow = this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
+      // The connector's own schema introspection routinely exceeds the
+      // threshold on servers where INFORMATION_SCHEMA is slow; operators can
+      // neither tune nor act on those queries, so they stay out of the slow
+      // counter and warning. Debug mode still shows them.
+      const internal = resource === 'qbxsql:schema';
+      const slow =
+        !internal && this.config.slowQueryWarning > 0 && duration >= this.config.slowQueryWarning;
       if (slow) this.slowQueryTotal += 1;
       const debug =
         this.config.debug === true ||
