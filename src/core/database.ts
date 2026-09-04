@@ -323,27 +323,8 @@ export class DatabaseService {
     statements: readonly TransactionStatement[],
     invokingResource = 'unknown',
   ): Promise<boolean> {
-    await this.awaitConnection();
-    const connection = await this.driver.acquire();
-
-    try {
-      await connection.beginTransaction();
-      for (const statement of statements) {
-        const [query, parameters] = this.normalize(statement.query, statement.parameters);
-        await this.measureQuery(query, invokingResource, () => connection.query(query, parameters));
-      }
-      await connection.commit();
-      return true;
-    } catch (error) {
-      try {
-        await connection.rollback();
-      } catch (rollbackError) {
-        console.error(`[qbxsql] rollback failed for ${invokingResource}`, rollbackError);
-      }
-      throw error;
-    } finally {
-      connection.release();
-    }
+    await this.transactionResults(statements, invokingResource);
+    return true;
   }
 
   public async transactionResults(

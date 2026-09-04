@@ -835,20 +835,9 @@ export class SchemaManager {
   }
 
   private async assertOwnership(resource: string, tableNames: string[]): Promise<void> {
-    const desired = [...new Set(tableNames)];
-    if (desired.length === 0) return;
-    const rows = (await this.database.query(
-      `SELECT table_name AS tableName, resource_name AS resourceName
-         FROM qbxsql_schema_tables
-        WHERE table_name IN (${desired.map(() => '?').join(', ')})`,
-      desired,
-      { invokingResource: 'qbxsql:schema' },
-    )) as Row[];
-    for (const row of rows) {
-      if (String(row.resourceName) !== resource) {
-        throw new Error(
-          `Table '${String(row.tableName)}' is owned by resource '${String(row.resourceName)}', not '${resource}'.`,
-        );
+    for (const [table, owner] of await this.readOwnership(tableNames)) {
+      if (owner !== resource) {
+        throw new Error(`Table '${table}' is owned by resource '${owner}', not '${resource}'.`);
       }
     }
   }
@@ -1300,19 +1289,16 @@ export class SchemaManager {
   }
 
   private async readOwnership(tableNames: string[]): Promise<Map<string, string>> {
-    if (tableNames.length === 0) return new Map();
+    const desired = [...new Set(tableNames)];
+    if (desired.length === 0) return new Map();
     const rows = (await this.database.query(
       `SELECT table_name AS tableName, resource_name AS resourceName
-       FROM qbxsql_schema_tables`,
-      [],
+         FROM qbxsql_schema_tables
+        WHERE table_name IN (${desired.map(() => '?').join(', ')})`,
+      desired,
       { invokingResource: 'qbxsql:schema' },
     )) as Row[];
-    const relevant = new Set(tableNames);
-    return new Map(
-      rows
-        .filter((row) => relevant.has(String(row.tableName)))
-        .map((row) => [String(row.tableName), String(row.resourceName)]),
-    );
+    return new Map(rows.map((row) => [String(row.tableName), String(row.resourceName)]));
   }
 
   private async writeAdoptionBaseline(

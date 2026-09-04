@@ -80,6 +80,61 @@ function warnMultipleStatements(enabled: boolean, warn: (message: string) => voi
   }
 }
 
+const integerConnectionOptions: Record<string, { name: string; minimum: number }> = {
+  connectionlimit: { name: 'connectionLimit', minimum: 1 },
+  connecttimeout: { name: 'connectTimeout', minimum: 1 },
+  queuelimit: { name: 'queueLimit', minimum: 0 },
+  maxidle: { name: 'maxIdle', minimum: 0 },
+  idletimeout: { name: 'idleTimeout', minimum: 1 },
+  keepaliveinitialdelay: { name: 'keepAliveInitialDelay', minimum: 0 },
+};
+
+const booleanConnectionOptions: Record<string, string> = {
+  multiplestatements: 'multipleStatements',
+  decimalnumbers: 'decimalNumbers',
+  bignumberstrings: 'bigNumberStrings',
+  supportbignumbers: 'supportBigNumbers',
+  waitforconnections: 'waitForConnections',
+  jsonstrings: 'jsonStrings',
+  namedplaceholders: 'namedPlaceholders',
+  trace: 'trace',
+  enablekeepalive: 'enableKeepAlive',
+};
+
+function normalizeOptionKey(key: string): string {
+  return key.toLowerCase().replace(/[ _-]/g, '');
+}
+
+function applyConnectionOption(
+  options: Record<string, unknown>,
+  normalized: string,
+  value: string,
+  sourceKey: string,
+  warn: (message: string) => void,
+): void {
+  const integer = integerConnectionOptions[normalized];
+  const boolean = booleanConnectionOptions[normalized];
+  if (integer) {
+    options[integer.name] = integerOption(value, integer.name, integer.minimum);
+  } else if (boolean) {
+    options[boolean] = booleanOption(value, boolean);
+    if (boolean === 'multipleStatements') warnMultipleStatements(options[boolean] as boolean, warn);
+  } else if (normalized === 'charset' || normalized === 'timezone' || normalized === 'socketpath') {
+    options[normalized === 'socketpath' ? 'socketPath' : normalized] = value;
+  } else if (normalized === 'flags' || normalized === 'datestrings') {
+    const key = normalized === 'flags' ? 'flags' : 'dateStrings';
+    options[key] = jsonOption(value, key);
+  } else if (normalized === 'ssl') {
+    try {
+      options.ssl = JSON.parse(value);
+    } catch {
+      options.ssl = value;
+    }
+  } else {
+    warn(`[qbxsql] Ignoring unknown connection-string option '${sourceKey}'.`);
+  }
+}
+
 export function parseMySqlConnectionString(
   connectionString: string,
   warn: (message: string) => void = console.warn,
@@ -90,53 +145,7 @@ export function parseMySqlConnectionString(
     url.search = '';
     const options: Record<string, unknown> = { uri: url.toString() };
     for (const [sourceKey, value] of parameters) {
-      const normalized = sourceKey.toLowerCase().replace(/[ _-]/g, '');
-      const integerKeys: Record<string, { name: string; minimum: number }> = {
-        connectionlimit: { name: 'connectionLimit', minimum: 1 },
-        connecttimeout: { name: 'connectTimeout', minimum: 1 },
-        queuelimit: { name: 'queueLimit', minimum: 0 },
-        maxidle: { name: 'maxIdle', minimum: 0 },
-        idletimeout: { name: 'idleTimeout', minimum: 1 },
-        keepaliveinitialdelay: { name: 'keepAliveInitialDelay', minimum: 0 },
-      };
-      const booleanKeys: Record<string, string> = {
-        multiplestatements: 'multipleStatements',
-        decimalnumbers: 'decimalNumbers',
-        bignumberstrings: 'bigNumberStrings',
-        supportbignumbers: 'supportBigNumbers',
-        waitforconnections: 'waitForConnections',
-        jsonstrings: 'jsonStrings',
-        namedplaceholders: 'namedPlaceholders',
-        trace: 'trace',
-        enablekeepalive: 'enableKeepAlive',
-      };
-      if (integerKeys[normalized]) {
-        const target = integerKeys[normalized]!;
-        options[target.name] = integerOption(value, target.name, target.minimum);
-      } else if (booleanKeys[normalized]) {
-        const target = booleanKeys[normalized]!;
-        options[target] = booleanOption(value, target);
-        if (target === 'multipleStatements') {
-          warnMultipleStatements(options[target] as boolean, warn);
-        }
-      } else if (
-        normalized === 'charset' ||
-        normalized === 'timezone' ||
-        normalized === 'socketpath'
-      ) {
-        options[normalized === 'socketpath' ? 'socketPath' : normalized] = value;
-      } else if (normalized === 'flags' || normalized === 'datestrings') {
-        const key = normalized === 'flags' ? 'flags' : 'dateStrings';
-        options[key] = jsonOption(value, key);
-      } else if (normalized === 'ssl') {
-        try {
-          options.ssl = JSON.parse(value);
-        } catch {
-          options.ssl = value;
-        }
-      } else {
-        warn(`[qbxsql] Ignoring unknown connection-string option '${sourceKey}'.`);
-      }
+      applyConnectionOption(options, normalizeOptionKey(sourceKey), value, sourceKey, warn);
     }
     return options as ConnectionOptions;
   }
@@ -146,79 +155,22 @@ export function parseMySqlConnectionString(
     if (!segment.trim()) continue;
     const separator = segment.indexOf('=');
     if (separator === -1) throw new Error(`Invalid connection-string segment '${segment}'.`);
-    const sourceKey = segment.slice(0, separator).trim().toLowerCase().replace(/[ _-]/g, '');
+    const sourceKey = segment.slice(0, separator).trim();
+    const normalized = normalizeOptionKey(sourceKey);
     const value = segment.slice(separator + 1).trim();
 
-    if (['host', 'hostname', 'ip', 'server', 'datasource', 'addr', 'address'].includes(sourceKey)) {
+    if (['host', 'hostname', 'ip', 'server', 'datasource', 'addr', 'address'].includes(normalized)) {
       options.host = value;
-    } else if (['user', 'userid', 'username', 'uid'].includes(sourceKey)) {
+    } else if (['user', 'userid', 'username', 'uid'].includes(normalized)) {
       options.user = value;
-    } else if (['password', 'pwd', 'pass'].includes(sourceKey)) {
+    } else if (['password', 'pwd', 'pass'].includes(normalized)) {
       options.password = value;
-    } else if (['database', 'db', 'initialcatalog'].includes(sourceKey)) {
+    } else if (['database', 'db', 'initialcatalog'].includes(normalized)) {
       options.database = value;
-    } else if (
-      [
-        'port',
-        'connectionlimit',
-        'connecttimeout',
-        'queuelimit',
-        'maxidle',
-        'idletimeout',
-        'keepaliveinitialdelay',
-      ].includes(sourceKey)
-    ) {
-      const integerKeys: Record<string, { name: string; minimum: number }> = {
-        port: { name: 'port', minimum: 1 },
-        connectionlimit: { name: 'connectionLimit', minimum: 1 },
-        connecttimeout: { name: 'connectTimeout', minimum: 1 },
-        queuelimit: { name: 'queueLimit', minimum: 0 },
-        maxidle: { name: 'maxIdle', minimum: 0 },
-        idletimeout: { name: 'idleTimeout', minimum: 1 },
-        keepaliveinitialdelay: { name: 'keepAliveInitialDelay', minimum: 0 },
-      };
-      const target = integerKeys[sourceKey]!;
-      options[target.name] = integerOption(value, target.name, target.minimum);
-    } else if (
-      [
-        'multiplestatements',
-        'decimalnumbers',
-        'bignumberstrings',
-        'supportbignumbers',
-        'waitforconnections',
-        'jsonstrings',
-        'namedplaceholders',
-        'trace',
-        'enablekeepalive',
-      ].includes(sourceKey)
-    ) {
-      const booleanKeys: Record<string, string> = {
-        multiplestatements: 'multipleStatements',
-        decimalnumbers: 'decimalNumbers',
-        bignumberstrings: 'bigNumberStrings',
-        supportbignumbers: 'supportBigNumbers',
-        waitforconnections: 'waitForConnections',
-        jsonstrings: 'jsonStrings',
-        namedplaceholders: 'namedPlaceholders',
-        trace: 'trace',
-        enablekeepalive: 'enableKeepAlive',
-      };
-      const key = booleanKeys[sourceKey]!;
-      options[key] = booleanOption(value, key);
-      if (key === 'multipleStatements') warnMultipleStatements(options[key] as boolean, warn);
-    } else if (sourceKey === 'charset' || sourceKey === 'timezone' || sourceKey === 'socketpath') {
-      options[sourceKey === 'socketpath' ? 'socketPath' : sourceKey] = value;
-    } else if (sourceKey === 'flags' || sourceKey === 'datestrings') {
-      const key = sourceKey === 'flags' ? 'flags' : 'dateStrings';
-      options[key] = jsonOption(value, key);
-    } else if (sourceKey === 'ssl') {
-      try {
-        options.ssl = JSON.parse(value);
-      } catch {
-        options.ssl = value;
-      }
+    } else if (normalized === 'port') {
+      options.port = integerOption(value, 'port', 1);
     } else {
-      warn(`[qbxsql] Ignoring unknown connection-string option '${segment.slice(0, separator).trim()}'.`);
+      applyConnectionOption(options, normalized, value, sourceKey, warn);
     }
   }
   return options as ConnectionOptions;
