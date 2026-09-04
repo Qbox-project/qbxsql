@@ -567,7 +567,7 @@ export function registerMySqlUnavailableExports(
     throw error();
   };
   const store: ExportFunction = (query: string, callback?: CfxCallback) => {
-    callback?.(query);
+    if (callback) detachCallbackResult(callback(query));
     return query;
   };
   const methods = [
@@ -589,7 +589,7 @@ export function registerMySqlUnavailableExports(
       | CfxCallback
       | undefined;
     console.error(`[qbxsql] ${message}`);
-    callback?.(false);
+    if (callback) detachCallbackResult(callback(false));
     return false;
   };
   const transactionPromiseUnavailable = async (): Promise<boolean> => {
