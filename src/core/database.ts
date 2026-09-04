@@ -478,6 +478,18 @@ export class DatabaseService {
     );
   }
 
+  /** Same accounting and debug output as pooled queries, on a connection the caller holds. */
+  public runOn(
+    connection: DatabaseConnection,
+    sql: string,
+    parameters: readonly unknown[] = [],
+    options: QueryOptions = {},
+  ): Promise<DriverResult> {
+    return this.measureQuery(sql, options.invokingResource ?? 'unknown', () =>
+      connection.query(sql, parameters),
+    );
+  }
+
   private async measureQuery<T>(
     query: string,
     resource: string,

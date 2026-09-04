@@ -21,7 +21,7 @@
 | `qbxsql_schema_allow_blocking` | `false` | Operator half of blocking-DDL approval |
 | `qbxsql_mysql_schema_connection_string` | unset | Optional MySQL schema-only credentials (`qbxsql_schema_connection_string` is a legacy alias) |
 | `qbxsql_postgres_schema_connection_string` | unset | Optional PostgreSQL schema-only credentials |
-| `qbxsql_schema_lock_timeout` | MySQL `30000`, PostgreSQL `2000` | Schema DDL lock wait (ms) |
+| `qbxsql_schema_lock_timeout` | MySQL `30000`, PostgreSQL `2000` | Longest a schema DDL statement may wait for a table lock (ms): `lock_wait_timeout` on the MySQL schema session, `lock_timeout` on PostgreSQL |
 | `qbxsql_schema_lock_acquire_timeout` | `30000` | Wait for the schema advisory lock before giving up (ms) |
 | `qbxsql_postgres_parse_vector_results` | `true` | Parse pgvector `vector`/`halfvec` results into Lua arrays |
 
@@ -100,6 +100,12 @@ the database name; PostgreSQL uses per-resource keys), so servers on separate
 databases of a shared instance don't contend. On MySQL, lock liveness is
 re-verified before migrations and metadata writes — if a reconnect silently
 released the lock mid-ensure, the run aborts instead of continuing unlocked.
+
+DDL never waits indefinitely behind a long-running transaction's metadata
+lock: each statement gives up after `qbxsql_schema_lock_timeout`, the ensure
+fails with the database's lock-wait error, and the advisory lock is released
+for other resources. Find and end the blocking transaction, then restart the
+resource.
 
 When separate schema credentials are configured, qbxsql verifies both pools
 point at the same server and database before granting schema access, for each

@@ -23,6 +23,8 @@ describe('connector configuration', () => {
     expect(mysql.connectionRetryMax).toBe(30_000);
     expect(mysql.transactionTimeout).toBe(30_000);
     expect(mysql.resultsetWarning).toBe(1_000);
+    expect(mysql.schemaLockTimeout).toBe(30_000);
+    expect(mysql.schemaLockAcquireTimeout).toBe(30_000);
     expect(config.schemaMode).toBe('auto');
     expect(config.schemaAllowBlocking).toBe(false);
   });
@@ -79,6 +81,7 @@ describe('connector configuration', () => {
       connectionString: 'postgresql://postgres@127.0.0.1/qbxsql',
       schemaConnectionString: 'postgresql://schema@127.0.0.1/qbxsql',
       connectionLimit: 15,
+      schemaLockTimeout: 2_000,
       minimumServerVersion: 160_000,
     });
 

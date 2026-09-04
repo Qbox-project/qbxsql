@@ -87,6 +87,8 @@ export interface SchemaManagerOptions {
   mode?: 'auto' | 'plan' | 'off';
   allowBlocking?: boolean;
   applicationDatabase?: DatabaseService;
+  /** Milliseconds a DDL statement may wait for a metadata lock (default 30000). */
+  lockTimeout?: number;
   /** Milliseconds to wait for the schema advisory lock (default 30000). */
   lockAcquireTimeout?: number;
 }
@@ -228,6 +230,7 @@ export class SchemaManager {
   private readonly mode: 'auto' | 'plan' | 'off';
   private readonly allowBlocking: boolean;
   private readonly applicationDatabase: DatabaseService;
+  private readonly lockTimeout: number;
   private readonly lockAcquireTimeout: number;
   private targetVerification: Promise<void> | null = null;
 
@@ -238,6 +241,7 @@ export class SchemaManager {
     this.mode = options.mode ?? 'auto';
     this.allowBlocking = options.allowBlocking ?? false;
     this.applicationDatabase = options.applicationDatabase ?? database;
+    this.lockTimeout = options.lockTimeout ?? 30_000;
     this.lockAcquireTimeout = options.lockAcquireTimeout ?? 30_000;
   }
 
@@ -316,6 +320,7 @@ export class SchemaManager {
         if (existing?.status === 'success') continue;
         await this.assertLockHeld(lock);
         await this.applyMigration(
+          lock,
           resource,
           migration,
           existing,
@@ -331,7 +336,7 @@ export class SchemaManager {
       if (blocked.length > 0) throw new SchemaMigrationRequiredError(plan);
 
       await this.assertLockHeld(lock);
-      const appliedActions = await this.applySchemaPlan(resource, plan);
+      const appliedActions = await this.applySchemaPlan(lock, resource, plan);
 
       const remaining = planSchema(
         resource,
@@ -529,6 +534,7 @@ export class SchemaManager {
         if (existing?.status === 'success') continue;
         await this.assertLockHeld(lock);
         await this.applyMigration(
+          lock,
           resource,
           migration,
           existing,
@@ -545,7 +551,7 @@ export class SchemaManager {
         throw new SchemaMigrationRequiredError(plan);
       }
       await this.assertLockHeld(lock);
-      const appliedActions = await this.applySchemaPlan(resource, plan);
+      const appliedActions = await this.applySchemaPlan(lock, resource, plan);
       const remaining = planSchema(
         resource,
         schema,
@@ -700,7 +706,14 @@ export class SchemaManager {
     return `qbxsql:schema:${(hash >>> 0).toString(16)}`;
   }
 
+  /**
+   * Metadata-lock waits default to a year on MySQL, so DDL queued behind a
+   * long transaction would hold the schema lock indefinitely. DDL runs on
+   * this session so the bound covers it; applyOnlineForeignKey sets the same
+   * bound on its dedicated session.
+   */
   private async acquireLock(connection: DatabaseConnection): Promise<void> {
+    await connection.query('SET SESSION lock_wait_timeout = ?', [this.lockTimeoutSeconds()]);
     const seconds = Math.max(1, Math.ceil(this.lockAcquireTimeout / 1_000));
     const result = await connection.query(`SELECT GET_LOCK(?, ?) AS acquired`, [
       this.lockName(),
@@ -710,9 +723,13 @@ export class SchemaManager {
     if (Number(rows[0]?.acquired) !== 1) throw new Error('Timed out waiting for the qbxsql schema lock.');
   }
 
+  private lockTimeoutSeconds(): number {
+    return Math.max(1, Math.ceil(this.lockTimeout / 1_000));
+  }
+
   /**
-   * The lock lives on one pooled connection while the DDL and metadata writes
-   * run on others. A reconnect mid-ensure tears down the old pool, which kills
+   * DDL runs on the lock session, but the metadata writes run on other pooled
+   * connections. A reconnect mid-ensure tears down the old pool, which kills
    * the lock session and releases the lock while this ensure keeps running on
    * the new pool -- exactly the concurrent-DDL scenario the lock exists to
    * prevent. Probing the lock connection detects both a dead session (the
@@ -738,6 +755,7 @@ export class SchemaManager {
   private async releaseLock(connection: DatabaseConnection): Promise<void> {
     try {
       await connection.query(`SELECT RELEASE_LOCK(?)`, [this.lockName()]);
+      await connection.query('SET SESSION lock_wait_timeout = DEFAULT');
       connection.release();
     } catch {
       // If the lock cannot be confirmed released, do not return the connection.
@@ -830,6 +848,7 @@ export class SchemaManager {
   }
 
   private async applyMigration(
+    lock: DatabaseConnection,
     resource: string,
     migration: MigrationDefinition,
     existing: MigrationRow | undefined,
@@ -884,7 +903,7 @@ export class SchemaManager {
             this.assertOnlineEnforceable(operation, blockingAllowed);
             const sql = this.migrationSql(operation, blockingAllowed, actual);
             try {
-              await this.database.query(sql, [], { invokingResource: resource });
+              await this.database.runOn(lock, sql, [], { invokingResource: resource });
             } catch (error) {
               if (!blockingAllowed && operationAlgorithm(operation) !== 'MANUAL') {
                 const reason = error instanceof Error ? error.message : String(error);
@@ -944,7 +963,11 @@ export class SchemaManager {
     }
   }
 
-  private async applySchemaPlan(resource: string, plan: SchemaPlan): Promise<string[]> {
+  private async applySchemaPlan(
+    lock: DatabaseConnection,
+    resource: string,
+    plan: SchemaPlan,
+  ): Promise<string[]> {
     // Claim tables before creating them. MySQL DDL autocommits, so the create
     // and the claim can never be atomic; claimed-but-missing resumes cleanly
     // (the row is just re-verified and the table created), while
@@ -957,7 +980,7 @@ export class SchemaManager {
     const appliedActions: string[] = [];
     for (const schemaAction of plan.actions) {
       try {
-        await this.database.query(schemaAction.sql, [], { invokingResource: resource });
+        await this.database.runOn(lock, schemaAction.sql, [], { invokingResource: resource });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         throw new SchemaMigrationRequiredError({
@@ -1032,9 +1055,19 @@ export class SchemaManager {
     const connection = await this.database.driver.acquire();
     let healthy = false;
     try {
-      await connection.query('SET SESSION foreign_key_checks = 0');
-      await connection.query(`${addForeignKeySql(table, foreignKey)}, ALGORITHM=INPLACE, LOCK=NONE`);
-      await connection.query('SET SESSION foreign_key_checks = 1');
+      await connection.query(
+        'SET SESSION foreign_key_checks = 0, SESSION lock_wait_timeout = ?',
+        [this.lockTimeoutSeconds()],
+      );
+      await this.database.runOn(
+        connection,
+        `${addForeignKeySql(table, foreignKey)}, ALGORITHM=INPLACE, LOCK=NONE`,
+        [],
+        { invokingResource: resource },
+      );
+      await connection.query(
+        'SET SESSION foreign_key_checks = 1, SESSION lock_wait_timeout = DEFAULT',
+      );
       healthy = true;
     } finally {
       if (healthy) connection.release();

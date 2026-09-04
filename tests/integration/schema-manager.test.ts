@@ -146,14 +146,14 @@ describe('resource schema manager integration', () => {
   });
 
   test('returns a migration-required plan when the database rejects enforced online DDL', async () => {
-    const originalQuery = database.query.bind(database);
-    database.query = async (sql, parameters, options) => {
+    const originalRunOn = database.runOn.bind(database);
+    database.runOn = async (connection, sql, parameters, options) => {
       if (sql.includes('ALTER TABLE `properties`') && sql.includes('LOCK=NONE')) {
         throw Object.assign(new Error('LOCK=NONE is not supported for this operation'), {
           code: 'ER_ALTER_OPERATION_NOT_SUPPORTED_REASON',
         });
       }
-      return originalQuery(sql, parameters, options);
+      return originalRunOn(connection, sql, parameters, options);
     };
 
     let error: unknown;
@@ -162,7 +162,7 @@ describe('resource schema manager integration', () => {
     } catch (caught) {
       error = caught;
     } finally {
-      database.query = originalQuery;
+      database.runOn = originalRunOn;
     }
 
     expect(error).toBeInstanceOf(SchemaMigrationRequiredError);
@@ -213,12 +213,12 @@ describe('resource schema manager integration', () => {
         },
       ],
     };
-    const originalQuery = database.query.bind(database);
-    database.query = async (sql, parameters, options) => {
+    const originalRunOn = database.runOn.bind(database);
+    database.runOn = async (connection, sql, parameters, options) => {
       if (sql.includes('ALTER TABLE `online_migration_rejection_table`')) {
         throw new Error('ALGORITHM=INSTANT is unavailable');
       }
-      return originalQuery(sql, parameters, options);
+      return originalRunOn(connection, sql, parameters, options);
     };
 
     let error: unknown;
@@ -227,7 +227,7 @@ describe('resource schema manager integration', () => {
     } catch (caught) {
       error = caught;
     } finally {
-      database.query = originalQuery;
+      database.runOn = originalRunOn;
     }
 
     expect(error).toBeInstanceOf(SchemaMigrationRequiredError);
@@ -447,12 +447,12 @@ describe('resource schema manager integration', () => {
       },
     });
 
-    const originalQuery = database.query.bind(database);
-    database.query = async (sql, parameters, options) => {
+    const originalRunOn = database.runOn.bind(database);
+    database.runOn = async (connection, sql, parameters, options) => {
       if (sql.startsWith('RENAME TABLE `ownership_failure_old`')) {
         throw new Error('simulated rename failure');
       }
-      return originalQuery(sql, parameters, options);
+      return originalRunOn(connection, sql, parameters, options);
     };
     try {
       await expect(
@@ -478,7 +478,7 @@ describe('resource schema manager integration', () => {
         }),
       ).rejects.toThrow('simulated rename failure');
     } finally {
-      database.query = originalQuery;
+      database.runOn = originalRunOn;
     }
     expect(
       await database.scalar(
@@ -498,11 +498,11 @@ describe('resource schema manager integration', () => {
         ownership_drop_failure_table: { columns: { id: { type: 'int', primary: true } } },
       },
     });
-    database.query = async (sql, parameters, options) => {
+    database.runOn = async (connection, sql, parameters, options) => {
       if (sql.startsWith('DROP TABLE IF EXISTS `ownership_drop_failure_table`')) {
         throw new Error('simulated deletion failure');
       }
-      return originalQuery(sql, parameters, options);
+      return originalRunOn(connection, sql, parameters, options);
     };
     try {
       await expect(
@@ -526,7 +526,7 @@ describe('resource schema manager integration', () => {
         }),
       ).rejects.toThrow('simulated deletion failure');
     } finally {
-      database.query = originalQuery;
+      database.runOn = originalRunOn;
     }
     expect(
       await database.scalar(

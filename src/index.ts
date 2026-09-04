@@ -71,6 +71,9 @@ function createRuntime(): Runtime {
             mode: config.schemaMode,
             allowBlocking: config.schemaAllowBlocking,
             applicationDatabase: mysqlDatabase,
+            ...(config.mysql?.schemaLockTimeout !== undefined
+              ? { lockTimeout: config.mysql.schemaLockTimeout }
+              : {}),
             ...(config.mysql?.schemaLockAcquireTimeout !== undefined
               ? { lockAcquireTimeout: config.mysql.schemaLockAcquireTimeout }
               : {}),
