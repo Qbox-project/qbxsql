@@ -220,6 +220,7 @@ export class PostgresSchemaManager {
   private readonly lockTimeout: number;
   private readonly lockAcquireTimeout: number;
   private readonly applicationDatabase: DatabaseService;
+  private targetVerification: Promise<void> | null = null;
   public readonly extensions: PostgresExtensionRegistry;
 
   public constructor(
@@ -255,6 +256,7 @@ export class PostgresSchemaManager {
     validateResource(resource);
     const validated = validatePostgresSchema(input);
     const checksum = postgresSchemaChecksum(validated);
+    await this.verifySchemaTarget();
     const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
     const schema = await canonicalizePostgresSchema(this.database, validated);
     // Planning is read-only. Calling initialize() here would create
@@ -390,6 +392,7 @@ export class PostgresSchemaManager {
     validateResource(resource);
     const validated = validatePostgresSchema(input);
     this.validateBaseline(validated, baselineVersion);
+    await this.verifySchemaTarget();
     const extensionReport = await this.extensions.check(resource, validated.extensions ?? []);
     const checksum = postgresSchemaChecksum(validated);
     const schema = await canonicalizePostgresSchema(this.database, validated);
@@ -528,8 +531,16 @@ export class PostgresSchemaManager {
     }
   }
 
-  private async verifySchemaTarget(): Promise<void> {
-    if (this.database === this.applicationDatabase) return;
+  private verifySchemaTarget(): Promise<void> {
+    if (this.database === this.applicationDatabase) return Promise.resolve();
+    this.targetVerification ??= this.compareSchemaTargets().catch((error: unknown) => {
+      this.targetVerification = null;
+      throw error;
+    });
+    return this.targetVerification;
+  }
+
+  private async compareSchemaTargets(): Promise<void> {
     const identity = async (database: DatabaseService) => {
       const row = first(await database.query(
         `SELECT current_database() AS database,

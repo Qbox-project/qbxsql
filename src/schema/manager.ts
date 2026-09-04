@@ -378,6 +378,12 @@ export class SchemaManager {
     let pendingMigrations: MigrationDefinition[] = [];
     if (metadataReady) {
       registry = await this.readRegistry(resource);
+      if (registry && registry.version > schema.version) {
+        throw new Error(
+          `Refusing to downgrade '${resource}' from schema version ${registry.version} to ${schema.version}.`,
+        );
+      }
+      this.assertMigrationChecksums(schema.migrations ?? [], await this.readMigrationRows(resource));
       if (registry) {
         const registryVersion = registry.version;
         pendingMigrations = (schema.migrations ?? [])
