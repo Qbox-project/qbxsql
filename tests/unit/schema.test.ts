@@ -50,6 +50,19 @@ describe('schema validation and SQL generation', () => {
         tables: { bad: { columns: { value: { type: 'varchar', length: 0 } } } },
       }),
     ).toThrow('requires a length');
+
+    expect(() =>
+      validateSchema({
+        version: 1,
+        tables: {
+          bad: {
+            columns: {
+              value: { type: 'varchar', length: 10, default: { nested: true } as unknown as string },
+            },
+          },
+        },
+      }),
+    ).toThrow('default must be a string, number, boolean, or null');
   });
 
   test('rejects DDL injection through table options and referential actions', () => {

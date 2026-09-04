@@ -134,6 +134,13 @@ function validateColumn(name: string, column: ColumnDefinition): void {
   if (column.autoIncrement && column.nullable) {
     throw new Error(`Auto-increment column '${name}' cannot be nullable.`);
   }
+  if (
+    column.default !== undefined &&
+    column.default !== null &&
+    !['string', 'number', 'boolean'].includes(typeof column.default)
+  ) {
+    throw new Error(`Column '${name}' default must be a string, number, boolean, or null.`);
+  }
   if (column.default !== undefined && column.defaultExpression !== undefined) {
     throw new Error(`Column '${name}' cannot define both default and defaultExpression.`);
   }
