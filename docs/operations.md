@@ -6,7 +6,7 @@
 | --- | ---: | --- |
 | `qbxsql_mysql_connection_string` / `qbxsql_connection_string` / `mysql_connection_string` | unset | MySQL/MariaDB application connection, in precedence order |
 | `qbxsql_postgres_connection_string` | unset | PostgreSQL application connection |
-| `qbxsql_connection_limit` | `10` | Pool connection limit |
+| `qbxsql_connection_limit` | `10` | Query pool connection limit; schema use may open one additional connection |
 | `qbxsql_connect_timeout` | `60000` | Driver connection timeout (ms) |
 | `qbxsql_connection_wait_timeout` | `30000` | Maximum outage queue wait (ms) |
 | `qbxsql_connection_queue_limit` | `1000` | Maximum calls waiting for connectivity |
@@ -25,12 +25,19 @@
 | `qbxsql_schema_lock_acquire_timeout` | `30000` | Wait for the schema advisory lock before giving up (ms) |
 | `qbxsql_postgres_parse_vector_results` | `true` | Parse pgvector `vector`/`halfvec` results into Lua arrays |
 
-Every pool, timeout, warning, queue, health, retry, transaction, and
-schema-lock option also accepts a `qbxsql_mysql_` or `qbxsql_postgres_`
+Pool size, connection and transaction timeouts, warnings, queue limits,
+health intervals, retry delays, and schema-lock options accept a `qbxsql_mysql_` or `qbxsql_postgres_`
 prefixed form; the per-lane form wins over the shared value, and native names
 win over legacy `mysql_*` names. Invalid values are rejected with sanitized
 warnings. Enabling MySQL `multipleStatements` emits a prominent warning
-because it increases the impact of SQL injection.
+because it increases the impact of SQL injection. Debug and transaction
+isolation settings are shared by both databases.
+
+Schema locks use a separate pool with at most one connection per database
+service. This leaves the query pool available for introspection and metadata
+queries even when its limit is `1`, and serializes local schema application.
+Pool status includes this additional connection. Separate schema credentials
+create another database service with its own query pool and schema connection.
 
 At least one connection string is required. PostgreSQL must be version 16 or
 newer. When both lanes are configured they get independent pools, queues,
@@ -45,6 +52,14 @@ reconnect attempts continue indefinitely with jittered exponential backoff
 from 250 ms up to `qbxsql_connection_retry_max`. Calls made while the
 database is unavailable wait in a bounded queue; overflow and expiry return
 normal compatibility errors rather than hanging forever.
+
+These queue limits cover loss of connectivity, not a busy but connected pool.
+MySQL's `queueLimit` connection-string option controls its driver queue;
+PostgreSQL pool acquisition uses `qbxsql_postgres_connect_timeout`. Ordinary
+queries and statement-list transactions have no connector execution deadline.
+The callback transaction timeout starts after pool acquisition and covers
+`BEGIN`, callback work, `COMMIT`, and rollback. A disconnect or timeout during
+commit can leave the outcome unknown; do not blindly retry writes.
 
 Events, primary lane: `qbxsql:ready`, `qbxsql:disconnected`,
 `qbxsql:reconnected`. Per lane: `qbxsql:mysql:*` and `qbxsql:postgres:*` with

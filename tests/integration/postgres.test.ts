@@ -68,6 +68,89 @@ function propertySchema(length = 64, version = 1): PostgresResourceSchema {
 }
 
 describe('PostgreSQL driver and schema integration', () => {
+  test('runs concurrent schema operations with a single query connection', async () => {
+    const smallConfig = { ...config, connectionLimit: 1 };
+    const small = new DatabaseService(new PostgresDriver(smallConfig), smallConfig);
+    auxiliaryDatabases.push(small);
+    const schemas = new PostgresSchemaManager(small);
+    const results = await Promise.all(Array.from({ length: 4 }, (_, index) => {
+      const name = `audit_pg_small_pool_${index}`;
+      return schemas.ensure(name, {
+        version: 1,
+        tables: { [name]: { columns: { id: { type: 'integer', primary: true } } } },
+      });
+    }));
+    expect(results.every((result) => result.appliedActions.length > 0)).toBe(true);
+    expect(small.getStatus().pool.acquired).toBe(0);
+    expect(small.getStatus().pool.total).toBeLessThanOrEqual(2);
+  });
+
+  test('rejects multiple statements before executing their side effects', async () => {
+    await expect(database.query('CREATE TABLE audit_batch_side_effect (id int); SELECT 1'))
+      .rejects.toMatchObject({ code: '42601' });
+    expect(await database.scalar("SELECT to_regclass('public.audit_batch_side_effect')")).toBeNull();
+  });
+
+  test('binds parameters after a standard string ending in a backslash', async () => {
+    expect(await database.single(String.raw`SELECT '\' AS slash, $1::text AS value`, ['ok']))
+      .toEqual({ slash: '\\', value: 'ok' });
+  });
+
+  test('repairs safe drift even when the same reconciliation action completed before', async () => {
+    const schema: PostgresResourceSchema = {
+      version: 1,
+      tables: {
+        audit_pg_drift: {
+          columns: { id: { type: 'integer', primary: true }, note: { type: 'text', nullable: true } },
+          indexes: [{ name: 'audit_pg_drift_note_idx', columns: ['note'] }],
+        },
+      },
+    };
+    await manager.ensure('audit_pg_drift', schema);
+    await database.query('DROP INDEX audit_pg_drift_note_idx');
+    const repaired = await manager.ensure('audit_pg_drift', schema);
+    expect(repaired.appliedActions.some((sql) => sql.includes('CREATE INDEX'))).toBe(true);
+    await database.query('DROP TABLE audit_pg_drift');
+    const recreated = await manager.ensure('audit_pg_drift', schema);
+    expect(recreated.appliedActions.some((sql) => sql.includes('CREATE TABLE'))).toBe(true);
+    expect((await manager.ensure('audit_pg_drift', schema)).appliedActions).toEqual([]);
+  });
+
+  test('requires data-loss approval for pending conversions before touching data', async () => {
+    const schemas = new PostgresSchemaManager(database, { allowBlocking: true });
+    const schema: PostgresResourceSchema = {
+      version: 1,
+      tables: { audit_pg_cast: { columns: { value: { type: 'text' } } } },
+    };
+    await schemas.ensure('audit_pg_cast', schema);
+    await database.query('INSERT INTO audit_pg_cast VALUES ($1)', ['abcdef']);
+    schema.version = 2;
+    schema.tables.audit_pg_cast!.columns.value = { type: 'varchar', length: 3 };
+    schema.migrations = [{
+      version: 2, name: 'shorten value', allowBlocking: true,
+      operations: [{
+        type: 'alterColumn', table: 'audit_pg_cast', column: 'value',
+        definition: { type: 'varchar', length: 3 }, using: 'left(value, 3)',
+      }],
+    }];
+    const plan = await schemas.plan('audit_pg_cast', schema);
+    expect(plan.actions.find((action) => action.kind === 'migration:alterColumn'))
+      .toMatchObject({ automatic: false, dataSafe: false });
+    let refused: unknown;
+    try {
+      await schemas.ensure('audit_pg_cast', schema);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(PostgresSchemaMigrationRequiredError);
+    expect((refused as Error).message).toContain('allowDataLoss=true');
+    expect(await database.scalar('SELECT value FROM audit_pg_cast')).toBe('abcdef');
+    Object.assign(schema.migrations[0]!.operations[0]!, { allowDataLoss: true });
+    await schemas.ensure('audit_pg_cast', schema);
+    expect(await database.scalar('SELECT value FROM audit_pg_cast')).toBe('abc');
+    expect((await schemas.ensure('audit_pg_cast', schema)).appliedActions).toEqual([]);
+  });
+
   beforeAll(async () => {
     const admin = new Pool({ connectionString: adminConnection });
     await admin.query(

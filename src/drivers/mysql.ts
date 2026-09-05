@@ -154,7 +154,7 @@ export function parseMySqlConnectionString(
   for (const segment of connectionString.split(';')) {
     if (!segment.trim()) continue;
     const separator = segment.indexOf('=');
-    if (separator === -1) throw new Error(`Invalid connection-string segment '${segment}'.`);
+    if (separator === -1) throw new Error('Invalid connection-string segment; expected key=value.');
     const sourceKey = segment.slice(0, separator).trim();
     const normalized = normalizeOptionKey(sourceKey);
     const value = segment.slice(separator + 1).trim();
@@ -371,6 +371,7 @@ class MySqlConnection implements DatabaseConnection {
 }
 
 export class MySqlDriver implements DatabaseDriver {
+  public readonly isFatalError = isFatalDatabaseError;
   public readonly dialect = 'mysql' as const;
   public databaseName: string | null = null;
   public serverVersion: string | null = null;
@@ -378,6 +379,7 @@ export class MySqlDriver implements DatabaseDriver {
   public readonly namedPlaceholders: boolean;
 
   private pool: Pool | null = null;
+  private schemaPool: Pool | null = null;
   private fatalErrorListener: ((error: unknown) => void) | null = null;
   private readonly parsedOptions: ConnectionOptions;
 
@@ -404,7 +406,7 @@ export class MySqlDriver implements DatabaseDriver {
     if (this.config.connectTimeoutExplicit) options.connectTimeout = this.config.connectTimeout;
 
     const pool = createPool(options);
-    pool.on('connection', (connection) => {
+    const initializeConnection = (connection: unknown) => {
       // The event delivers the underlying callback-API connection. Without a
       // callback, a failure here would surface as an unhandled 'error' event;
       // with one, a connection whose isolation level could not be set is
@@ -424,7 +426,8 @@ export class MySqlDriver implements DatabaseDriver {
           raw.destroy();
         },
       );
-    });
+    };
+    pool.on('connection', initializeConnection);
 
     try {
       const [rows] = await pool.query<RowDataPacket[]>(
@@ -433,6 +436,10 @@ export class MySqlDriver implements DatabaseDriver {
       const first = rows[0] as { version?: string; databaseName?: string | null } | undefined;
       this.serverVersion = first?.version ?? null;
       this.databaseName = first?.databaseName ?? null;
+      // Lock holders must leave query connections available for metadata,
+      // introspection and foreign-key checks, even with connectionLimit=1.
+      this.schemaPool = createPool({ ...options, connectionLimit: 1, maxIdle: 1 });
+      this.schemaPool.on('connection', initializeConnection);
       this.pool = pool;
       this.ready = true;
     } catch (error) {
@@ -443,9 +450,11 @@ export class MySqlDriver implements DatabaseDriver {
 
   public async close(): Promise<void> {
     const pool = this.pool;
+    const schemaPool = this.schemaPool;
     this.pool = null;
+    this.schemaPool = null;
     this.ready = false;
-    if (pool) await pool.end();
+    await Promise.all([pool?.end(), schemaPool?.end()]);
   }
 
   public query(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
@@ -472,24 +481,42 @@ export class MySqlDriver implements DatabaseDriver {
     await this.guard(this.requirePool().query('SELECT 1').then(() => undefined));
   }
 
+  public async acquireSchemaConnection(): Promise<DatabaseConnection> {
+    this.requirePool();
+    const pool = this.schemaPool!;
+    return this.guard(pool.getConnection().then((connection) =>
+      new MySqlConnection(connection, (error) => this.reportFatalError(error)),
+    ));
+  }
+
   public getPoolStatus(): PoolStatus {
-    const internal = this.pool as unknown as {
-      pool?: {
-        _allConnections?: { length?: number; size?: number };
-        _freeConnections?: { length?: number; size?: number };
-        _connectionQueue?: { length?: number; size?: number };
+    const poolStatus = (value: Pool | null): PoolStatus => {
+      const internal = value as unknown as {
+        pool?: {
+          _allConnections?: { length?: number; size?: number };
+          _freeConnections?: { length?: number; size?: number };
+          _connectionQueue?: { length?: number; size?: number };
+        };
+      } | null;
+      const pool = internal?.pool;
+      const size = (value: { length?: number; size?: number } | undefined): number =>
+        value?.length ?? value?.size ?? 0;
+      const total = size(pool?._allConnections);
+      const free = size(pool?._freeConnections);
+      return {
+        total,
+        free,
+        acquired: Math.max(0, total - free),
+        queued: size(pool?._connectionQueue),
       };
-    } | null;
-    const pool = internal?.pool;
-    const size = (value: { length?: number; size?: number } | undefined): number =>
-      value?.length ?? value?.size ?? 0;
-    const total = size(pool?._allConnections);
-    const free = size(pool?._freeConnections);
+    };
+    const queries = poolStatus(this.pool);
+    const schema = poolStatus(this.schemaPool);
     return {
-      total,
-      free,
-      acquired: Math.max(0, total - free),
-      queued: size(pool?._connectionQueue),
+      total: queries.total + schema.total,
+      free: queries.free + schema.free,
+      acquired: queries.acquired + schema.acquired,
+      queued: queries.queued + schema.queued,
     };
   }
 

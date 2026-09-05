@@ -18,8 +18,9 @@ After `1.0.0`, the latest stable minor line is supported.
 
 - Use a least-privilege application account, and a separate schema account
   where practical (`qbxsql_*_schema_connection_string`).
-- Never paste connection strings into logs or bug reports; qbxsql redacts
-  them from its own output, so a string you see came from somewhere else.
+- Never paste connection strings into logs or bug reports. Status output
+  excludes credentials, but query diagnostics and database errors can contain
+  SQL or player data. Review logs before sharing them.
 - Keep MySQL `multipleStatements` disabled unless a reviewed resource
   strictly requires it.
 - Restrict `qbxsql_schema_allow_blocking` to maintenance windows, and take a

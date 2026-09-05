@@ -182,12 +182,14 @@ function migrationPlanActions(
   return migrations.flatMap((migration) =>
     migration.operations.flatMap((operation) => {
       const authorized = migration.allowBlocking === true && operatorAllowsBlocking;
-      const blocked = requiresBlocking(operation) && !authorized;
+      const conversion = operation.type === 'alterColumn';
+      const missingDataLossApproval = conversion && operation.allowDataLoss !== true;
+      const blocked = missingDataLossApproval || (requiresBlocking(operation) && !authorized);
       return postgresMigrationStatements(operation).map((statement) => ({
         kind: `migration:${operation.type}`,
         sql: statement.sql,
-        safe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
-        dataSafe: !('allowDataLoss' in operation && operation.allowDataLoss === true),
+        safe: !conversion && !('allowDataLoss' in operation && operation.allowDataLoss === true),
+        dataSafe: !conversion && !('allowDataLoss' in operation && operation.allowDataLoss === true),
         onlineSafe: statement.concurrent === true || !requiresBlocking(operation),
         automatic: !blocked,
         risk: requiresBlocking(operation) || 'allowDataLoss' in operation ? 'high' : 'medium',
@@ -200,7 +202,9 @@ function migrationPlanActions(
             : blocked
               ? 'MANUAL'
               : 'TRANSACTIONAL',
-        reason: blocked
+        reason: missingDataLossApproval
+          ? `migration ${migration.version} (${migration.name}): alterColumn requires allowDataLoss=true`
+          : blocked
           ? `migration ${migration.version} (${migration.name}) requires allowBlocking=true and qbxsql_schema_allow_blocking=true`
           : `migration ${migration.version} (${migration.name})`,
         ...(operationTable(operation)[0] ? { table: operationTable(operation)[0] } : {}),
@@ -321,7 +325,7 @@ export class PostgresSchemaManager {
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
 
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     const lockKey = this.resourceLockKey(resource);
     try {
       await this.acquireLock(lock, lockKey);
@@ -452,7 +456,7 @@ export class PostgresSchemaManager {
     const checksum = postgresSchemaChecksum(validated);
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     const lockKey = this.resourceLockKey(resource);
     try {
       await this.acquireLock(lock, lockKey);
@@ -579,7 +583,7 @@ export class PostgresSchemaManager {
    * simply won the race.
    */
   private async createMetadata(): Promise<void> {
-    const connection = await this.database.driver.acquire();
+    const connection = await this.database.acquireSchemaConnection();
     const key = advisoryLockKey(this.database.driver.databaseName, 'qbxsql:metadata');
     try {
       await this.acquireLock(connection, key);
@@ -678,12 +682,13 @@ export class PostgresSchemaManager {
   }
 
   private async releaseLock(connection: DatabaseConnection, key: number): Promise<void> {
-    await connection
-      .query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, key])
-      .catch(() => {});
-    // The concurrent-DDL branch sets lock_timeout at session scope; reset it so
-    // the setting does not follow this connection back into the pool.
-    await connection.query('RESET lock_timeout').catch(() => {});
+    try {
+      await connection.query('SELECT pg_advisory_unlock($1, $2)', [advisoryLockNamespace, key]);
+      await connection.query('RESET lock_timeout');
+    } catch {
+      // A session with an unconfirmed unlock must never re-enter the pool.
+      connection.destroy();
+    }
   }
 
   private async metadataExists(): Promise<boolean> {
@@ -776,14 +781,15 @@ export class PostgresSchemaManager {
     migrations: readonly PostgresMigrationDefinition[],
   ): void {
     for (const migration of migrations) {
-      if (
-        migration.operations.some(requiresBlocking) &&
-        !(migration.allowBlocking === true && this.allowBlocking)
-      ) {
+      // Only pending migrations are checked here. Requiring a new flag while
+      // validating historical declarations would force edits to checksummed
+      // migrations that have already run.
+      const actions = migrationPlanActions([migration], this.allowBlocking);
+      if (actions.some((action) => !action.automatic)) {
         throw new PostgresSchemaMigrationRequiredError({
           resource,
           version: migration.version,
-          actions: migrationPlanActions([migration], this.allowBlocking),
+          actions,
           warnings: [],
         });
       }

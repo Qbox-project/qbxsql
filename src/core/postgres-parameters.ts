@@ -13,9 +13,9 @@ function cachePlaceholderCount(sql: string, count: number): number {
   return count;
 }
 
-function skipQuoted(sql: string, start: number, quote: "'" | '"'): number {
+function skipQuoted(sql: string, start: number, quote: "'" | '"', escapes: boolean): number {
   for (let index = start + 1; index < sql.length; index += 1) {
-    if (sql[index] === '\\' && quote === "'") {
+    if (sql[index] === '\\' && escapes) {
       index += 1;
       continue;
     }
@@ -44,7 +44,18 @@ export function countPostgresPlaceholders(sql: string): number {
     const next = sql[index + 1];
 
     if (char === "'" || char === '"') {
-      index = skipQuoted(sql, index, char);
+      // Standard strings treat backslashes literally. Only E'...' strings
+      // use backslash escapes (the driver enforces standard_conforming_strings).
+      const escapes = char === "'" && /[eE]/.test(sql[index - 1] ?? '') &&
+        !/[\p{L}\p{N}_$]/u.test(sql[index - 2] ?? '');
+      index = skipQuoted(sql, index, char, escapes);
+      continue;
+    }
+
+    // PostgreSQL permits dollar signs inside unquoted identifiers. Consume
+    // the whole identifier so amount$2 is never mistaken for parameter $2.
+    if (/[\p{L}_]/u.test(char)) {
+      while (index + 1 < sql.length && /[\p{L}\p{N}_$]/u.test(sql[index + 1]!)) index += 1;
       continue;
     }
 

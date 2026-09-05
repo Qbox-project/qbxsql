@@ -29,6 +29,12 @@ Numbered placeholders are required. qbxsql recognizes placeholders outside quote
 
 ## Query API
 
+Each call accepts **one SQL statement**, including calls without parameters.
+Use `Postgres.transaction` for a group of statements that must succeed together.
+Multi-statement strings are rejected by PostgreSQL before execution. Connections
+start with `standard_conforming_strings=on`; use `E'...'` for SQL backslash
+escapes and keep this setting enabled so placeholder parsing stays consistent.
+
 - `Postgres.query(sql, parameters, callback)` returns an array of rows.
 - `Postgres.single(...)` returns the first row or `nil`.
 - `Postgres.scalar(...)` returns the first value of the first row or `nil`.

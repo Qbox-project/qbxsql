@@ -82,62 +82,45 @@ export async function manifestVersion(relativePath) {
   return manifestMetadata(relativePath, 'version');
 }
 
-async function existingFiles(relativePaths) {
-  const files = [];
-  for (const relativePath of relativePaths) {
-    try {
-      const entry = await stat(path.join(repositoryRoot, relativePath));
-      if (entry.isFile()) files.push(relativePath);
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
-  }
-  return files;
-}
-
-async function filesUnder(relativeDirectory) {
-  const root = path.join(repositoryRoot, relativeDirectory);
-  try {
-    const output = [];
-    const visit = async (directory) => {
-      for (const entry of await readdir(directory, { withFileTypes: true })) {
-        const absolute = path.join(directory, entry.name);
-        if (entry.isDirectory()) await visit(absolute);
-        else if (entry.isFile()) {
-          output.push(path.relative(repositoryRoot, absolute).replaceAll('\\', '/'));
-        }
-      }
-    };
-    await visit(root);
-    return output;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
 export async function releaseFiles() {
   const coreRequired = [
     'fxmanifest.lua',
-    'package.json',
     'LICENSE',
     'README.md',
     'dist/index.js',
     'dist/index.js.map',
+    'dist/THIRD_PARTY_NOTICES.txt',
     'lib/MySQL.lua',
     'lib/Postgres.lua',
     'lib/Schema.lua',
+    'CHANGELOG.md',
+    'docs/compatibility.md',
+    'docs/operations.md',
+    'docs/postgresql.md',
+    'docs/schemas.md',
+    'examples/properties-schema.lua',
+    'examples/postgres-properties-schema.lua',
+    'examples/postgres-embeddings-schema.lua',
   ];
   for (const relativePath of coreRequired) {
     const entry = await stat(path.join(repositoryRoot, relativePath)).catch(() => null);
     if (!entry?.isFile()) throw new Error(`Required release file is missing: ${relativePath}`);
   }
 
-  const documentation = await existingFiles(['CHANGELOG.md', 'SECURITY.md']);
-  const docs = await filesUnder('docs');
-  const examples = await filesUnder('examples');
-  const core = [...coreRequired, ...documentation, ...docs, ...examples].sort();
-  return { core };
+  return { core: coreRequired.sort() };
+}
+
+export function validateDocumentationLinks(entries) {
+  for (const [name, data] of entries) {
+    if (!name.endsWith('.md')) continue;
+    const markdown = data.toString('utf8').replace(/```[\s\S]*?```/g, '');
+    for (const match of markdown.matchAll(/!?\[[^\]]*\]\(([^\s)]+)\)/g)) {
+      const href = match[1];
+      if (/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(href)) continue;
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(name), href.split('#')[0]));
+      if (!entries.has(target)) throw new Error(`Broken documentation link in ${name}: ${href}`);
+    }
+  }
 }
 
 export async function validateSourceVersions() {
@@ -194,7 +177,7 @@ export function deterministicZip(entries) {
   const centralParts = [];
   let offset = 0;
 
-  for (const entry of [...entries].sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of [...entries].sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
     const name = Buffer.from(entry.name.replaceAll('\\', '/'), 'utf8');
     const data = Buffer.from(entry.data);
     const checksum = crc32(data);
@@ -303,11 +286,34 @@ export async function validateBuiltRelease() {
   const actualChecksum = createHash('sha256').update(zip).digest('hex');
   if (expectedChecksum !== actualChecksum) throw new Error('Release ZIP SHA-256 checksum mismatch.');
 
+  const regenerated = [];
+  for (const file of expected.core) {
+    regenerated.push({ name: `qbxsql/${file}`, data: await readFile(path.join(repositoryRoot, file)) });
+  }
+  if (!zip.equals(deterministicZip(regenerated))) {
+    throw new Error('Release ZIP is stale, modified, or not reproducible from the current source.');
+  }
+
   const entries = await parseStoredZip(zip);
+  validateDocumentationLinks(entries);
   const expectedEntries = expected.core.map((entry) => `qbxsql/${entry}`).sort();
   const actualEntries = [...entries.keys()].sort();
   if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
     throw new Error('Release ZIP contents do not match the resource file allowlist.');
+  }
+
+  const unpackedFiles = [];
+  const visit = async (directory) => {
+    for (const entry of await readdir(path.join(releaseRoot, directory), { withFileTypes: true })) {
+      const name = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) await visit(name);
+      else if (entry.isFile()) unpackedFiles.push(name);
+      else throw new Error(`Unexpected non-file entry in unpacked release: ${name}`);
+    }
+  };
+  await visit('qbxsql');
+  if (JSON.stringify(unpackedFiles.sort()) !== JSON.stringify(expectedEntries)) {
+    throw new Error('Unpacked release contents do not match the resource file allowlist.');
   }
 
   for (const sourcePath of expected.core) {
@@ -323,10 +329,8 @@ export async function validateBuiltRelease() {
     }
   }
 
-  const packagedPackage = JSON.parse(entries.get('qbxsql/package.json').toString('utf8'));
   const packagedCoreManifest = entries.get('qbxsql/fxmanifest.lua').toString('utf8');
   if (
-    packagedPackage.version !== versions.coreVersion ||
     !packagedCoreManifest.includes(`qbxsql_version '${versions.coreVersion}'`)
   ) {
     throw new Error('Packaged core versions disagree.');

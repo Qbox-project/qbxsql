@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -71,3 +72,7 @@ jobs:
           QBXSQL_TEST_ADMIN_URL: mysql://root:root@127.0.0.1:${{ job.services.database.ports['3306'] }}
           QBXSQL_TEST_POSTGRES_ADMIN_URL: postgresql://postgres:root@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
         run: bun run test:integration
+      - name: Build and validate the installable release
+        run: |
+          node scripts/build-release.mjs
+          bun run release:validate

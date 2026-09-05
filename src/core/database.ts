@@ -96,6 +96,13 @@ export class DatabaseService {
     return this.awaitConnection();
   }
 
+  public async acquireSchemaConnection(): Promise<DatabaseConnection> {
+    await this.awaitConnection();
+    return this.driver.acquireSchemaConnection
+      ? this.driver.acquireSchemaConnection()
+      : this.driver.acquire();
+  }
+
   public awaitConnection(timeout = this.config.connectionWaitTimeout): Promise<void> {
     if (this.connectionState === 'ready' && this.driver.ready) return Promise.resolve();
     if (this.connectionState === 'closing') {
@@ -351,6 +358,7 @@ export class DatabaseService {
       try {
         await connection.rollback();
       } catch (rollbackError) {
+        connection.destroy();
         console.error(`[qbxsql] rollback failed for ${invokingResource}`, rollbackError);
       }
       throw error;
@@ -383,7 +391,8 @@ export class DatabaseService {
     });
 
     try {
-      await connection.beginTransaction();
+      await Promise.race([connection.beginTransaction(), timeoutPromise]);
+      if (closed) throw timeoutError;
       const query = async (sql: string, parameters?: SqlParameters): Promise<unknown> => {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = this.normalize(sql, parameters);
@@ -402,16 +411,17 @@ export class DatabaseService {
       const result = await Promise.race([work(query), timeoutPromise]);
       if (closed) throw timeoutError;
       if (result === false) {
-        await connection.rollback();
+        await Promise.race([connection.rollback(), timeoutPromise]);
         return false;
       }
-      await connection.commit();
+      await Promise.race([connection.commit(), timeoutPromise]);
       return true;
     } catch (error) {
       if (!timedOut) {
         try {
-          await connection.rollback();
+          await Promise.race([connection.rollback(), timeoutPromise]);
         } catch {
+          connection.destroy();
           // The original transaction error is more useful than a secondary rollback failure.
         }
       }
@@ -612,9 +622,14 @@ export class DatabaseService {
   private startHealthCheck(): void {
     this.stopHealthCheck();
     if (!this.driver.healthCheck) return;
+    let pending = false;
     this.healthTimer = setInterval(() => {
-      if (this.connectionState !== 'ready') return;
-      void this.driver.healthCheck!().catch((error: unknown) => this.handleDisconnect(error));
+      if (this.connectionState !== 'ready' || pending) return;
+      pending = true;
+      void this.driver.healthCheck!().catch((error: unknown) => {
+        // A full driver queue is not evidence of a disconnected database.
+        if (!this.driver.isFatalError || this.driver.isFatalError(error)) this.handleDisconnect(error);
+      }).finally(() => { pending = false; });
     }, this.config.healthInterval);
     this.healthTimer.unref();
   }
@@ -642,7 +657,13 @@ export class DatabaseService {
 
   private emitLifecycle(event: LifecycleEvent): void {
     const status = this.getStatus();
-    for (const listener of this.lifecycleListeners) listener(event, status);
+    for (const listener of this.lifecycleListeners) {
+      try {
+        listener(event, status);
+      } catch (error) {
+        console.error('[qbxsql] lifecycle listener failed', error);
+      }
+    }
   }
 
   private isClosing(): boolean {

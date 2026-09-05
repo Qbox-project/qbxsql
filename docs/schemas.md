@@ -65,8 +65,9 @@ copy.
 
 Two things worth knowing:
 
-- Widening a `varchar` is only online while the byte length stays under 256 —
-  with `utf8mb4` that means 63 characters. Wider than that needs a migration.
+- Widening a `varchar` must not cross the one-byte/two-byte length boundary.
+  With `utf8mb4`, changing 63 characters to 64 needs a migration; widening
+  from 64 to 100 can remain online when the server supports it.
 - On MariaDB, `json` columns are stored as `longtext`; declare `type = 'json'`
   normally and qbxsql converges.
 
@@ -140,12 +141,18 @@ The rules:
   operation.
 - **Operator gate:** operations the server may execute as blocking DDL
   additionally require `allowBlocking = true` on the migration **and** the
-  server owner setting `qbxsql_schema_allow_blocking true`. A resource can
-  never lock or destroy a live database on restart without a human in the
-  loop.
+  server owner setting `qbxsql_schema_allow_blocking true`. These approvals
+  remain active until changed; turn the server setting off after maintenance.
 
 `setPrimaryKey` is data-dependent: adding a table's first primary key runs
 online without operator signoff; replacing an existing one requires it.
+
+PostgreSQL explicit `alterColumn` migrations always require
+`allowDataLoss = true`, plus both blocking approvals. Type conversions and
+`USING` expressions can rewrite or truncate data; the validator does not
+assume they are safe. Supported automatic widening does not need this flag.
+The check applies to pending migrations; leave already-applied migration
+definitions unchanged so their recorded checksums remain valid.
 
 `addForeignKey` runs online without blocking authorization: qbxsql verifies
 no orphaned rows exist, adds the constraint with `ALGORITHM=INPLACE,
@@ -167,9 +174,9 @@ with the runtime or when the runtime cannot attribute the call). A resource
 that tries to manage schemas under another resource's name is refused with
 `QBXSQL_SCHEMA_RESOURCE_MISMATCH`.
 
-**Ownership governs DDL, not data access.** Any resource may still `SELECT`,
-`INSERT`, or `UPDATE` through the ordinary query exports; the invoking
-resource is recorded there for logging only.
+Ownership applies to the schema API. Ordinary query exports can execute any
+SQL allowed by their database account, including DDL. Resource ownership is
+an accidental-conflict guard, not a sandbox for untrusted server scripts.
 
 Drift detection covers columns (including enums and
 `ON UPDATE CURRENT_TIMESTAMP`), primary keys, indexes, foreign keys, engine,
@@ -180,7 +187,8 @@ reported as warnings but never dropped automatically.
 
 Servers migrating from `.sql` imports already have the tables. `ensure`
 deliberately refuses to absorb an existing unmanaged table; adoption brings
-it under management explicitly, without touching data:
+it under management explicitly. Review the plan first: adoption can run
+migrations and reconcile the declared schema:
 
 ```lua
 local plan = QBXSQL.Schema.planAdoption.await(schema, baselineVersion)

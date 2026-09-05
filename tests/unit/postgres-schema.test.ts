@@ -129,6 +129,19 @@ describe('PostgreSQL declarative schemas', () => {
     expect(() => validatePostgresSchema(accepted)).not.toThrow();
   });
 
+  test('scans escape strings before checking schema expression boundaries', () => {
+    const input = schema();
+    input.tables.properties!.checks = [{
+      name: 'properties_owner_check',
+      expression: String.raw`owner <> E'\'') NOT VALID, DROP COLUMN owner, ADD CHECK ('a' = 'a'`,
+    }];
+    expect(() => validatePostgresSchema(input)).toThrow();
+    input.tables.properties!.checks![0]!.expression = String.raw`owner <> E'\'('`;
+    expect(() => validatePostgresSchema(input)).not.toThrow();
+    input.tables.properties!.checks![0]!.expression = "owner <> 'unterminated";
+    expect(() => validatePostgresSchema(input)).toThrow();
+  });
+
   test('rejects DDL injection through referential actions', () => {
     const input = schema();
     input.tables.properties!.foreignKeys = [

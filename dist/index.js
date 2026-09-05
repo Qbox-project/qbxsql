@@ -27096,16 +27096,19 @@ function orderedArray2(value, label) {
 }
 __name(orderedArray2, "orderedArray");
 function skipQuotedSpan(text2, start, quote) {
+  const escapes = quote === "'" && /[eE]/.test(text2[start - 1] ?? "") && !/[\p{L}\p{N}_$]/u.test(text2[start - 2] ?? "");
   let index = start + 1;
   while (index < text2.length) {
-    if (text2[index] === quote) {
+    if (escapes && text2[index] === "\\") {
+      index += 2;
+    } else if (text2[index] === quote) {
       if (text2[index + 1] === quote) index += 2;
       else return index;
     } else {
       index += 1;
     }
   }
-  return text2.length;
+  throw new Error("Schema SQL expression has an unterminated quoted value.");
 }
 __name(skipQuotedSpan, "skipQuotedSpan");
 function sqlFragment(value, label) {
@@ -28543,17 +28546,19 @@ function migrationPlanActions(migrations, operatorAllowsBlocking) {
   return migrations.flatMap(
     (migration) => migration.operations.flatMap((operation) => {
       const authorized = migration.allowBlocking === true && operatorAllowsBlocking;
-      const blocked = requiresBlocking(operation) && !authorized;
+      const conversion = operation.type === "alterColumn";
+      const missingDataLossApproval = conversion && operation.allowDataLoss !== true;
+      const blocked = missingDataLossApproval || requiresBlocking(operation) && !authorized;
       return postgresMigrationStatements(operation).map((statement) => ({
         kind: `migration:${operation.type}`,
         sql: statement.sql,
-        safe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
-        dataSafe: !("allowDataLoss" in operation && operation.allowDataLoss === true),
+        safe: !conversion && !("allowDataLoss" in operation && operation.allowDataLoss === true),
+        dataSafe: !conversion && !("allowDataLoss" in operation && operation.allowDataLoss === true),
         onlineSafe: statement.concurrent === true || !requiresBlocking(operation),
         automatic: !blocked,
         risk: requiresBlocking(operation) || "allowDataLoss" in operation ? "high" : "medium",
         algorithm: statement.concurrent ? "CONCURRENT" : operation.type === "addForeignKey" || operation.type === "addCheck" ? statement.sql.includes("VALIDATE") ? "VALIDATE" : "NOT VALID" : blocked ? "MANUAL" : "TRANSACTIONAL",
-        reason: blocked ? `migration ${migration.version} (${migration.name}) requires allowBlocking=true and qbxsql_schema_allow_blocking=true` : `migration ${migration.version} (${migration.name})`,
+        reason: missingDataLossApproval ? `migration ${migration.version} (${migration.name}): alterColumn requires allowDataLoss=true` : blocked ? `migration ${migration.version} (${migration.name}) requires allowBlocking=true and qbxsql_schema_allow_blocking=true` : `migration ${migration.version} (${migration.name})`,
         ...operationTable(operation)[0] ? { table: operationTable(operation)[0] } : {}
       }));
     })
@@ -28654,7 +28659,7 @@ var PostgresSchemaManager = class {
     const extensionReport = await this.extensions.require(resource, validated.extensions ?? []);
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     const lockKey = this.resourceLockKey(resource);
     try {
       await this.acquireLock(lock, lockKey);
@@ -28761,7 +28766,7 @@ var PostgresSchemaManager = class {
     const checksum = postgresSchemaChecksum(validated);
     const schema = await canonicalizePostgresSchema(this.database, validated);
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     const lockKey = this.resourceLockKey(resource);
     try {
       await this.acquireLock(lock, lockKey);
@@ -28873,7 +28878,7 @@ var PostgresSchemaManager = class {
    * simply won the race.
    */
   async createMetadata() {
-    const connection = await this.database.driver.acquire();
+    const connection = await this.database.acquireSchemaConnection();
     const key = advisoryLockKey(this.database.driver.databaseName, "qbxsql:metadata");
     try {
       await this.acquireLock(connection, key);
@@ -28968,10 +28973,12 @@ var PostgresSchemaManager = class {
     }
   }
   async releaseLock(connection, key) {
-    await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, key]).catch(() => {
-    });
-    await connection.query("RESET lock_timeout").catch(() => {
-    });
+    try {
+      await connection.query("SELECT pg_advisory_unlock($1, $2)", [advisoryLockNamespace, key]);
+      await connection.query("RESET lock_timeout");
+    } catch {
+      connection.destroy();
+    }
   }
   async metadataExists() {
     return Boolean(await this.database.scalar(
@@ -29043,11 +29050,12 @@ var PostgresSchemaManager = class {
   }
   assertBlockingPolicy(resource, migrations) {
     for (const migration of migrations) {
-      if (migration.operations.some(requiresBlocking) && !(migration.allowBlocking === true && this.allowBlocking)) {
+      const actions = migrationPlanActions([migration], this.allowBlocking);
+      if (actions.some((action2) => !action2.automatic)) {
         throw new PostgresSchemaMigrationRequiredError({
           resource,
           version: migration.version,
-          actions: migrationPlanActions([migration], this.allowBlocking),
+          actions,
           warnings: []
         });
       }
@@ -29899,14 +29907,14 @@ function normalizedDefault(value) {
   if (value === null || value === void 0) return null;
   const source = String(value);
   if (source.length >= 2 && source.startsWith("'") && source.endsWith("'")) {
-    return source.slice(1, -1).replace(/''/g, "'").toLowerCase();
+    return source.slice(1, -1).replace(/''/g, "'");
   }
-  const normalized = source.toLowerCase().replace(/\(\)$/, "");
-  return normalized === "null" ? null : normalized;
+  if (/^null$/i.test(source)) return null;
+  return /^current_timestamp(?:\([0-6]?\))?$/i.test(source) ? source.toLowerCase().replace(/\(\)$/, "") : source;
 }
 __name(normalizedDefault, "normalizedDefault");
 function normalizedDesiredDefault(value) {
-  return String(value).toLowerCase();
+  return String(value);
 }
 __name(normalizedDesiredDefault, "normalizedDesiredDefault");
 function parseEnumValues(columnType) {
@@ -30444,7 +30452,7 @@ var SchemaManager = class {
     if (this.mode === "off") throw new SchemaDisabledError(resource);
     if (this.mode === "plan") throw new SchemaPendingChangesError(await this.plan(resource, schema));
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     try {
       await this.acquireLock(lock);
       const registry = await this.readRegistry(resource);
@@ -30628,7 +30636,7 @@ var SchemaManager = class {
     }
     const checksum = schemaChecksum(schema);
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     let adoptionRecorded = false;
     try {
       await this.acquireLock(lock);
@@ -31772,6 +31780,10 @@ var DatabaseService = class {
   connect() {
     return this.awaitConnection();
   }
+  async acquireSchemaConnection() {
+    await this.awaitConnection();
+    return this.driver.acquireSchemaConnection ? this.driver.acquireSchemaConnection() : this.driver.acquire();
+  }
   awaitConnection(timeout = this.config.connectionWaitTimeout) {
     if (this.connectionState === "ready" && this.driver.ready) return Promise.resolve();
     if (this.connectionState === "closing") {
@@ -31952,6 +31964,7 @@ var DatabaseService = class {
       try {
         await connection.rollback();
       } catch (rollbackError) {
+        connection.destroy();
         console.error(`[qbxsql] rollback failed for ${invokingResource}`, rollbackError);
       }
       throw error;
@@ -31979,7 +31992,8 @@ var DatabaseService = class {
       rejectTimeout = reject;
     });
     try {
-      await connection.beginTransaction();
+      await Promise.race([connection.beginTransaction(), timeoutPromise]);
+      if (closed) throw timeoutError;
       const query = /* @__PURE__ */ __name(async (sql, parameters) => {
         if (closed) throw new Error(`Transaction timed out after ${this.config.transactionTimeout}ms.`);
         const [statement, values] = this.normalize(sql, parameters);
@@ -32000,16 +32014,17 @@ ${reason}`);
       const result = await Promise.race([work(query), timeoutPromise]);
       if (closed) throw timeoutError;
       if (result === false) {
-        await connection.rollback();
+        await Promise.race([connection.rollback(), timeoutPromise]);
         return false;
       }
-      await connection.commit();
+      await Promise.race([connection.commit(), timeoutPromise]);
       return true;
     } catch (error) {
       if (!timedOut) {
         try {
-          await connection.rollback();
+          await Promise.race([connection.rollback(), timeoutPromise]);
         } catch {
+          connection.destroy();
         }
       }
       throw error;
@@ -32165,9 +32180,15 @@ ${query}`
   startHealthCheck() {
     this.stopHealthCheck();
     if (!this.driver.healthCheck) return;
+    let pending = false;
     this.healthTimer = setInterval(() => {
-      if (this.connectionState !== "ready") return;
-      void this.driver.healthCheck().catch((error) => this.handleDisconnect(error));
+      if (this.connectionState !== "ready" || pending) return;
+      pending = true;
+      void this.driver.healthCheck().catch((error) => {
+        if (!this.driver.isFatalError || this.driver.isFatalError(error)) this.handleDisconnect(error);
+      }).finally(() => {
+        pending = false;
+      });
     }, this.config.healthInterval);
     this.healthTimer.unref();
   }
@@ -32191,7 +32212,13 @@ ${query}`
   }
   emitLifecycle(event) {
     const status = this.getStatus();
-    for (const listener of this.lifecycleListeners) listener(event, status);
+    for (const listener of this.lifecycleListeners) {
+      try {
+        listener(event, status);
+      } catch (error) {
+        console.error("[qbxsql] lifecycle listener failed", error);
+      }
+    }
   }
   isClosing() {
     return this.connectionState === "closing";
@@ -32400,7 +32427,7 @@ function parseMySqlConnectionString(connectionString, warn = console.warn) {
   for (const segment of connectionString.split(";")) {
     if (!segment.trim()) continue;
     const separator = segment.indexOf("=");
-    if (separator === -1) throw new Error(`Invalid connection-string segment '${segment}'.`);
+    if (separator === -1) throw new Error("Invalid connection-string segment; expected key=value.");
     const sourceKey = segment.slice(0, separator).trim();
     const normalized = normalizeOptionKey(sourceKey);
     const value = segment.slice(separator + 1).trim();
@@ -32593,12 +32620,14 @@ var MySqlDriver = class {
   static {
     __name(this, "MySqlDriver");
   }
+  isFatalError = isFatalDatabaseError;
   dialect = "mysql";
   databaseName = null;
   serverVersion = null;
   ready = false;
   namedPlaceholders;
   pool = null;
+  schemaPool = null;
   fatalErrorListener = null;
   parsedOptions;
   async connect() {
@@ -32617,7 +32646,7 @@ var MySqlDriver = class {
     if (this.config.connectionLimitExplicit) options.connectionLimit = this.config.connectionLimit;
     if (this.config.connectTimeoutExplicit) options.connectTimeout = this.config.connectTimeout;
     const pool = (0, import_promise.createPool)(options);
-    pool.on("connection", (connection) => {
+    const initializeConnection = /* @__PURE__ */ __name((connection) => {
       const raw = connection;
       raw.query(
         `SET SESSION TRANSACTION ISOLATION LEVEL ${this.config.transactionIsolationLevel}`,
@@ -32630,7 +32659,8 @@ var MySqlDriver = class {
           raw.destroy();
         }
       );
-    });
+    }, "initializeConnection");
+    pool.on("connection", initializeConnection);
     try {
       const [rows4] = await pool.query(
         "SELECT VERSION() AS version, DATABASE() AS databaseName"
@@ -32638,6 +32668,8 @@ var MySqlDriver = class {
       const first2 = rows4[0];
       this.serverVersion = first2?.version ?? null;
       this.databaseName = first2?.databaseName ?? null;
+      this.schemaPool = (0, import_promise.createPool)({ ...options, connectionLimit: 1, maxIdle: 1 });
+      this.schemaPool.on("connection", initializeConnection);
       this.pool = pool;
       this.ready = true;
     } catch (error) {
@@ -32647,9 +32679,11 @@ var MySqlDriver = class {
   }
   async close() {
     const pool = this.pool;
+    const schemaPool = this.schemaPool;
     this.pool = null;
+    this.schemaPool = null;
     this.ready = false;
-    if (pool) await pool.end();
+    await Promise.all([pool?.end(), schemaPool?.end()]);
   }
   query(sql, parameters = []) {
     return this.guard(runQuery(this.requirePool(), sql, parameters, false));
@@ -32671,17 +32705,34 @@ var MySqlDriver = class {
   async healthCheck() {
     await this.guard(this.requirePool().query("SELECT 1").then(() => void 0));
   }
+  async acquireSchemaConnection() {
+    this.requirePool();
+    const pool = this.schemaPool;
+    return this.guard(pool.getConnection().then(
+      (connection) => new MySqlConnection(connection, (error) => this.reportFatalError(error))
+    ));
+  }
   getPoolStatus() {
-    const internal = this.pool;
-    const pool = internal?.pool;
-    const size = /* @__PURE__ */ __name((value) => value?.length ?? value?.size ?? 0, "size");
-    const total = size(pool?._allConnections);
-    const free = size(pool?._freeConnections);
+    const poolStatus = /* @__PURE__ */ __name((value) => {
+      const internal = value;
+      const pool = internal?.pool;
+      const size = /* @__PURE__ */ __name((value2) => value2?.length ?? value2?.size ?? 0, "size");
+      const total = size(pool?._allConnections);
+      const free = size(pool?._freeConnections);
+      return {
+        total,
+        free,
+        acquired: Math.max(0, total - free),
+        queued: size(pool?._connectionQueue)
+      };
+    }, "poolStatus");
+    const queries = poolStatus(this.pool);
+    const schema = poolStatus(this.schemaPool);
     return {
-      total,
-      free,
-      acquired: Math.max(0, total - free),
-      queued: size(pool?._connectionQueue)
+      total: queries.total + schema.total,
+      free: queries.free + schema.free,
+      acquired: queries.acquired + schema.acquired,
+      queued: queries.queued + schema.queued
     };
   }
   onFatalError(listener) {
@@ -32732,9 +32783,9 @@ function cachePlaceholderCount(sql, count) {
   return count;
 }
 __name(cachePlaceholderCount, "cachePlaceholderCount");
-function skipQuoted(sql, start, quote) {
+function skipQuoted(sql, start, quote, escapes) {
   for (let index = start + 1; index < sql.length; index += 1) {
-    if (sql[index] === "\\" && quote === "'") {
+    if (sql[index] === "\\" && escapes) {
       index += 1;
       continue;
     }
@@ -32761,7 +32812,12 @@ function countPostgresPlaceholders(sql) {
     const char = sql[index];
     const next = sql[index + 1];
     if (char === "'" || char === '"') {
-      index = skipQuoted(sql, index, char);
+      const escapes = char === "'" && /[eE]/.test(sql[index - 1] ?? "") && !/[\p{L}\p{N}_$]/u.test(sql[index - 2] ?? "");
+      index = skipQuoted(sql, index, char, escapes);
+      continue;
+    }
+    if (/[\p{L}_]/u.test(char)) {
+      while (index + 1 < sql.length && /[\p{L}\p{N}_$]/u.test(sql[index + 1])) index += 1;
       continue;
     }
     if (char === "-" && next === "-") {
@@ -32895,7 +32951,8 @@ function normalizeResult(result) {
 __name(normalizeResult, "normalizeResult");
 async function runQuery2(connection, sql, parameters) {
   scheduleResourceTick2();
-  return normalizeResult(await connection.query(sql, [...parameters]));
+  const query = { text: sql, values: [...parameters], queryMode: "extended" };
+  return normalizeResult(await connection.query(query));
 }
 __name(runQuery2, "runQuery");
 var fatalNetworkCodes = /* @__PURE__ */ new Set([
@@ -32911,6 +32968,7 @@ var fatalPostgresCodes = /* @__PURE__ */ new Set(["57P01", "57P02", "57P03"]);
 function isFatalPostgresError(error) {
   if (!error || typeof error !== "object") return false;
   const code = error.code;
+  if (error instanceof Error && /^Connection terminated(?: unexpectedly)?$/.test(error.message)) return true;
   return typeof code === "string" && (fatalNetworkCodes.has(code) || fatalPostgresCodes.has(code) || code.startsWith("08"));
 }
 __name(isFatalPostgresError, "isFatalPostgresError");
@@ -32972,12 +33030,14 @@ var PostgresDriver = class {
   static {
     __name(this, "PostgresDriver");
   }
+  isFatalError = isFatalPostgresError;
   dialect = "postgresql";
   databaseName = null;
   serverVersion = null;
   ready = false;
   namedPlaceholders = false;
   pool = null;
+  schemaPool = null;
   fatalErrorListener = null;
   extensionTypeParsers = /* @__PURE__ */ new Map();
   postgresTypes = {
@@ -33008,7 +33068,7 @@ var PostgresDriver = class {
       connectionTimeoutMillis: this.config.connectTimeout,
       application_name: resourceName3,
       keepAlive: true,
-      options: "-c search_path=public,pg_catalog",
+      options: "-c search_path=public,pg_catalog -c standard_conforming_strings=on",
       types: this.postgresTypes
     };
     const pool = new Pool(options);
@@ -33031,6 +33091,8 @@ var PostgresDriver = class {
       this.pool = pool;
       this.ready = true;
       await this.refreshExtensionTypes();
+      this.schemaPool = new Pool({ ...options, max: 1 });
+      this.schemaPool.on("error", (error) => this.reportFatalError(error));
     } catch (error) {
       this.pool = null;
       this.ready = false;
@@ -33040,9 +33102,11 @@ var PostgresDriver = class {
   }
   async close() {
     const pool = this.pool;
+    const schemaPool = this.schemaPool;
     this.pool = null;
+    this.schemaPool = null;
     this.ready = false;
-    if (pool) await pool.end();
+    await Promise.all([pool?.end(), schemaPool?.end()]);
   }
   query(sql, parameters = []) {
     return this.guard(runQuery2(this.requirePool(), sql, parameters));
@@ -33065,6 +33129,15 @@ var PostgresDriver = class {
   async healthCheck() {
     await this.guard(this.requirePool().query("SELECT 1").then(() => void 0));
   }
+  async acquireSchemaConnection() {
+    this.requirePool();
+    const pool = this.schemaPool;
+    return this.guard(pool.connect().then((client) => new PostgresConnection(
+      client,
+      this.config.transactionIsolationLevel,
+      (error) => this.reportFatalError(error)
+    )));
+  }
   async refreshExtensionTypes() {
     if (this.config.parseVectorResults === false) {
       this.extensionTypeParsers.clear();
@@ -33086,13 +33159,14 @@ var PostgresDriver = class {
     }
   }
   getPoolStatus() {
-    const pool = this.pool;
-    if (!pool) return { total: 0, free: 0, acquired: 0, queued: 0 };
+    const pools = [this.pool, this.schemaPool];
+    const total = pools.reduce((sum, pool) => sum + (pool?.totalCount ?? 0), 0);
+    const free = pools.reduce((sum, pool) => sum + (pool?.idleCount ?? 0), 0);
     return {
-      total: pool.totalCount,
-      free: pool.idleCount,
-      acquired: Math.max(0, pool.totalCount - pool.idleCount),
-      queued: pool.waitingCount
+      total,
+      free,
+      acquired: Math.max(0, total - free),
+      queued: pools.reduce((sum, pool) => sum + (pool?.waitingCount ?? 0), 0)
     };
   }
   onFatalError(listener) {

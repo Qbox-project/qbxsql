@@ -60,7 +60,10 @@ export interface DatabaseDriver {
   query(sql: string, parameters?: readonly unknown[]): Promise<DriverResult>;
   execute(sql: string, parameters?: readonly unknown[]): Promise<DriverResult>;
   acquire(): Promise<DatabaseConnection>;
+  /** Reserved session for schema locks; must not consume the query pool. */
+  acquireSchemaConnection?(): Promise<DatabaseConnection>;
   healthCheck?(): Promise<void>;
+  isFatalError?(error: unknown): boolean;
   getPoolStatus?(): PoolStatus;
   onFatalError?(listener: (error: unknown) => void): void;
   refreshExtensionTypes?(): Promise<void>;

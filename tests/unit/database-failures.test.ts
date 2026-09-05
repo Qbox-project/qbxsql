@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { QbxSqlConfig } from '../../src/config.js';
+import { isFatalDatabaseError } from '../../src/drivers/mysql.js';
+import { isFatalPostgresError } from '../../src/drivers/postgres.js';
 import {
   ConnectionUnavailableError,
   DatabaseService,
@@ -144,6 +146,41 @@ async function until(predicate: () => boolean, timeout = 1_000): Promise<void> {
 }
 
 describe('database failure handling', () => {
+  test('does not rebuild a healthy pool when a health check hits queue exhaustion', async () => {
+    const driver = new FailureDriver() as FailureDriver & { isFatalError: typeof isFatalDatabaseError };
+    driver.isFatalError = isFatalDatabaseError;
+    driver.healthCheck = async () => { throw new Error('Queue limit reached.'); };
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+    await database.connect();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(driver.connectAttempts).toBe(1);
+    expect(database.state).toBe('ready');
+  });
+
+  test('does not accumulate overlapping health queries while the pool is busy', async () => {
+    const driver = new FailureDriver();
+    let calls = 0;
+    let finish!: () => void;
+    driver.healthCheck = () => {
+      calls += 1;
+      return new Promise<void>((resolve) => { finish = resolve; });
+    };
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+    await database.connect();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(1);
+    finish();
+    await database.close();
+  });
+
+  test('recognizes PostgreSQL socket closures without treating pool timeouts as fatal', () => {
+    expect(isFatalPostgresError(new Error('Connection terminated unexpectedly'))).toBe(true);
+    expect(isFatalPostgresError(new Error('Connection terminated'))).toBe(true);
+    expect(isFatalPostgresError(new Error('timeout exceeded when trying to connect'))).toBe(false);
+  });
+
   test('rebuilds the pool after an idle health-check outage', async () => {
     const driver = new FailureDriver();
     const database = new DatabaseService(driver, config);
@@ -223,7 +260,7 @@ describe('database failure handling', () => {
     expect(errors[0]).toMatchObject({ message: 'pool exhausted' });
   });
 
-  test('preserves a deadlock error when rollback also fails and releases the connection', async () => {
+  test('preserves a deadlock error and discards the session when rollback also fails', async () => {
     const driver = new FailureDriver();
     driver.connection.queryError = Object.assign(new Error('deadlock victim'), {
       code: 'ER_LOCK_DEADLOCK',
@@ -243,6 +280,7 @@ describe('database failure handling', () => {
     }
 
     expect(driver.connection.rollbackCalls).toBe(1);
+    expect(driver.connection.destroyed).toBe(true);
     expect(driver.connection.released).toBe(true);
     expect(database.getStatus().totals).toMatchObject({ queries: 1, errors: 1 });
   });

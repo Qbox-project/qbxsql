@@ -5,4 +5,5 @@ release/
 .claude/
 *.log
 .env
+.env.*
 .DS_Store

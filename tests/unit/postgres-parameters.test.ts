@@ -5,6 +5,12 @@ import {
 } from '../../src/core/postgres-parameters.js';
 
 describe('PostgreSQL parameter normalization', () => {
+  test('distinguishes standard strings from escape strings and dollar signs in identifiers', () => {
+    expect(countPostgresPlaceholders(String.raw`SELECT '\', $1::text`)).toBe(1);
+    expect(countPostgresPlaceholders(String.raw`SELECT E'\'$9', $1::text`)).toBe(1);
+    expect(countPostgresPlaceholders('SELECT amount$2, amount$tag$, $1 FROM accounts')).toBe(1);
+  });
+
   test('counts numbered parameters outside PostgreSQL literals and comments', () => {
     const sql = `
       SELECT $1, '$8', "$7", $$ $6 $$, $tag$ $5 $tag$, $3

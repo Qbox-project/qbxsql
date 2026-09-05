@@ -68,7 +68,11 @@ async function runQuery(
   parameters: readonly unknown[],
 ): Promise<DriverResult> {
   scheduleResourceTick();
-  return normalizeResult(await connection.query(sql, [...parameters]));
+  // Always use the single-statement protocol, including calls without binds.
+  // Simple-query batches execute before returning an array of results, which
+  // cannot be represented by this API's one-result contract.
+  const query = { text: sql, values: [...parameters], queryMode: 'extended' };
+  return normalizeResult(await connection.query(query));
 }
 
 const fatalNetworkCodes = new Set([
@@ -85,6 +89,8 @@ const fatalPostgresCodes = new Set(['57P01', '57P02', '57P03']);
 export function isFatalPostgresError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = (error as { code?: unknown }).code;
+  // pg reports a socket close without SQLSTATE or an errno in these cases.
+  if (error instanceof Error && /^Connection terminated(?: unexpectedly)?$/.test(error.message)) return true;
   return (
     typeof code === 'string' &&
     (fatalNetworkCodes.has(code) || fatalPostgresCodes.has(code) || code.startsWith('08'))
@@ -147,6 +153,7 @@ class PostgresConnection implements DatabaseConnection {
 }
 
 export class PostgresDriver implements DatabaseDriver {
+  public readonly isFatalError = isFatalPostgresError;
   public readonly dialect = 'postgresql' as const;
   public databaseName: string | null = null;
   public serverVersion: string | null = null;
@@ -154,6 +161,7 @@ export class PostgresDriver implements DatabaseDriver {
   public readonly namedPlaceholders = false;
 
   private pool: Pool | null = null;
+  private schemaPool: Pool | null = null;
   private fatalErrorListener: ((error: unknown) => void) | null = null;
   private readonly extensionTypeParsers = new Map<number, (value: string) => unknown>();
   private readonly postgresTypes = {
@@ -192,7 +200,7 @@ export class PostgresDriver implements DatabaseDriver {
       connectionTimeoutMillis: this.config.connectTimeout,
       application_name: resourceName,
       keepAlive: true,
-      options: '-c search_path=public,pg_catalog',
+      options: '-c search_path=public,pg_catalog -c standard_conforming_strings=on',
       types: this.postgresTypes,
     };
     const pool = new Pool(options);
@@ -224,6 +232,8 @@ export class PostgresDriver implements DatabaseDriver {
       this.pool = pool;
       this.ready = true;
       await this.refreshExtensionTypes();
+      this.schemaPool = new Pool({ ...options, max: 1 });
+      this.schemaPool.on('error', (error) => this.reportFatalError(error));
     } catch (error) {
       this.pool = null;
       this.ready = false;
@@ -234,9 +244,11 @@ export class PostgresDriver implements DatabaseDriver {
 
   public async close(): Promise<void> {
     const pool = this.pool;
+    const schemaPool = this.schemaPool;
     this.pool = null;
+    this.schemaPool = null;
     this.ready = false;
-    if (pool) await pool.end();
+    await Promise.all([pool?.end(), schemaPool?.end()]);
   }
 
   public query(sql: string, parameters: readonly unknown[] = []): Promise<DriverResult> {
@@ -264,6 +276,16 @@ export class PostgresDriver implements DatabaseDriver {
     await this.guard(this.requirePool().query('SELECT 1').then(() => undefined));
   }
 
+  public async acquireSchemaConnection(): Promise<DatabaseConnection> {
+    this.requirePool();
+    const pool = this.schemaPool!;
+    return this.guard(pool.connect().then((client) => new PostgresConnection(
+      client,
+      this.config.transactionIsolationLevel,
+      (error) => this.reportFatalError(error),
+    )));
+  }
+
   public async refreshExtensionTypes(): Promise<void> {
     if (this.config.parseVectorResults === false) {
       this.extensionTypeParsers.clear();
@@ -286,13 +308,14 @@ export class PostgresDriver implements DatabaseDriver {
   }
 
   public getPoolStatus(): PoolStatus {
-    const pool = this.pool;
-    if (!pool) return { total: 0, free: 0, acquired: 0, queued: 0 };
+    const pools = [this.pool, this.schemaPool];
+    const total = pools.reduce((sum, pool) => sum + (pool?.totalCount ?? 0), 0);
+    const free = pools.reduce((sum, pool) => sum + (pool?.idleCount ?? 0), 0);
     return {
-      total: pool.totalCount,
-      free: pool.idleCount,
-      acquired: Math.max(0, pool.totalCount - pool.idleCount),
-      queued: pool.waitingCount,
+      total,
+      free,
+      acquired: Math.max(0, total - free),
+      queued: pools.reduce((sum, pool) => sum + (pool?.waitingCount ?? 0), 0),
     };
   }
 

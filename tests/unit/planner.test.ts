@@ -67,6 +67,17 @@ function actual(length: number): ActualTable {
 }
 
 describe('declarative schema planner', () => {
+  test('detects case-only changes to literal defaults', () => {
+    for (const stored of ["'ACTIVE'", 'ACTIVE']) {
+      const desired = schema(100);
+      desired.tables.properties!.columns.label!.default = 'active';
+      const existing = actual(100);
+      existing.columns.get('label')!.defaultValue = stored;
+      const plan = planSchema('housing', desired, new Map([['properties', existing]]));
+      expect(plan.actions.some((action) => action.reason.includes('change default'))).toBe(true);
+    }
+  });
+
   test('does not assume online DDL support for an unknown server version', () => {
     expect(capabilitiesForVersion(null)).toEqual({
       instantAddColumn: false,

@@ -2,6 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { parseMySqlConnectionString } from '../../src/drivers/mysql.js';
 
 describe('legacy MySQL connection strings', () => {
+  test('does not echo a password fragment from a malformed semicolon string', () => {
+    expect(() => parseMySqlConnectionString('host=localhost;password=first;secret-fragment'))
+      .toThrow('Invalid connection-string segment; expected key=value.');
+  });
+
   test('passes URI connection strings to mysql2', () => {
     expect(parseMySqlConnectionString('mysql://user:pass@localhost/database')).toEqual({
       uri: 'mysql://user:pass@localhost/database',

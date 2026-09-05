@@ -119,16 +119,20 @@ function orderedArray<T>(value: unknown, label: string): T[] {
 }
 
 function skipQuotedSpan(text: string, start: number, quote: "'" | '"'): number {
+  const escapes = quote === "'" && /[eE]/.test(text[start - 1] ?? '') &&
+    !/[\p{L}\p{N}_$]/u.test(text[start - 2] ?? '');
   let index = start + 1;
   while (index < text.length) {
-    if (text[index] === quote) {
+    if (escapes && text[index] === '\\') {
+      index += 2;
+    } else if (text[index] === quote) {
       if (text[index + 1] === quote) index += 2;
       else return index;
     } else {
       index += 1;
     }
   }
-  return text.length;
+  throw new Error('Schema SQL expression has an unterminated quoted value.');
 }
 
 /**

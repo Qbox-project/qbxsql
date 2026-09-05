@@ -112,7 +112,7 @@ locally when serialization, introspection, or DDL behavior changes.
 The minimum FXServer artifact is build `12913`, matching oxmysql 2.14.1's own
 floor; the packaged resource is additionally tested on a pinned stock-Linux
 artifact through the local containerized gate (see
-[development.md](development.md)).
+[contributor guide](https://github.com/Qbox-project/qbxsql/blob/main/.github/CONTRIBUTING.md)).
 
 On PostgreSQL, `BIGINT` and `NUMERIC` stay strings to avoid JavaScript
 precision loss, timestamps become epoch milliseconds, `BYTEA` becomes byte

@@ -7,7 +7,7 @@ body:
     attributes:
       label: qbxsql version
       description: The `qbxsql_version` from fxmanifest.lua or the release you installed.
-      placeholder: 0.6.0
+      placeholder: 0.6.1
     validations:
       required: true
   - type: input

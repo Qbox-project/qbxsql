@@ -270,7 +270,7 @@ export class SchemaManager {
 
     await this.initialize();
 
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     try {
       await this.acquireLock(lock);
       const registry = await this.readRegistry(resource);
@@ -490,7 +490,7 @@ export class SchemaManager {
     }
     const checksum = schemaChecksum(schema);
     await this.initialize();
-    const lock = await this.database.driver.acquire();
+    const lock = await this.database.acquireSchemaConnection();
     let adoptionRecorded = false;
 
     try {

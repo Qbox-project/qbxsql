@@ -4,6 +4,50 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
+No changes yet.
+
+## 0.6.1 - 2026-09-05
+
+This prerelease improves startup reliability and makes installation simpler.
+Restart the whole server when updating from an earlier version.
+
+### Fixed
+
+- Schema operations no longer starve their own query pool. Each database
+  service reserves one additional connection for schema locks, so concurrent
+  resource startup also works with a query connection limit of `1`.
+- Callback transaction timeouts now cover `BEGIN`, `COMMIT`, and rollback as
+  well as callback work. Failing lifecycle listeners no longer trigger a
+  database reconnect.
+- PostgreSQL parameters following ordinary strings ending in a backslash bind
+  correctly; dollar signs in identifiers are no longer treated as parameters.
+- PostgreSQL schema expression validation now understands escape strings and
+  rejects unterminated quotes, closing a gap in migration safety checks.
+- Explicit PostgreSQL `alterColumn` migrations now require `allowDataLoss = true`
+  alongside blocking approvals, because type conversions can truncate data.
+- PostgreSQL calls now enforce one SQL statement before executing it. Use the
+  transaction API for statement groups. Previously, unparameterized batches
+  could execute and then fail while decoding their results.
+- Failed PostgreSQL schema unlocks discard the affected session. Malformed
+  MySQL semicolon connection strings no longer echo password fragments.
+- Health checks no longer overlap while waiting for a busy pool or mistake
+  queue exhaustion for an outage. Failed transaction rollbacks discard their
+  sessions, and PostgreSQL socket closures without SQLSTATE trigger recovery.
+- MySQL/MariaDB schema comparison now detects case-only changes to string defaults.
+
+### Installation and documentation
+
+- Shortened the README around installation, queries, and links to four user
+  guides. Contributor and security policies now live under `.github`.
+- Release ZIPs contain an explicit list of runtime files, guides, examples,
+  and license notices. Development instructions and `package.json` stay out.
+- Added bundled third-party license notices, reproducible archive validation,
+  documentation link checks, and a CI-gated draft prerelease workflow.
+- Clarified restart limitations, schema adoption, pool and timeout behavior,
+  and the scope of schema ownership checks.
+
+### Earlier fixes included in this release
+
 - Fixed `qbxsql_schema_lock_timeout` being ignored on MySQL/MariaDB. Schema
   DDL now runs on the schema-lock session with `lock_wait_timeout` set from
   it, so a statement queued behind a long transaction's metadata lock fails

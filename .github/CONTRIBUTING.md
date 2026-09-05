@@ -1,5 +1,35 @@
-# Development
+# Contributing
 
+Thanks for helping out. The short version:
+
+1. Use the setup and test instructions below. Run commands from the repository
+   root with Node.js 22 and Bun 1.3.5 installed.
+2. Before opening a PR, make sure these pass:
+
+   ```sh
+   bun run typecheck
+   bun run test:unit
+   bun run test:contract
+   bun run build
+   ```
+
+   `dist/` is committed and CI fails if it doesn't match a fresh build, so
+   commit the rebuilt bundle with your change.
+3. Run `bun run test:integration` when you touch anything that talks to a
+   database (drivers, parameters, schema managers) — the two Docker commands
+   below are all it needs. CI runs it either way.
+4. Keep changes focused, and describe *why* in the commit message.
+   Bug fixes should come with a test that fails without them.
+
+Behavioral ground rules worth knowing before you propose a change:
+
+- The oxmysql compatibility surface is pinned to 2.14.1; deviations are
+  documented and deliberate. Don't change contract behavior casually.
+- The schema manager never trades safety for convenience: no silent blocking
+  DDL, no destructive reconciliation, no unjournaled migrations.
+- Nothing may ever log credentials or connection strings. Query text and
+  bound values appear only where oxmysql prints them too — query errors and
+  debug mode — and never in status output.
 ## Layout
 
 ```
@@ -69,7 +99,7 @@ This rebuilds the release, downloads and verifies the server artifact once
 containers, boots a real FXServer with the packaged resource plus the
 fixtures in `tests/fxserver/` (runtime behavior, resource restart, oxmysql
 conflict handling, mysql-async imports), and cleans everything up. The key is
-kept out of process arguments and logs; see [SECURITY.md](../SECURITY.md).
+kept out of process arguments and logs; see [SECURITY.md](SECURITY.md).
 
 FXServer execution stays local because it needs each contributor's own CFX
 key — CI covers everything else.
@@ -105,15 +135,19 @@ same live differential probe against real oxmysql for compatibility work.
 ```sh
 bun install --frozen-lockfile
 bun run typecheck
-bun test
+bun run test:unit
+bun run test:contract
+# Run the integration suite with the database environment variables above.
+bun run test:integration
 bun run release
 bun run release:validate
 ```
 
 `release/` gets `qbxsql/`, `qbxsql-<version>.zip`, and a SHA-256 checksum.
-The validator checks the manifest versions, provider declarations, an
-allowlist of packaged files, and that a second build reproduces the same
-checksum. Development servers can consume the verified artifact through a
+The validator checks manifest versions, provider declarations, exact packaged
+contents, bundled licenses, and local documentation links. It also compares
+the archive against an independently regenerated deterministic ZIP.
+Development servers can consume the verified artifact through a
 guarded junction:
 
 ```sh
@@ -125,3 +159,19 @@ and the oxmysql compatibility target, so dependency checks in other resources
 see `2.14.1` until qbxsql's own version surpasses it. Never bump the
 compatibility target just to satisfy a check — only after the newer upstream
 contract has actually been reviewed and tested.
+
+### Preparing a GitHub release
+
+1. Update `package.json` and `qbxsql_version` in `fxmanifest.lua`, move the
+   changelog's unreleased entries into the dated version, and rebuild `dist/`.
+2. Run the checks above and the local FXServer gate. Commit the source and
+   generated bundle together, then push a matching `v<version>` tag.
+3. The release workflow runs CI and prepares a **draft prerelease** with the
+   installable ZIP and SHA-256 file. Review its notes and assets on GitHub,
+   then publish it when ready. A tag/version mismatch fails the workflow.
+
+The ZIP contains runtime files, user guides, examples, and license notices.
+Contributor instructions, test harnesses, source files, dependency manifests,
+and local audit notes stay out of it. Add public files explicitly to the
+allowlist in `scripts/release-lib.mjs` when needed.
+

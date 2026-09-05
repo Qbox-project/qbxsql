@@ -72,10 +72,12 @@ function normalizedDefault(value: unknown): string | null {
   // four-character string literal, so the no-default sentinel below must only
   // match the bare word.
   if (source.length >= 2 && source.startsWith("'") && source.endsWith("'")) {
-    return source.slice(1, -1).replace(/''/g, "'").toLowerCase();
+    return source.slice(1, -1).replace(/''/g, "'");
   }
-  const normalized = source.toLowerCase().replace(/\(\)$/, '');
-  return normalized === 'null' ? null : normalized;
+  if (/^null$/i.test(source)) return null;
+  return /^current_timestamp(?:\([0-6]?\))?$/i.test(source)
+    ? source.toLowerCase().replace(/\(\)$/, '')
+    : source;
 }
 
 /**
@@ -84,7 +86,7 @@ function normalizedDefault(value: unknown): string | null {
  * or a declared string default of 'null' would read as "no default".
  */
 function normalizedDesiredDefault(value: unknown): string {
-  return String(value).toLowerCase();
+  return String(value);
 }
 
 export function parseEnumValues(columnType: string): string[] {

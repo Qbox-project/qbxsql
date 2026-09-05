@@ -111,6 +111,41 @@ afterEach(async () => {
 });
 
 describe('database connection lifecycle', () => {
+  for (const phase of ['beginTransaction', 'commit', 'rollback'] as const) {
+    test(`bounds a stalled transaction ${phase} by the transaction timeout`, async () => {
+      const driver = new FakeDriver();
+      const connection = new FakeConnection();
+      connection[phase] = () => new Promise<void>(() => {});
+      driver.connection = connection;
+      const database = new DatabaseService(driver, { ...config, transactionTimeout: 20 });
+      databases.push(database);
+      await expect(database.withTransaction(async () => phase !== 'rollback'))
+        .rejects.toThrow('Transaction timed out');
+      expect(connection.destroyed).toBe(true);
+    }, 500);
+  }
+
+  test('isolates lifecycle listeners from the connection loop and other listeners', async () => {
+    const driver = new FakeDriver();
+    const database = new DatabaseService(driver, config);
+    databases.push(database);
+    const events: LifecycleEvent[] = [];
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      database.onLifecycle(() => { throw new Error('consumer failed'); });
+      database.onLifecycle((event) => events.push(event));
+      await database.connect();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(database.state).toBe('ready');
+      expect(driver.ready).toBe(true);
+      expect(driver.connectAttempts).toBe(1);
+      expect(events).toEqual(['ready']);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test('retries startup failures in the background and drains queued calls', async () => {
     const driver = new FakeDriver();
     driver.failures = 1;

@@ -81,6 +81,23 @@ function resumableAdoptionSchema(): ResourceSchema {
 }
 
 describe('resource schema manager integration', () => {
+  test('runs concurrent schema operations with a single query connection', async () => {
+    const smallConfig = { ...config, connectionLimit: 1, connectionLimitExplicit: true };
+    const small = new DatabaseService(new MySqlDriver(smallConfig), smallConfig);
+    auxiliaryDatabases.push(small);
+    const schemas = new SchemaManager(small);
+    const results = await Promise.all(Array.from({ length: 4 }, (_, index) => {
+      const name = `audit_small_pool_${index}`;
+      return schemas.ensure(name, {
+        version: 1,
+        tables: { [name]: { columns: { id: { type: 'int', primary: true } } } },
+      });
+    }));
+    expect(results.every((result) => result.appliedActions.length > 0)).toBe(true);
+    expect(small.getStatus().pool.acquired).toBe(0);
+    expect(small.getStatus().pool.total).toBeLessThanOrEqual(2);
+  });
+
   beforeAll(async () => {
     const admin = await createConnection(adminConnection);
     await admin.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);

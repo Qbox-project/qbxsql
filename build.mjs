@@ -1,4 +1,5 @@
 import { build, context } from 'esbuild';
+import { writeBundledLicenses } from './scripts/bundled-licenses.mjs';
 
 const watch = process.argv.includes('--watch');
 const options = {
@@ -11,6 +12,15 @@ const options = {
   sourcemap: true,
   keepNames: true,
   logLevel: 'info',
+  metafile: true,
+  plugins: [{
+    name: 'bundled-licenses',
+    setup(builder) {
+      builder.onEnd(async (result) => {
+        if (result.errors.length === 0) await writeBundledLicenses(result.metafile);
+      });
+    },
+  }],
 };
 
 if (watch) {

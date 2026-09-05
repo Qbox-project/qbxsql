@@ -1,6 +1,6 @@
 {
   "name": "qbxsql",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Database connector and declarative schema manager for FiveM",
   "license": "MIT",
