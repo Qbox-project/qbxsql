@@ -39,6 +39,8 @@ Restart the whole server when updating from an earlier version.
 
 - Shortened the README around installation, queries, and links to four user
   guides. Contributor and security policies now live under `.github`.
+- Introduced qbxsql through its query and schema features, with existing-resource
+  compatibility covered separately. Clarified the shared-export startup message.
 - Release ZIPs contain an explicit list of runtime files, guides, examples,
   and license notices. Development instructions and `package.json` stay out.
 - Added bundled third-party license notices, reproducible archive validation,

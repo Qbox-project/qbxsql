@@ -1,14 +1,15 @@
-# oxmysql compatibility
+# Compatibility with existing resources
 
-qbxsql implements the query contract of
+qbxsql's MySQL API follows the query contract established by
 [oxmysql 2.14.1](https://github.com/overextended/oxmysql/releases/tag/v2.14.1)
 and provides the `oxmysql`, `mysql-async`, and `ghmattimysql` export names.
-The compatibility surface is pinned: it changes only after a newer upstream
-contract has been reviewed and tested, never just to satisfy a version check.
+These aliases let existing resources keep their imports and query calls.
+Compatibility is tested against that specific version; newer API changes
+require their own review and tests.
 
 ## What is covered
 
-- oxmysql callbacks, promises, `MySQL.*`, `.await`, `_async`, `MySQL.Async`,
+- Callbacks, promises, `MySQL.*`, `.await`, `_async`, `MySQL.Async`,
   `MySQL.Sync`, and stored queries.
 - mysql-async and ghmattimysql exports and imports, including ghmattimysql's
   `insert`/`insertSync` helpers.
@@ -17,7 +18,7 @@ contract has been reviewed and tested, never just to satisfy a version check.
   - text-protocol queries convert `TINYINT(1)` and one-bit `BIT` columns to
     booleans, while prepared/raw-execute calls keep mysql2-native values;
   - dates are epoch milliseconds from both protocols;
-  - binary values are CFX-safe byte arrays, including oxmysql's `[null]`
+  - binary values are CFX-safe byte arrays, including the `[null]`
     result for a NULL binary blob from a text query;
   - absent bind values and sparse Lua parameter tables become SQL `NULL`;
   - tuple transactions, object transactions, named placeholders, numeric-key
@@ -29,30 +30,30 @@ contract has been reviewed and tested, never just to satisfy a version check.
 **Not included:** the oxmysql NUI profiler, its UI commands, and external
 logger plugins.
 
-## Deliberate deviations
+## Behavior differences
 
 - **`null` rather than `undefined` for empty results.** `single`, `scalar`,
   and `insert` return `null` where oxmysql returns `undefined`. Both arrive in
   Lua as `nil`; only JavaScript consumers comparing with `=== undefined` can
   tell the difference.
-- **The manifest `version` reports the oxmysql contract.** `fxmanifest.lua`
+- **The manifest `version` reports the compatibility target.** `fxmanifest.lua`
   declares `version '2.14.1'` so dependency checks in other resources pass.
   qbxsql's own version is `qbxsql_version`.
 
-## Switching from oxmysql
+## Using an existing server
 
 1. Back up the database and verify the backup restores.
-2. Copy the qbxsql resource into `resources/` and remove or disable the real
-   `oxmysql` resource. qbxsql detects a running resource named `oxmysql`,
-   reports the conflict, and leaves its own connector inactive rather than
-   fighting over exports.
+2. Stop the server, copy qbxsql into `resources/`, and disable the configured
+   database connector. This applies to oxmysql, mysql-async, and ghmattimysql:
+   their compatibility exports need a single provider. If oxmysql is already
+   running, qbxsql reports the shared-export conflict and stays inactive.
 3. Keep your existing connection string — `mysql_connection_string` works
    unchanged — and `ensure qbxsql` before any database consumer.
 4. Leave consuming resources alone. `@oxmysql/lib/MySQL.lua` and
    `@mysql-async/lib/MySQL.lua` imports resolve through qbxsql, and no SQL or
    API calls need to change. `mysql_option 'return_callback_errors'` remains
    resource-scoped.
-5. Test the things that matter on a staging server with real clients:
+5. Start and test on a staging server with real clients:
    characters, inventory, banking, vehicles, properties, a restart, and a
    planned database outage.
 
@@ -73,8 +74,8 @@ values and credentials are never printed. `namedPlaceholders=false`, JSON
 
 ### Rollback
 
-Stop consumers, stop qbxsql, restore the real oxmysql resource, start
-consumers again. Schema changes qbxsql applied are forward-compatible by
+Stop the server, disable qbxsql, restore the previous connector and its
+startup configuration, then restart. Schema changes qbxsql applied are forward-compatible by
 design; it never runs automatic down-migrations. If an explicitly destructive
 migration must be reversed, restore the verified backup.
 
@@ -109,8 +110,8 @@ CI runs every push against MariaDB 11.4 and PostgreSQL 16 (with pgvector).
 MariaDB 10.11/11.8 and MySQL 8.0/8.4 are supported lines that get re-tested
 locally when serialization, introspection, or DDL behavior changes.
 
-The minimum FXServer artifact is build `12913`, matching oxmysql 2.14.1's own
-floor; the packaged resource is additionally tested on a pinned stock-Linux
+The minimum FXServer artifact is build `12913`. The packaged resource is
+additionally tested on a pinned stock-Linux
 artifact through the local containerized gate (see
 [contributor guide](https://github.com/Qbox-project/qbxsql/blob/main/.github/CONTRIBUTING.md)).
 

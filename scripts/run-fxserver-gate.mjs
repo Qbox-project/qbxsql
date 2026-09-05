@@ -145,7 +145,7 @@ async function runConflictGate() {
       if (
         conflictOutput.includes('QBXSQL_COMPAT_CONFLICT_PASS') &&
         conflictOutput.includes(
-          '[qbxsql] Refusing to run while the real oxmysql resource is active',
+          '[qbxsql] Inactive because oxmysql is already running',
         )
       ) {
         clearTimeout(timer);

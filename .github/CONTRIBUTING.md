@@ -32,8 +32,8 @@ Behavioral ground rules worth knowing before you propose a change:
 - The schema manager never trades safety for convenience: no silent blocking
   DDL, no destructive reconciliation, no unjournaled migrations.
 - Nothing may ever log credentials or connection strings. Query text and
-  bound values appear only where oxmysql prints them too — query errors and
-  debug mode — and never in status output.
+  bound values appear only in query errors and debug mode, never in status
+  output.
 
 ## Layout
 
@@ -133,7 +133,7 @@ Short runs only validate the harness — don't quote them as performance
 numbers, and don't compare results from different hardware.
 
 `scripts/run-contract-probe.mjs` and `compare-contract-probes.mjs` run the
-same live differential probe against real oxmysql for compatibility work.
+same live differential probe against the reference connector for compatibility work.
 
 ## Releases
 

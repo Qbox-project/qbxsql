@@ -14,7 +14,8 @@ set qbxsql_postgres_connection_string "postgresql://user:password@127.0.0.1/qbox
 
 PostgreSQL 16 or newer is required. qbxsql uses the pure-JavaScript `pg` driver; it does not load `pg-native` or require compiled database addons.
 
-In a dual setup, every legacy `MySQL.*`, oxmysql, mysql-async, and ghmattimysql call routes to the MySQL lane. Only the `Postgres` facade routes to PostgreSQL:
+In a dual setup, `MySQL.*` and its compatibility aliases use MySQL/MariaDB.
+Use the `Postgres` facade for PostgreSQL queries:
 
 ```lua
 server_script '@qbxsql/lib/Postgres.lua'

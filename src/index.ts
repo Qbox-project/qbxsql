@@ -173,7 +173,7 @@ function isConcreteOxmysqlActive(): boolean {
 
 function reportOxmysqlConflict(): void {
   console.error(
-    '^1[qbxsql] Refusing to run while the real oxmysql resource is active. Stop and remove oxmysql before starting qbxsql.^0',
+    '^1[qbxsql] Inactive because oxmysql is already running. These resources share compatibility exports; enable only one database connector.^0',
   );
 }
 
