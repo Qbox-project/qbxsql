@@ -2,6 +2,10 @@
 
 Thanks for helping out. The short version:
 
+Follow the [Qbox contribution guidelines](https://github.com/Qbox-project/.github/blob/main/.github/contributing.md),
+including Conventional Commits. The instructions below cover qbxsql's setup,
+database tests, and release process.
+
 1. Use the setup and test instructions below. Run commands from the repository
    root with Node.js 22 and Bun 1.3.5 installed.
 2. Before opening a PR, make sure these pass:
@@ -30,6 +34,7 @@ Behavioral ground rules worth knowing before you propose a change:
 - Nothing may ever log credentials or connection strings. Query text and
   bound values appear only where oxmysql prints them too — query errors and
   debug mode — and never in status output.
+
 ## Layout
 
 ```
@@ -162,6 +167,18 @@ contract has actually been reviewed and tested.
 
 ### Preparing a GitHub release
 
+qbxsql uses Qbox's Lua lint action alongside its TypeScript, database, and
+package checks. The lint step runs inside CI with a read-only token so fork
+pull requests work without the shared workflow's check-report permissions.
+
+The release workflow is specific to qbxsql. The organization's shared
+[version workflow](https://github.com/Qbox-project/.github/blob/main/.github/workflows/release.yml)
+updates the public manifest version, which qbxsql reserves for compatibility.
+Its shared [archive workflow](https://github.com/Qbox-project/.github/blob/main/.github/workflows/release-action.yml)
+packages the repository from the default branch. qbxsql instead builds and
+validates its explicit runtime file list from the tag, preserving both version
+fields and leaving development files out of the download.
+
 1. Update `package.json` and `qbxsql_version` in `fxmanifest.lua`, move the
    changelog's unreleased entries into the dated version, and rebuild `dist/`.
 2. Run the checks above and the local FXServer gate. Commit the source and
@@ -174,4 +191,3 @@ The ZIP contains runtime files, user guides, examples, and license notices.
 Contributor instructions, test harnesses, source files, dependency manifests,
 and local audit notes stay out of it. Add public files explicitly to the
 allowlist in `scripts/release-lib.mjs` when needed.
-

@@ -46,6 +46,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Match Qbox's shared lint tooling without its write-token report step,
+      # so fork pull requests can run with the read-only permissions above.
+      - name: Lint Lua
+        uses: iLLeniumStudios/fivem-lua-lint-action@v2
+        with:
+          paths: fxmanifest.lua lib examples tests/fxserver tests/load
+          capture: junit.xml
+          args: '-t --globals Postgres QBXSQL MySQL.startTransaction --formatter JUnit'
+          extra_libs: ox_lib+mysql+qblocales+qbox+qbox_playerdata+qbox_lib
+          fail_on_warnings: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
