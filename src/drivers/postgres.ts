@@ -34,6 +34,23 @@ const oid = {
   timestamptz: 1184,
 } as const;
 
+type PostgresTemporalType = keyof typeof oid;
+
+/**
+ * Keeps PostgreSQL's unbounded temporal sentinels while making ordinary values
+ * timezone-stable epoch dates for the CFX runtime.
+ */
+export function parsePostgresTemporal(
+  value: string,
+  type: PostgresTemporalType,
+): Date | number {
+  if (value === 'infinity') return Number.POSITIVE_INFINITY;
+  if (value === '-infinity') return Number.NEGATIVE_INFINITY;
+  if (type === 'date') return new Date(`${value}T00:00:00.000Z`);
+  if (type === 'timestamp') return new Date(`${value.replace(' ', 'T')}Z`);
+  return new Date(value);
+}
+
 export function parsePostgresVector(value: string): number[] | string {
   if (!value.startsWith('[') || !value.endsWith(']')) return value;
   const body = value.slice(1, -1);
@@ -170,13 +187,13 @@ export class PostgresDriver implements DatabaseDriver {
       const extensionParser = this.extensionTypeParsers.get(typeId);
       if (extensionParser) return extensionParser;
       if (typeId === oid.date) {
-        return (value: string) => new Date(`${value}T00:00:00.000Z`);
+        return (value: string) => parsePostgresTemporal(value, 'date');
       }
       if (typeId === oid.timestamp) {
-        return (value: string) => new Date(`${value.replace(' ', 'T')}Z`);
+        return (value: string) => parsePostgresTemporal(value, 'timestamp');
       }
       if (typeId === oid.timestamptz) {
-        return (value: string) => new Date(value);
+        return (value: string) => parsePostgresTemporal(value, 'timestamptz');
       }
       return defaultTypes.getTypeParser(typeId, format);
     },

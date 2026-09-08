@@ -250,6 +250,24 @@ describe('PostgreSQL driver and schema integration', () => {
       happened_at: Date.parse(happenedAt),
       bytes: [1, 2, 255],
     });
+
+    const temporalInfinity = await database.single(`
+      SELECT
+        'infinity'::date AS "datePositive",
+        '-infinity'::date AS "dateNegative",
+        'infinity'::timestamp AS "timestampPositive",
+        '-infinity'::timestamp AS "timestampNegative",
+        'infinity'::timestamptz AS "timestamptzPositive",
+        '-infinity'::timestamptz AS "timestamptzNegative"
+    `);
+    expect(temporalInfinity).toEqual({
+      datePositive: Number.POSITIVE_INFINITY,
+      dateNegative: Number.NEGATIVE_INFINITY,
+      timestampPositive: Number.POSITIVE_INFINITY,
+      timestampNegative: Number.NEGATIVE_INFINITY,
+      timestamptzPositive: Number.POSITIVE_INFINITY,
+      timestamptzNegative: Number.NEGATIVE_INFINITY,
+    });
   });
 
   test('verifies pgvector requirements and manages vector types and indexes', async () => {

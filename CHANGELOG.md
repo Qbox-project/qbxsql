@@ -4,7 +4,10 @@ All notable changes are recorded here. qbxsql follows semantic versioning after 
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- PostgreSQL infinite `DATE`, `TIMESTAMP`, and `TIMESTAMPTZ` values retain their
+  positive or negative infinity sentinel instead of becoming an invalid date.
 
 ## 0.6.1 - 2026-09-05
 
