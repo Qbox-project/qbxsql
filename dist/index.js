@@ -32921,6 +32921,14 @@ var oid = {
   timestamp: 1114,
   timestamptz: 1184
 };
+function parsePostgresTemporal(value, type) {
+  if (value === "infinity") return Number.POSITIVE_INFINITY;
+  if (value === "-infinity") return Number.NEGATIVE_INFINITY;
+  if (type === "date") return /* @__PURE__ */ new Date(`${value}T00:00:00.000Z`);
+  if (type === "timestamp") return /* @__PURE__ */ new Date(`${value.replace(" ", "T")}Z`);
+  return new Date(value);
+}
+__name(parsePostgresTemporal, "parsePostgresTemporal");
 function parsePostgresVector(value) {
   if (!value.startsWith("[") || !value.endsWith("]")) return value;
   const body = value.slice(1, -1);
@@ -33046,13 +33054,13 @@ var PostgresDriver = class {
       const extensionParser = this.extensionTypeParsers.get(typeId);
       if (extensionParser) return extensionParser;
       if (typeId === oid.date) {
-        return (value) => /* @__PURE__ */ new Date(`${value}T00:00:00.000Z`);
+        return (value) => parsePostgresTemporal(value, "date");
       }
       if (typeId === oid.timestamp) {
-        return (value) => /* @__PURE__ */ new Date(`${value.replace(" ", "T")}Z`);
+        return (value) => parsePostgresTemporal(value, "timestamp");
       }
       if (typeId === oid.timestamptz) {
-        return (value) => new Date(value);
+        return (value) => parsePostgresTemporal(value, "timestamptz");
       }
       return types.getTypeParser(typeId, format);
     }, "getTypeParser")
