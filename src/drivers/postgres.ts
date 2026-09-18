@@ -36,6 +36,17 @@ const oid = {
 
 type PostgresTemporalType = keyof typeof oid;
 
+const arrayOid: Record<number, PostgresTemporalType> = {
+  1182: 'date',
+  1115: 'timestamp',
+  1185: 'timestamptz',
+};
+
+// @types/pg declares arrayParser as a function, but pg-types 2 exports a factory.
+const arrayParser = defaultTypes.arrayParser as unknown as {
+  create(source: string, transform: (entry: string) => unknown): { parse(): unknown[] };
+};
+
 /**
  * Keeps PostgreSQL's unbounded temporal sentinels while making ordinary values
  * timezone-stable epoch dates for the CFX runtime.
@@ -49,6 +60,13 @@ export function parsePostgresTemporal(
   if (type === 'date') return new Date(`${value}T00:00:00.000Z`);
   if (type === 'timestamp') return new Date(`${value.replace(' ', 'T')}Z`);
   return new Date(value);
+}
+
+export function parsePostgresTemporalArray(
+  value: string,
+  type: PostgresTemporalType,
+): unknown[] {
+  return arrayParser.create(value, (entry) => parsePostgresTemporal(entry, type)).parse();
 }
 
 export function parsePostgresVector(value: string): number[] | string {
@@ -194,6 +212,10 @@ export class PostgresDriver implements DatabaseDriver {
       }
       if (typeId === oid.timestamptz) {
         return (value: string) => parsePostgresTemporal(value, 'timestamptz');
+      }
+      const arrayType = arrayOid[typeId];
+      if (arrayType) {
+        return (value: string) => parsePostgresTemporalArray(value, arrayType);
       }
       return defaultTypes.getTypeParser(typeId, format);
     },
