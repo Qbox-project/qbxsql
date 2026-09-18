@@ -52,7 +52,9 @@ Results retain PostgreSQL semantics safely across CFX:
 - `BIGINT` and `NUMERIC` are strings, preserving exact precision.
 - `BOOLEAN` is boolean.
 - `DATE`, `TIMESTAMP`, and `TIMESTAMPTZ` are epoch milliseconds; their PostgreSQL
-  `infinity` sentinels remain numeric positive or negative infinity. `TIME` remains a PostgreSQL time string.
+  `infinity` sentinels remain numeric positive or negative infinity. BC dates and
+  years beyond 9999 are supported; values outside JavaScript's date range are
+  returned as the PostgreSQL string. `TIME` remains a PostgreSQL time string.
 - `BYTEA` is a numeric byte array.
 - `JSON` and `JSONB` are objects/tables.
 - PostgreSQL error properties such as SQLSTATE `code`, `detail`, `hint`, table, column, and constraint are preserved. qbxsql does not attach the SQL text, bind list, connection string, or credentials to native errors. PostgreSQL's own message/detail can still describe a rejected value, so do not expose raw database errors directly to clients.

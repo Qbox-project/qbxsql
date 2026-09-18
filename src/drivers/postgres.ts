@@ -47,6 +47,9 @@ const arrayParser = defaultTypes.arrayParser as unknown as {
   create(source: string, transform: (entry: string) => unknown): { parse(): unknown[] };
 };
 
+const temporalPattern =
+  /^(\d+)-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?)?(?:([+-])(\d{2})(?::(\d{2}))?(?::(\d{2}))?)?( BC)?$/;
+
 /**
  * Keeps PostgreSQL's unbounded temporal sentinels while making ordinary values
  * timezone-stable epoch dates for the CFX runtime.
@@ -54,12 +57,27 @@ const arrayParser = defaultTypes.arrayParser as unknown as {
 export function parsePostgresTemporal(
   value: string,
   type: PostgresTemporalType,
-): Date | number {
+): Date | number | string {
   if (value === 'infinity') return Number.POSITIVE_INFINITY;
   if (value === '-infinity') return Number.NEGATIVE_INFINITY;
-  if (type === 'date') return new Date(`${value}T00:00:00.000Z`);
-  if (type === 'timestamp') return new Date(`${value.replace(' ', 'T')}Z`);
-  return new Date(value);
+  const match = temporalPattern.exec(value);
+  if (!match) return value;
+  const [, year, month, day, hour, minute, second, fraction, sign, offsetHour, offsetMinute, offsetSecond, bc] =
+    match;
+  if (type !== 'timestamptz' && sign) return value;
+  // Date.UTC and ISO strings cannot express BC or unpadded wide years.
+  const date = new Date(0);
+  date.setUTCFullYear(bc ? 1 - Number(year) : Number(year), Number(month) - 1, Number(day));
+  date.setUTCHours(
+    Number(hour ?? 0),
+    Number(minute ?? 0),
+    Number(second ?? 0),
+    Number((fraction ?? '').slice(0, 3).padEnd(3, '0')),
+  );
+  const offsetSeconds =
+    Number(offsetHour ?? 0) * 3600 + Number(offsetMinute ?? 0) * 60 + Number(offsetSecond ?? 0);
+  const time = date.getTime() - (sign === '-' ? -offsetSeconds : offsetSeconds) * 1000;
+  return Number.isNaN(time) ? value : new Date(time);
 }
 
 export function parsePostgresTemporalArray(
